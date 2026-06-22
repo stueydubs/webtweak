@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>webtweak sample page</title>
+  <style>
+    :root { --ink: #1a1a1a; --paper: #faf8f4; --accent: #7a5c3e; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.6;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 80px 24px; }
+    .eyebrow { font: 600 13px/1 system-ui, sans-serif; letter-spacing: 0.18em;
+               text-transform: uppercase; color: var(--accent); margin: 0 0 16px; }
+    h1.title { font-size: 44px; line-height: 1.1; margin: 0 0 20px; font-weight: 700; }
+    .lede { font-size: 21px; color: #44403a; margin: 0 0 40px; }
+    .section-title { font-size: 28px; margin: 48px 0 12px; font-weight: 700; }
+    p { margin: 0 0 18px; font-size: 18px; }
+    .card { background: #fff; border: 1px solid #e7e1d8; border-radius: 12px;
+            padding: 24px; margin: 32px 0; }
+    .card h3 { margin: 0 0 8px; font-size: 20px; }
+    .cta { display: inline-block; margin-top: 16px; padding: 12px 22px;
+           background: var(--ink); color: #fff; text-decoration: none; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <p class="eyebrow">Field notes</p>
+    <h1 class="title" id="headline">A page worth tweaking by eye</h1>
+    <p class="lede">A small editorial layout with enough variety - headings, body copy, a
+      card, a button - to exercise the picker, the property panel, resize and nudge.</p>
+
+    <h2 class="section-title">Precision instruments</h2>
+    <p>Body copy sets the rhythm of an editorial page. Selecting this paragraph and
+      adjusting its size, leading, or spacing is exactly the kind of by-eye change
+      webtweak is built to capture.</p>
+    <p>A second paragraph, so there is more than one element sharing the same tag and
+      style - useful for testing that the fingerprint can tell siblings apart.</p>
+
+    <div class="card">
+      <h3>A card to resize</h3>
+      <p>Drag the right or bottom edge of this card to resize it, or grab its interior
+        to nudge it a few pixels. Both should preview live.</p>
+      <a class="cta" href="#">Primary action</a>
+    </div>
+
+    <h2 class="section-title">Second section</h2>
+    <p>One more heading sharing the <code>.section-title</code> class, so a change here
+      can demonstrate the single-element-vs-shared-rule reconcile question.</p>
+  </main>
+</body>
+</html>

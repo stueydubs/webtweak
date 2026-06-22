@@ -1,0 +1,157 @@
+/* webtweak Overlay - injected, not part of any site's source.
+   Everything is namespaced under #wt-root / .wt- to avoid clashing with the page. */
+
+#wt-root,
+#wt-root * {
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+#wt-root {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none; /* let the page receive picker events; UI re-enables locally */
+}
+
+#wt-root .wt-ui { pointer-events: auto; }
+
+/* --- top bar ------------------------------------------------------------- */
+.wt-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  background: #15171c;
+  color: #e8eaed;
+  font-size: 13px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+.wt-logo { font-weight: 700; letter-spacing: 0.02em; color: #ffd479; }
+.wt-crumb {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #aab0bb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.wt-crumb b { color: #e8eaed; }
+.wt-status { color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right; }
+.wt-btn {
+  appearance: none;
+  border: 1px solid #3a3f4b;
+  background: #23262e;
+  color: #e8eaed;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.wt-btn:hover { background: #2c303a; }
+.wt-btn.wt-primary { background: #ffd479; color: #1a1300; border-color: #ffd479; font-weight: 600; }
+.wt-btn.wt-primary:hover { background: #ffdd94; }
+
+/* --- hover + selection boxes -------------------------------------------- */
+.wt-box {
+  position: fixed;
+  z-index: 2147482000;
+  pointer-events: none;
+  border: 1px solid transparent;
+}
+.wt-hover { border-color: rgba(110, 168, 254, 0.9); background: rgba(110, 168, 254, 0.08); }
+.wt-selected { border: 1px solid #ffd479; background: rgba(255, 212, 121, 0.06); }
+.wt-tag {
+  position: absolute;
+  top: -20px; left: -1px;
+  background: #ffd479;
+  color: #1a1300;
+  font: 600 11px/1.4 ui-monospace, Menlo, monospace;
+  padding: 1px 6px;
+  border-radius: 3px 3px 0 0;
+  white-space: nowrap;
+}
+
+/* resize grips - visual affordance for the right/bottom drag zones */
+.wt-grip {
+  position: absolute;
+  width: 8px; height: 8px;
+  background: #ffd479;
+  border: 1px solid #1a1300;
+  border-radius: 2px;
+}
+.wt-grip-r { right: -4px; top: calc(50% - 4px); cursor: ew-resize; }
+.wt-grip-b { bottom: -4px; left: calc(50% - 4px); cursor: ns-resize; }
+.wt-grip-br { right: -4px; bottom: -4px; cursor: nwse-resize; }
+
+/* --- properties panel --------------------------------------------------- */
+.wt-panel {
+  position: fixed;
+  top: 56px; right: 12px;
+  width: 270px;
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  background: #1a1d23;
+  color: #e8eaed;
+  border: 1px solid #2c303a;
+  border-radius: 10px;
+  padding: 12px 14px 16px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+}
+.wt-panel[hidden] { display: none; }
+.wt-panel h3 {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffd479;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.wt-group { margin-bottom: 14px; }
+.wt-group > .wt-legend {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #717784;
+  margin-bottom: 6px;
+}
+.wt-field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
+.wt-field label { color: #aab0bb; flex: 0 0 78px; }
+.wt-field input[type="text"],
+.wt-field input[type="number"],
+.wt-field select {
+  flex: 1;
+  min-width: 0;
+  background: #0f1115;
+  border: 1px solid #2c303a;
+  color: #e8eaed;
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.wt-field input[type="color"] {
+  width: 34px; height: 24px; padding: 0;
+  background: none; border: 1px solid #2c303a; border-radius: 5px; cursor: pointer;
+}
+.wt-align { display: flex; gap: 4px; }
+.wt-align button {
+  flex: 1; background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
+  border-radius: 5px; padding: 4px 0; cursor: pointer; font-size: 12px;
+}
+.wt-align button.on { background: #ffd479; color: #1a1300; border-color: #ffd479; }
+.wt-block { width: 100%; margin-top: 4px; }
+.wt-note { color: #717784; font-size: 11px; line-height: 1.5; margin-top: 8px; }
+.wt-hint {
+  position: fixed; bottom: 12px; left: 12px;
+  background: #15171c; color: #aab0bb;
+  border: 1px solid #2c303a; border-radius: 8px;
+  padding: 8px 12px; font-size: 12px; max-width: 320px; line-height: 1.5;
+}
+.wt-hint b { color: #ffd479; }

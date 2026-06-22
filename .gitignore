@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.playwright-mcp/
+
+# In THIS dev repo, *.webtweak.json only appears as a transient test artefact.
+# On a real site you edit, commit the edits file in that site's own repo if you
+# want the reconciled history as a version-controlled changelog (see CONTEXT.md) -
+# but ignore the recovery backups and atomic-write temp files there too.
+*.webtweak.json
+*.webtweak.json*.bak
+*.webtweak.json.tmp
