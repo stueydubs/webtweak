@@ -38,6 +38,7 @@
   var persisted = false;   // this session has a saved/restored batch on disk to clear
   var missed = [];         // restored patches we couldn't re-locate - preserved across saves
   var interacting = false; // a drag/resize gesture is in progress
+  var undoStack = [];      // stack of batches: each [{el, prop, prev}]
 
   function entry(el) {
     var e = edited.get(el);
@@ -60,6 +61,45 @@
     edited.forEach(function (e) { if (Object.keys(e.changes).length) any = true; });
     return any;
   }
+  // ---- undo -----------------------------------------------------------------
+  // Push a panel-input undo step before mutating changes[prop].
+  // Consecutive calls for the same el+prop collapse into one step so typing
+  // into a field leaves a single undo step regardless of how many keystrokes.
+  function pushUndoWrite(el, prop) {
+    var ch = (edited.get(el) || {}).changes;
+    var prev = ch ? ch[prop] : undefined;
+    var top = undoStack[undoStack.length - 1];
+    if (top && top.length === 1 && top[0].el === el && top[0].prop === prop) return;
+    undoStack.push([{ el: el, prop: prop, prev: prev }]);
+  }
+
+  function applyUndoBatch(batch) {
+    // Collect unique elements so each element's inline is rebuilt exactly once.
+    var els = [];
+    batch.forEach(function (u) {
+      var ent = entry(u.el);
+      if (u.prev === undefined) {
+        delete ent.changes[u.prop];
+        // rebuildInline only seeds _x/_y when nudge IS in changes; reset manually here.
+        if (u.prop === "nudge") { ent._x = 0; ent._y = 0; }
+      } else {
+        ent.changes[u.prop] = u.prev;
+      }
+      if (els.indexOf(u.el) < 0) els.push(u.el);
+    });
+    els.forEach(function (el) {
+      rebuildInline(el, edited.get(el));
+      if (el === selectedEl) { positionBox(selBox, el); populate(el); }
+    });
+    dirty = hasRealEdits();
+    status("undone");
+  }
+
+  function undo() {
+    if (!undoStack.length) { status("nothing to undo"); return; }
+    applyUndoBatch(undoStack.pop());
+  }
+
   // The value each control was populated with this selection, so an unchanged
   // re-entry (e.g. opening the colour picker on a transparent swatch and clicking
   // the same shown value) is treated as a no-op and not recorded.
@@ -422,6 +462,7 @@
     // shorthand as "" must not make every typed value look like a revert.
     if (revertTarget !== "" && revertTarget === baselines[c.id]) {
       var ent = edited.get(selectedEl);
+      if (ent && ent.changes[c.prop] !== undefined) pushUndoWrite(selectedEl, c.prop);
       if (ent) delete ent.changes[c.prop];
       rebuildInline(selectedEl, ent);  // restore authored inline + remaining edits (preserves longhands)
       dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
@@ -434,6 +475,7 @@
     // reject this value (a typo like "banana" in a free-text field), the live
     // preview wouldn't change either, so leave any prior valid edit untouched.
     if (!c.box && !CSS.supports(c.prop, v)) { status("ignored invalid " + c.prop + ": " + raw, false); return; }
+    pushUndoWrite(selectedEl, c.prop);
     selectedEl.style.setProperty(c.prop, v);
     record(selectedEl, c.prop, v);
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
@@ -499,14 +541,25 @@
     if (!window.interact) return;
     // Scale the resize grab-band to the element so small elements stay nudgeable.
     var margin = el.offsetHeight < 40 ? 4 : 10;
+    // Gesture-batched undo: snapshot at start, push one batch at end.
+    var nudgePrev, resizePrev;
     interact(el)
       .draggable({
         // a nudge is a CSS transform, which has no effect on non-replaced inline
         // elements - disable it there so a drag can't record a dead nudge patch
         enabled: !el.__wtInline,
         listeners: {
-          start: function () { interacting = true; hoverBox.hidden = true; },
-          end: function () { interacting = false; },
+          start: function () {
+            interacting = true; hoverBox.hidden = true;
+            var ch = (edited.get(el) || {}).changes;
+            nudgePrev = ch ? ch.nudge : undefined;
+          },
+          end: function () {
+            interacting = false;
+            var ch = (edited.get(el) || {}).changes;
+            var cur = ch ? ch.nudge : undefined;
+            if (cur !== nudgePrev) undoStack.push([{ el: el, prop: "nudge", prev: nudgePrev }]);
+          },
           move: function (event) {
             var e = entry(el);
             e._x += event.dx; e._y += event.dy;
@@ -529,8 +582,23 @@
         edges: { right: true, bottom: true, top: false, left: false },
         margin: margin,
         listeners: {
-          start: function () { interacting = true; hoverBox.hidden = true; },
-          end: function () { interacting = false; },
+          start: function () {
+            interacting = true; hoverBox.hidden = true;
+            var ch = (edited.get(el) || {}).changes || {};
+            resizePrev = {
+              "width": ch.width, "height": ch.height,
+              "max-width": ch["max-width"], "min-height": ch["min-height"],
+            };
+          },
+          end: function () {
+            interacting = false;
+            var ch = (edited.get(el) || {}).changes || {};
+            var batch = [];
+            ["width", "height", "max-width", "min-height"].forEach(function (p) {
+              if (ch[p] !== resizePrev[p]) batch.push({ el: el, prop: p, prev: resizePrev[p] });
+            });
+            if (batch.length) undoStack.push(batch);
+          },
           move: function (event) {
             resizeWrite(el, event.rect);
             positionBox(selBox, el);
@@ -584,6 +652,10 @@
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === "s" || ev.key === "S")) {
       ev.preventDefault();
       save();
+    }
+    if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && (ev.key === "z" || ev.key === "Z")) {
+      ev.preventDefault();
+      undo();
     }
   });
 
