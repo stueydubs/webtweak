@@ -42,8 +42,8 @@ class InjectOverlayTests(unittest.TestCase):
         self.assertIn("webtweak overlay", out)
 
     def test_config_carries_target_name(self):
-        out = wt.inject_overlay("<body></body>", "walker-scientific.html")
-        self.assertIn('"target": "walker-scientific.html"', out)
+        out = wt.inject_overlay("<body></body>", "about.html")
+        self.assertIn('"target": "about.html"', out)
 
     def test_page_content_otherwise_unchanged(self):
         html = "<body><main><p>keep me</p></main></body>"
