@@ -7,6 +7,11 @@
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Editor mode: prevent accidental text selection on page content */
+html { user-select: none; }
+#wt-root input,
+#wt-root select { user-select: text; }
+
 #wt-root {
   position: fixed;
   inset: 0;

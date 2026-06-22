@@ -477,6 +477,18 @@
     el.style.height = h + "px";
     record(el, "width", w + "px");
     record(el, "height", h + "px");
+    // If a stylesheet max-width/min-height would override the resize, pin it inline
+    // so the element actually reaches the desired size.
+    var cMaxW = getComputedStyle(el).maxWidth;
+    if (cMaxW && cMaxW !== "none" && w > parseFloat(cMaxW)) {
+      el.style.maxWidth = w + "px";
+      record(el, "max-width", w + "px");
+    }
+    var cMinH = getComputedStyle(el).minHeight;
+    if (cMinH && cMinH !== "0px" && h < parseFloat(cMinH)) {
+      el.style.minHeight = h + "px";
+      record(el, "min-height", h + "px");
+    }
     set("wt-w", w); set("wt-h", h);
     // NB: baselines["wt-w"/"wt-h"] deliberately stay at the select-time original, so
     // typing the original size still reverts; re-typing the shown size just re-records
@@ -542,6 +554,13 @@
     positionBox(hoverBox, el);
   });
   document.addEventListener("mouseleave", function () { hoverBox.hidden = true; });
+
+  // Prevent the browser's native drag (text selection drag, element drag) from
+  // stealing pointer events before interact.js can track them. In editor mode,
+  // native drag is never wanted on page content.
+  document.addEventListener("dragstart", function (ev) {
+    if (!isOverlay(ev.target)) ev.preventDefault();
+  }, true);
 
   document.addEventListener("click", function (ev) {
     if (isOverlay(ev.target)) return;          // let panel/bar controls work
