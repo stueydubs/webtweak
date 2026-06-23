@@ -4,6 +4,25 @@ A local, open-source visual editor for hand-coded HTML/CSS pages. You drag, resi
 
 It is deliberately **half of a loop**. webtweak never rewrites your source - it only captures *intent*. The judgment-heavy work of locating elements and writing clean CSS is done by Claude on reconcile. That asymmetry is why a tool that would otherwise rival Pinegrow fits in a single Python file plus a browser overlay. See [`docs/adr/0001`](docs/adr/0001-capture-intent-not-rewrite-source.md).
 
+## Install
+
+**Requirements:** Python 3.9+ (stdlib only — no packages to install).
+
+```bash
+git clone https://github.com/stueydubs/webtweak
+cd webtweak
+chmod +x webtweak
+ln -s "$PWD/webtweak" ~/bin/webtweak
+```
+
+`~/bin` must be on your `$PATH`. If it isn't, add this to your shell profile:
+
+```bash
+export PATH="$HOME/bin:$PATH"
+```
+
+Then open a new terminal and run `webtweak --help` to confirm it's working.
+
 ## Usage
 
 ```bash
