@@ -61,7 +61,7 @@ function overlayMarkup(targetName) {
     '\n<!-- webtweak overlay (injected, not part of source) -->\n' +
     `<script>window.__WEBTWEAK__ = ${cfg};</script>\n` +
     `<link rel="stylesheet" href="${RESERVED}overlay.css">\n` +
-    `<script src="${RESERVED}interact.min.js"></script>\n` +
+    `<script src="${RESERVED}interact.min.js" onerror="window.__WEBTWEAK_INTERACT_ERR__=true"></script>\n` +
     `<script src="${RESERVED}overlay.js" defer></script>\n`
   );
 }

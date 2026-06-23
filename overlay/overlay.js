@@ -365,9 +365,11 @@
   }
 
   // Replaced (and replaced-like) inline elements that DO honour width/height and
-  // transform, unlike ordinary inline text boxes. Keyed by uppercase tagName.
-  var REPLACED = { IMG: 1, SVG: 1, VIDEO: 1, CANVAS: 1, IFRAME: 1, EMBED: 1,
-    OBJECT: 1, PICTURE: 1, INPUT: 1, TEXTAREA: 1, SELECT: 1, BUTTON: 1, AUDIO: 1 };
+  // transform, unlike ordinary inline text boxes. Keyed by lowercase tagName
+  // (HTML elements have uppercase tagName, SVG/MathML elements have lowercase —
+  // always compare via .toLowerCase() to match both).
+  var REPLACED = { img: 1, svg: 1, video: 1, canvas: 1, iframe: 1, embed: 1,
+    object: 1, picture: 1, input: 1, textarea: 1, select: 1, button: 1, audio: 1 };
 
   function populate(el) {
     var cs = getComputedStyle(el);
@@ -398,7 +400,7 @@
     // so a user can't record a dead patch the element never honours. Replaced inline
     // elements (img, svg, video, form controls...) DO honour sizing/transform, so they
     // stay enabled even at display:inline.
-    var inlineOnly = cs.display === "inline" && !REPLACED[el.tagName];
+    var inlineOnly = cs.display === "inline" && !REPLACED[el.tagName.toLowerCase()];
     ["wt-w", "wt-h"].forEach(function (id) {
       var n = document.getElementById(id);
       if (n) { n.disabled = inlineOnly; n.title = inlineOnly ? "width/height are ignored on inline elements" : ""; }
@@ -501,6 +503,25 @@
   });
 
   // ---- interact.js: nudge (drag interior) + resize (right/bottom grips) ------
+
+  // Return the ratio of viewport pixels to CSS layout pixels for el's coordinate
+  // space.  If an ancestor has transform:scale() (common in A4/print-preview
+  // layouts to fit a large page in the viewport), getBoundingClientRect() reflects
+  // the scaled viewport size while offsetWidth/Height stay in CSS layout pixels.
+  // Dividing interact.js's viewport-pixel deltas by this ratio converts them to
+  // the CSS translate units the element actually honours.
+  // Falls back to 1 for SVG elements (no offsetWidth) and zero-size elements.
+  function getParentScale(el) {
+    var ow = el.offsetWidth, oh = el.offsetHeight;
+    if (!ow || !oh) return { x: 1, y: 1 };
+    var r = el.getBoundingClientRect();
+    var sx = r.width / ow, sy = r.height / oh;
+    return {
+      x: (isFinite(sx) && sx > 0) ? sx : 1,
+      y: (isFinite(sy) && sy > 0) ? sy : 1,
+    };
+  }
+
   // interact's rect is border-box; convert to the element's own box model so the
   // recorded value matches the panel (content-box for content-box elements) and
   // the element doesn't jump by its padding+border on the first drag.
@@ -538,7 +559,12 @@
     // delete the resize - the opposite of what's wanted.
   }
   function attachInteract(el) {
-    if (!window.interact) return;
+    if (!window.interact) {
+      status(window.__WEBTWEAK_INTERACT_ERR__
+        ? "interact.js failed to load — check browser console"
+        : "interact.js not ready — drag/resize unavailable", false);
+      return;
+    }
     // Scale the resize grab-band to the element so small elements stay nudgeable.
     var margin = el.offsetHeight < 40 ? 4 : 10;
     // Gesture-batched undo: snapshot at start, push one batch at end.
@@ -562,7 +588,8 @@
           },
           move: function (event) {
             var e = entry(el);
-            e._x += event.dx; e._y += event.dy;
+            var sc = getParentScale(el);
+            e._x += event.dx / sc.x; e._y += event.dy / sc.y;
             var sx = Math.round(e._x / 4) * 4, sy = Math.round(e._y / 4) * 4;
             if (sx === 0 && sy === 0) {            // dragged back to origin: not a real nudge
               el.style.removeProperty("transform");
@@ -627,6 +654,14 @@
   // stealing pointer events before interact.js can track them. In editor mode,
   // native drag is never wanted on page content.
   document.addEventListener("dragstart", function (ev) {
+    if (!isOverlay(ev.target)) ev.preventDefault();
+  }, true);
+
+  // Belt-and-suspenders against text selection: the overlay CSS sets
+  // user-select:none on html, but a page's own CSS may override it on specific
+  // selectors (e.g. p { user-select: text }).  The selectstart event fires just
+  // before the browser enters selection mode, so we can veto it here regardless.
+  document.addEventListener("selectstart", function (ev) {
     if (!isOverlay(ev.target)) ev.preventDefault();
   }, true);
 
