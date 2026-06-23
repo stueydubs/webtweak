@@ -21,7 +21,7 @@ def start(page):
     stdout line, and fails fast (surfacing stderr) if the process dies first.
     """
     proc = subprocess.Popen(
-        ["python3", str(ROOT / "webtweak"), str(page), "--port", "0", "--no-browser"],
+        ["node", str(ROOT / "webtweak.js"), str(page), "--port", "0", "--no-browser"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     deadline = time.monotonic() + 5

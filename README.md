@@ -6,22 +6,27 @@ It is deliberately **half of a loop**. webtweak never rewrites your source - it 
 
 ## Install
 
-**Requirements:** Python 3.9+ (stdlib only — no packages to install).
+**Requirements:** Node.js 18+. No npm packages required.
+
+```bash
+npm install -g webtweak
+```
+
+Or run without installing:
+
+```bash
+npx webtweak page.html
+```
+
+**From source:**
 
 ```bash
 git clone https://github.com/stueydubs/webtweak
 cd webtweak
-chmod +x webtweak
-ln -s "$PWD/webtweak" ~/bin/webtweak
+npm link
 ```
 
-`~/bin` must be on your `$PATH`. If it isn't, add this to your shell profile:
-
-```bash
-export PATH="$HOME/bin:$PATH"
-```
-
-Then open a new terminal and run `webtweak --help` to confirm it's working.
+Then run `webtweak --help` to confirm it's working.
 
 ## Usage
 

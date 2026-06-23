@@ -1,0 +1,29 @@
+{
+  "name": "webtweak",
+  "version": "0.1.0",
+  "description": "Local visual editor for hand-coded HTML/CSS — captures edits as patches, Claude reconciles them into source",
+  "bin": {
+    "webtweak": "./webtweak.js"
+  },
+  "files": [
+    "webtweak.js",
+    "overlay/",
+    "reconcile/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "visual-editor",
+    "css",
+    "html",
+    "wysiwyg",
+    "local"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stueydubs/webtweak.git"
+  },
+  "homepage": "https://github.com/stueydubs/webtweak"
+}

@@ -11,8 +11,8 @@ import unittest
 from importlib.machinery import SourceFileLoader
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# The executable has no .py extension, so load it via an explicit source loader.
-_loader = SourceFileLoader("webtweak", str(ROOT / "webtweak"))
+# Load pure functions from the Python reference implementation (webtweak.py).
+_loader = SourceFileLoader("webtweak", str(ROOT / "webtweak.py"))
 _spec = importlib.util.spec_from_loader("webtweak", _loader)
 assert _spec is not None
 wt = importlib.util.module_from_spec(_spec)
