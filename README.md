@@ -1,5 +1,9 @@
 # webtweak
 
+**▶ Live demo &amp; site: https://stueydubs.github.io/webtweak/**
+
+[![webtweak demo — edit by eye, Claude writes the CSS](site/demo-poster.png)](https://stueydubs.github.io/webtweak/)
+
 A local, open-source visual editor for hand-coded HTML/CSS pages. You drag, resize, and restyle an existing page by eye; webtweak captures what you changed as machine-readable patches; Claude reconciles those patches into the real source (and pushes only if you ask).
 
 It is deliberately **half of a loop**. webtweak never rewrites your source - it only captures *intent*. The judgment-heavy work of locating elements and writing clean CSS is done by Claude on reconcile. That asymmetry is why a tool that would otherwise rival Pinegrow fits in a single Python file plus a browser overlay. See [`docs/adr/0001`](docs/adr/0001-capture-intent-not-rewrite-source.md).

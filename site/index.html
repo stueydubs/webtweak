@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>webtweak — edit by eye, Claude writes the CSS</title>
+  <meta name="description" content="A local, open-source visual editor for hand-coded HTML/CSS. Drag, resize and restyle a page by eye; webtweak captures the changes as patches; Claude reconciles them into clean source.">
+  <meta name="theme-color" content="#15171c">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="webtweak — edit by eye, Claude writes the CSS">
+  <meta property="og:description" content="A local, open-source visual editor for hand-coded HTML/CSS. Drag, resize and restyle by eye; Claude reconciles your edits into clean source.">
+  <meta property="og:url" content="https://stueydubs.github.io/webtweak/">
+  <meta property="og:image" content="https://stueydubs.github.io/webtweak/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="webtweak — edit by eye, Claude writes the CSS">
+  <meta name="twitter:description" content="Drag, resize and restyle a hand-coded page by eye; Claude reconciles your edits into clean CSS.">
+  <meta name="twitter:image" content="https://stueydubs.github.io/webtweak/og.png">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="nav">
+    <a class="nav-logo" href="#top">webtweak</a>
+    <nav class="nav-links">
+      <a href="https://github.com/stueydubs/webtweak">GitHub</a>
+      <a href="https://www.npmjs.com/package/webtweak">npm</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <!-- hero -->
+    <section class="hero">
+      <p class="eyebrow">Local · open-source · MIT</p>
+      <h1 class="wordmark">webtweak</h1>
+      <p class="tagline">Edit by eye. Claude writes the CSS.</p>
+      <p class="lede">
+        A local visual editor for hand-coded HTML&nbsp;/&nbsp;CSS. You drag,
+        resize and restyle an existing page by eye; webtweak captures what you
+        changed as machine-readable patches; Claude reconciles those patches
+        into clean source.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/stueydubs/webtweak">
+          View on GitHub
+        </a>
+        <a class="btn btn-ghost" href="https://www.npmjs.com/package/webtweak">
+          npm package
+        </a>
+      </div>
+    </section>
+
+    <!-- demo -->
+    <section class="demo">
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="dot dot-r"></span>
+          <span class="dot dot-y"></span>
+          <span class="dot dot-g"></span>
+          <span class="url">localhost:8723/page.html</span>
+        </div>
+        <video
+          class="demo-video"
+          autoplay muted loop playsinline preload="metadata"
+          poster="demo-poster.png">
+          <source src="demo.mp4" type="video/mp4">
+        </video>
+      </div>
+      <p class="demo-fallback">
+        Video not playing?
+        <a href="demo.mp4">Open the demo (MP4)</a>.
+      </p>
+    </section>
+
+    <!-- the loop -->
+    <section class="loop">
+      <h2 class="section-title">It's deliberately half a loop</h2>
+      <p class="section-sub">
+        webtweak never rewrites your source — it only captures
+        <em>intent</em>. The judgment-heavy work of locating elements and
+        writing clean CSS is done by Claude on reconcile.
+      </p>
+      <ol class="steps">
+        <li class="step">
+          <span class="step-n">1</span>
+          <h3>Edit by eye</h3>
+          <p>
+            Run <code>webtweak page.html</code>, then click, drag, resize and
+            restyle in the browser. Your source is never touched.
+          </p>
+        </li>
+        <li class="step">
+          <span class="step-n">2</span>
+          <h3>webtweak captures patches</h3>
+          <p>
+            On Save it writes a <code>page.webtweak.json</code> next to the
+            page — each element fingerprinted, each change recorded as intent.
+          </p>
+        </li>
+        <li class="step">
+          <span class="step-n">3</span>
+          <h3>Claude reconciles to clean CSS</h3>
+          <p>
+            Tell Claude <em>“reconcile page.html”</em>. It locates each element
+            and writes clean CSS in your house conventions — then stops at
+            source.
+          </p>
+        </li>
+      </ol>
+    </section>
+
+    <!-- install -->
+    <section class="install">
+      <h2 class="section-title">Install</h2>
+      <p class="section-sub">Node.js 18+. No npm packages required to run it.</p>
+
+      <div class="code-card">
+        <span class="code-label">Run without installing</span>
+        <pre><code>npx webtweak page.html</code></pre>
+      </div>
+
+      <div class="code-card">
+        <span class="code-label">Or install globally</span>
+        <pre><code>npm install -g webtweak</code></pre>
+      </div>
+
+      <p class="reconcile-note">
+        The reconcile step ships as a Claude Code skill —
+        <code>reconcile/SKILL.md</code> documents the full process for any
+        Claude conversation.
+        <a href="https://github.com/stueydubs/webtweak/blob/main/reconcile/SKILL.md">
+          Read the reconcile skill →
+        </a>
+      </p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>
+      <a href="https://github.com/stueydubs/webtweak">github.com/stueydubs/webtweak</a>
+      · MIT licensed
+    </p>
+    <p class="footer-dim">
+      Drag/resize physics by
+      <a href="https://interactjs.io">interact.js</a> (Taye Adeyemi, MIT).
+    </p>
+  </footer>
+</body>
+</html>
