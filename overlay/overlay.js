@@ -39,6 +39,7 @@
   var missed = [];         // restored patches we couldn't re-locate - preserved across saves
   var interacting = false; // a drag/resize gesture is in progress
   var undoStack = [];      // stack of batches: each [{el, prop, prev}]
+  var pendingShape = null; // shape kind awaiting a placement click (place mode)
 
   function entry(el) {
     var e = edited.get(el);
@@ -69,14 +70,42 @@
     var ch = (edited.get(el) || {}).changes;
     var prev = ch ? ch[prop] : undefined;
     var top = undoStack[undoStack.length - 1];
-    if (top && top.length === 1 && top[0].el === el && top[0].prop === prop) return;
+    // Only collapse consecutive PANEL writes of the same prop into one step. A gesture
+    // batch (a drag/resize, tagged below) must stay its own step, or a single-axis grip
+    // resize followed by typing the same prop would fuse into one undo.
+    if (top && !top.gesture && top.length === 1 && top[0].el === el && top[0].prop === prop) return;
     undoStack.push([{ el: el, prop: prop, prev: prev }]);
   }
+  // Gesture-batched undo: snapshot the props at gesture start, then at end push one
+  // batch for those that actually changed. Shared by shape move + both resize paths.
+  function snapshotProps(el, props) {
+    var ch = (edited.get(el) || {}).changes || {};
+    var snap = {};
+    props.forEach(function (p) { snap[p] = ch[p]; });
+    return snap;
+  }
+  function pushGestureUndo(el, props, prev) {
+    var ch = (edited.get(el) || {}).changes || {};
+    var batch = [];
+    props.forEach(function (p) {
+      if (ch[p] !== prev[p]) batch.push({ el: el, prop: p, prev: prev[p] });
+    });
+    if (batch.length) { batch.gesture = true; undoStack.push(batch); }  // own undo step, never collapsed
+  }
+  var MOVE_PROPS = ["left", "top"];                                  // a shape drag
+  var RESIZE_PROPS = ["width", "height", "max-width", "min-height"]; // any resize gesture
 
   function applyUndoBatch(batch) {
     // Collect unique elements so each element's inline is rebuilt exactly once.
     var els = [];
     batch.forEach(function (u) {
+      // Undoing a shape's creation removes the element and its edited entry outright.
+      if (u.create) {
+        if (u.el === selectedEl) deselect();
+        if (u.el.parentNode) u.el.parentNode.removeChild(u.el);
+        edited.delete(u.el);
+        return;
+      }
       var ent = entry(u.el);
       if (u.prev === undefined) {
         delete ent.changes[u.prop];
@@ -141,8 +170,121 @@
       read: function (cs) { return cs.margin; } },
     { group: "Box", id: "wt-padding", prop: "padding", label: "Padding", kind: "text",
       read: function (cs) { return cs.padding; } },
+    // Shape-only: fill/stroke/stroke-width are inherited SVG presentation properties,
+    // so writing them on the <svg> cascades to its child shape (one place to edit
+    // colour for every shape kind). `rx` is NOT inherited - it's a <rect> geometry
+    // property, so its control reads/writes the child via `host` (see applyChange).
+    // shapeOnly controls skip the CSS.supports gate: a colour swatch or a px number
+    // is always valid, and CSS.supports can report SVG presentation props unevenly.
+    { group: "Shape", id: "wt-fill", prop: "fill", label: "Fill", kind: "color", shapeOnly: true,
+      read: function (cs) { return rgbToHex(cs.fill); } },
+    { group: "Shape", id: "wt-stroke", prop: "stroke", label: "Border", kind: "color", shapeOnly: true,
+      read: function (cs) { return rgbToHex(cs.stroke); } },
+    { group: "Shape", id: "wt-sw", prop: "stroke-width", label: "Border width", kind: "number", unit: "px", shapeOnly: true,
+      read: function (cs) { return px(cs.strokeWidth); } },
+    { group: "Shape", id: "wt-rx", prop: "rx", label: "Radius", kind: "number", unit: "px",
+      shapeOnly: true, rectOnly: true, host: function (el) { return el.firstElementChild; },
+      read: function (cs) { return px(cs.rx); } },
   ];
-  var GROUPS = ["Type", "Colour", "Box"];
+  var GROUPS = ["Type", "Colour", "Box", "Shape"];
+
+  // ---- shapes ---------------------------------------------------------------
+  // Every shape is one inline <svg> wrapper containing a single child primitive,
+  // drawn into a fixed 0..100 viewBox. `preserveAspectRatio="none"` lets it stretch
+  // to any width x height; `vector-effect="non-scaling-stroke"` keeps the stroke an
+  // even thickness under that stretch. rect/ellipse fill the box via attributes; the
+  // rest are <polygon>s with precomputed points. Element creation is webtweak's first
+  // departure from "only edit what already exists" - see ADR-0002.
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var SHAPES = {
+    square:    { el: "rect",    attrs: { x: 0, y: 0, width: 100, height: 100 }, size: { w: 80, h: 80 } },
+    rectangle: { el: "rect",    attrs: { x: 0, y: 0, width: 100, height: 100 }, size: { w: 140, h: 80 } },
+    circle:    { el: "ellipse", attrs: { cx: 50, cy: 50, rx: 50, ry: 50 }, size: { w: 80, h: 80 } },
+    ellipse:   { el: "ellipse", attrs: { cx: 50, cy: 50, rx: 50, ry: 50 }, size: { w: 140, h: 80 } },
+    triangle:  { el: "polygon", points: "50,0 100,100 0,100", size: { w: 90, h: 80 } },
+    star:      { el: "polygon", points: "50,2 61,38 98,38 68,60 79,96 50,74 21,96 32,60 2,38 39,38", size: { w: 90, h: 90 } },
+    diamond:   { el: "polygon", points: "50,0 100,50 50,100 0,50", size: { w: 90, h: 90 } },
+    pentagon:  { el: "polygon", points: "50,0 98,36 80,98 20,98 2,36", size: { w: 90, h: 90 } },
+    hexagon:   { el: "polygon", points: "25,2 75,2 100,50 75,98 25,98 0,50", size: { w: 100, h: 86 } },
+  };
+  var SHAPE_LIST = ["square", "rectangle", "circle", "ellipse", "triangle", "star", "diamond", "pentagon", "hexagon"];
+  var DEFAULT_FILL = "#e8c468";
+
+  // The self-describing structural payload carried in a create patch, so reconcile
+  // can render the shape without webtweak's SHAPES table.
+  function shapeGeometry(kind) {
+    var spec = SHAPES[kind] || SHAPES.square;
+    return { viewBox: "0 0 100 100", el: spec.el, points: spec.points || null, attrs: spec.attrs || null };
+  }
+
+  // Build the inner-shape markup string (for palette icons and nothing else - the
+  // live shape uses real createElementNS nodes, below).
+  function innerMarkup(spec) {
+    if (spec.points) return '<polygon points="' + spec.points + '"/>';
+    return "<" + spec.el + " " + Object.keys(spec.attrs).map(function (k) {
+      return k + '="' + spec.attrs[k] + '"';
+    }).join(" ") + "/>";
+  }
+
+  // Create a shape <svg> at document coords (x, y), register it in `edited` with a
+  // seeded full-style `changes` snapshot so its create patch is self-contained even
+  // if no control is ever touched. opts.restore re-injects a saved shape (keeps its
+  // id + changes, no undo step). The `wt-shape-` id prefix keeps it out of
+  // fingerprint class capture, and reconcile strips it for a clean source hook.
+  function makeShape(kind, x, y, opts) {
+    opts = opts || {};
+    var spec = SHAPES[kind] || SHAPES.square;
+    var svg = document.createElementNS(SVGNS, "svg");
+    var id = opts.id || ("wt-shape-" + Math.random().toString(36).slice(2, 8));
+    svg.setAttribute("id", id);
+    svg.setAttribute("class", "wt-shape");
+    svg.setAttribute("data-wt-shape", kind);
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("preserveAspectRatio", "none");
+    var child = document.createElementNS(SVGNS, spec.el);
+    if (spec.points) child.setAttribute("points", spec.points);
+    if (spec.attrs) Object.keys(spec.attrs).forEach(function (k) { child.setAttribute(k, spec.attrs[k]); });
+    child.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(child);
+    svg.__wtShape = true;
+    document.body.appendChild(svg);
+
+    var e = entry(svg);                     // origStyle = null (no style attr yet)
+    e.shape = { kind: kind, geometry: opts.geometry || shapeGeometry(kind) };
+    e.changes = opts.changes || {
+      "position": "absolute",
+      "left": Math.round(x) + "px",
+      "top": Math.round(y) + "px",
+      "width": spec.size.w + "px",
+      "height": spec.size.h + "px",
+      "fill": DEFAULT_FILL,
+      "stroke": "none",
+      "stroke-width": "0",
+    };
+    rebuildInline(svg, e);                   // apply the seeded style inline
+    if (!opts.restore) {
+      // If <body> is a positioned/transformed containing block, an absolute child's
+      // left/top are measured from its padding box rather than the viewport, so the
+      // shape would land offset from the cursor. Re-seat it to the actual click point
+      // by measuring and correcting (a no-op on the common static-body case). The
+      // viewport-pixel error is divided by the on-screen scale (derived from the
+      // shape's own known layout size vs its measured box) so it also lands correctly
+      // under a transform:scale() ancestor, matching the grip-resize path.
+      var r = svg.getBoundingClientRect();
+      var scx = parseFloat(e.changes.width) > 0 ? r.width / parseFloat(e.changes.width) : 1;
+      var scy = parseFloat(e.changes.height) > 0 ? r.height / parseFloat(e.changes.height) : 1;
+      var nx = Math.round(parseFloat(e.changes.left) + (x - window.scrollX - r.left) / (scx || 1));
+      var ny = Math.round(parseFloat(e.changes.top) + (y - window.scrollY - r.top) / (scy || 1));
+      if (nx + "px" !== e.changes.left || ny + "px" !== e.changes.top) {
+        e.changes.left = nx + "px";
+        e.changes.top = ny + "px";
+        rebuildInline(svg, e);
+      }
+      dirty = true;                          // a fresh shape is an unsaved edit; a restored one is not
+      undoStack.push([{ el: svg, create: true }]);  // Cmd+Z removes the shape
+    }
+    return svg;
+  }
 
   // ---- DOM scaffolding ------------------------------------------------------
   var root = document.createElement("div");
@@ -152,6 +294,10 @@
     '  <span class="wt-logo">webtweak</span>',
     '  <span class="wt-crumb" id="wt-crumb">click an element to select</span>',
     '  <span class="wt-status" id="wt-status"></span>',
+    '  <div class="wt-shapes" id="wt-shapes">',
+    '    <button class="wt-btn" id="wt-shape-btn">Shape ▾</button>',
+    '    <div class="wt-palette" id="wt-palette" hidden></div>',
+    "  </div>",
     '  <button class="wt-btn" id="wt-deselect">Deselect</button>',
     '  <button class="wt-btn wt-primary" id="wt-save">Save</button>',
     "</div>",
@@ -163,6 +309,7 @@
     "</div>",
     panelHTML(),
     '<div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+S</b> save.</div>',
+    '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Click anywhere</b> to drop the shape. <b>Esc</b> to cancel.</div>',
   ].join("\n");
   document.body.appendChild(root);
 
@@ -172,11 +319,84 @@
   var crumbEl = document.getElementById("wt-crumb");
   var statusEl = document.getElementById("wt-status");
   var panel = document.getElementById("wt-panel");
+  var palette = document.getElementById("wt-palette");
+  var placeHint = document.getElementById("wt-place-hint");
+
+  // ---- shape palette + place mode -------------------------------------------
+  SHAPE_LIST.forEach(function (kind) {
+    var btn = document.createElement("button");
+    btn.className = "wt-shape-item";
+    btn.dataset.shape = kind;
+    btn.title = "Click then click the page, or drag me onto the page";
+    btn.setAttribute("draggable", "true");   // also draggable straight onto the page
+    btn.innerHTML = '<svg viewBox="-8 -8 116 116" preserveAspectRatio="none">' +
+      innerMarkup(SHAPES[kind]) + "</svg>";
+    palette.appendChild(btn);
+  });
+  document.getElementById("wt-shape-btn").addEventListener("click", function () {
+    palette.hidden = !palette.hidden;
+  });
+  palette.addEventListener("click", function (ev) {
+    var btn = ev.target.closest(".wt-shape-item");
+    if (btn) enterPlaceMode(btn.dataset.shape);   // click-to-place: next canvas click drops it
+  });
+  // Drag-and-drop placement: drag a palette shape onto the page and release to drop
+  // it at the cursor. A real drag suppresses the click, so click-to-place still works.
+  palette.addEventListener("dragstart", function (ev) {
+    var btn = ev.target.closest(".wt-shape-item");
+    if (!btn) return;
+    pendingShape = btn.dataset.shape;
+    if (ev.dataTransfer) {
+      ev.dataTransfer.effectAllowed = "copy";
+      ev.dataTransfer.setData("text/plain", btn.dataset.shape);  // some engines need data set
+    }
+    showPlaceModeUI();
+  });
+  document.addEventListener("dragover", function (ev) {
+    if (!pendingShape) return;
+    ev.preventDefault();                         // allow the drop
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+  });
+  document.addEventListener("drop", function (ev) {
+    if (!pendingShape) return;
+    ev.preventDefault();
+    var kind = pendingShape;
+    if (isOverlay(ev.target)) { exitPlaceMode(); status("placement cancelled"); return; }  // dropped on the UI
+    placeShape(kind, ev.clientX + window.scrollX, ev.clientY + window.scrollY);
+  });
+  document.addEventListener("dragend", function () {
+    if (pendingShape) exitPlaceMode();           // drag released outside a drop target: cancel
+  });
+  function enterPlaceMode(kind) {
+    deselect();   // clear any selection + its grips so they can't swallow the placement click
+    pendingShape = kind;
+    showPlaceModeUI();
+    status("click to place " + kind);
+  }
+  function showPlaceModeUI() {
+    palette.hidden = true;
+    placeHint.hidden = false;
+    document.documentElement.classList.add("wt-placing");
+  }
+  function exitPlaceMode() {
+    pendingShape = null;
+    placeHint.hidden = true;
+    document.documentElement.classList.remove("wt-placing");
+  }
+  // Drop a shape at document coords (x, y), leave place mode, and select it -
+  // shared by the click-to-place and drag-and-drop paths.
+  function placeShape(kind, x, y) {
+    exitPlaceMode();
+    var svg = makeShape(kind, x, y);
+    selectEl(svg);
+    status("added " + kind);
+    return svg;
+  }
 
   function panelHTML() {
     var parts = ['<div class="wt-panel wt-ui" id="wt-panel" hidden>', "  <h3>Properties</h3>"];
     GROUPS.forEach(function (g) {
-      parts.push('  <div class="wt-group"><div class="wt-legend">' + g + "</div>");
+      parts.push('  <div class="wt-group" data-group="' + g + '"><div class="wt-legend">' + g + "</div>");
       CONTROLS.filter(function (c) { return c.group === g; }).forEach(function (c) {
         parts.push(field(c.label, controlMarkup(c)));
       });
@@ -188,7 +408,9 @@
     return parts.join("\n");
   }
   function controlMarkup(c) {
-    if (c.kind === "number") return '<input type="number" id="' + c.id + '" min="' + (c.box ? 0 : 1) + '"> px';
+    // 0 is meaningful for box sizes and shape props (stroke-width 0 = no border, rx 0 =
+    // sharp corners); other numbers (font-size) floor at 1.
+    if (c.kind === "number") return '<input type="number" id="' + c.id + '" min="' + (c.box || c.shapeOnly ? 0 : 1) + '"> px';
     if (c.kind === "color") return '<input type="color" id="' + c.id + '">';
     if (c.kind === "select") return select(c.id, c.opts);
     if (c.kind === "align") return alignButtons(c.id);
@@ -340,6 +562,7 @@
   }
 
   function deselect() {
+    if (pendingShape) exitPlaceMode();  // a Deselect/Esc during place mode also cancels placement
     if (selectedEl && window.interact) interact(selectedEl).unset();
     interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
     selectedEl = null;
@@ -350,6 +573,15 @@
 
   function resetEl(el) {
     var e = edited.get(el);
+    // A created shape has no authored baseline to revert to - resetting it removes it.
+    if (e && e.shape) {
+      if (el === selectedEl) deselect();
+      if (el.parentNode) el.parentNode.removeChild(el);
+      edited.delete(el);
+      dirty = hasRealEdits();
+      status("shape removed");
+      return;
+    }
     if (e) {
       if (e.origStyle == null) el.removeAttribute("style");
       else el.setAttribute("style", e.origStyle);
@@ -376,16 +608,22 @@
     var ent = edited.get(el);
     baselines = {};
     CONTROLS.forEach(function (c) {
-      var shown = c.read(cs);            // current (possibly already-edited) value -> the panel
+      // Most controls read/write the element itself; `host` (rx only) targets the
+      // child shape node, since rx is a non-inherited <rect> geometry property. Only
+      // resolve it for shapes, so selecting a normal element never probes (and forces
+      // a style recalc on) a child node for a control it will never show.
+      var host = (c.host && ent && ent.shape && c.host(el)) || el;
+      var hcs = host === el ? cs : getComputedStyle(host);
+      var shown = c.read(hcs);            // current (possibly already-edited) value -> the panel
       var base = shown;
       // After a reload+restore the override is applied inline, so computed == the
       // edited value. Recover the true authored baseline by reading computed with
       // just this property's override peeled off, so "revert to original" is still
       // detected (and doesn't record a no-op patch setting a prop to its own origin).
       if (ent && ent.changes && c.prop && Object.prototype.hasOwnProperty.call(ent.changes, c.prop)) {
-        base = withTempStyle(el,
+        base = withTempStyle(host,
           function (s) { s.removeProperty(c.prop); },
-          function () { return c.read(getComputedStyle(el)); });
+          function () { return c.read(getComputedStyle(host)); });
       }
       baselines[c.id] = String(base);
       if (c.kind === "align") {
@@ -395,6 +633,19 @@
       } else {
         set(c.id, shown);
       }
+    });
+    // Group/field visibility: the Shape group shows only for shapes; Type + Colour
+    // hide for shapes (typography/text colour are irrelevant); Box always shows.
+    // The Radius field shows only for rect/square (rx is meaningless elsewhere).
+    var isShape = !!(ent && ent.shape);
+    GROUPS.forEach(function (g) {
+      var node = document.querySelector('#wt-panel .wt-group[data-group="' + g + '"]');
+      if (node) node.hidden = (g === "Shape") ? !isShape : (g === "Box" ? false : isShape);
+    });
+    CONTROLS.forEach(function (c) {
+      if (!c.rectOnly) return;
+      var node = document.getElementById(c.id), wrap = node && node.closest(".wt-field");
+      if (wrap) wrap.hidden = !(isShape && (ent.shape.kind === "square" || ent.shape.kind === "rectangle"));
     });
     // width/height + nudge are inert on NON-REPLACED inline elements - disable them
     // so a user can't record a dead patch the element never honours. Replaced inline
@@ -434,9 +685,16 @@
       function () { return getComputedStyle(selectedEl)[prop]; });
   }
   // Re-apply one recorded change (a nudge transform or a plain property) to an element.
+  // Shape fill/stroke/stroke-width are inherited SVG props, so they're set on the
+  // <svg> and cascade to the child. `rx` is a non-inherited <rect> geometry property,
+  // so it's routed to the child node instead (the patch still records it on the shape).
   function applyChange(el, prop, value) {
-    if (prop === "nudge") el.style.transform = "translate(" + value.dx + "px, " + value.dy + "px)";
-    else el.style.setProperty(prop, value);
+    if (prop === "nudge") { el.style.transform = "translate(" + value.dx + "px, " + value.dy + "px)"; return; }
+    if (prop === "rx" && el.__wtShape && el.firstElementChild) {
+      el.firstElementChild.style.setProperty("rx", value);
+      return;
+    }
+    el.style.setProperty(prop, value);
   }
   // Rebuild an element's inline style from its authored original plus the session's
   // remaining changes. Used to revert a single property without a removeProperty() that
@@ -444,6 +702,9 @@
   function rebuildInline(el, ent) {
     if (!ent || ent.origStyle == null) el.removeAttribute("style");
     else el.setAttribute("style", ent.origStyle);
+    // For shapes, `rx` lives on the child node (not in the svg's own style attr),
+    // so clear the child too before re-applying or a reverted radius would linger.
+    if (el.__wtShape && el.firstElementChild) el.firstElementChild.removeAttribute("style");
     if (ent) Object.keys(ent.changes).forEach(function (p) {
       var v = ent.changes[p];
       applyChange(el, p, v);
@@ -460,9 +721,15 @@
     // Shorthand props (margin/padding) carry a computed 4-value baseline, so resolve
     // the typed value through the element before comparing.
     var revertTarget = (c.prop === "margin" || c.prop === "padding") ? resolveValue(c.prop, raw) : String(raw);
+    // A shape's seeded properties (fill/stroke/stroke-width/rx and width/height) have
+    // no authored baseline and must stay in the self-contained create patch, so those
+    // writes are always recorded - a 1px border or a #000000 fill can't be mistaken for
+    // a revert against the SVG UA default the baseline peel resolves to. But margin/
+    // padding on a shape ARE ordinary (not seeded), so they still revert normally.
+    var noRevert = selectedEl.__wtShape && (c.shapeOnly || c.box);
     // Guard the "" === "" trap: an engine that serialises an asymmetric computed
     // shorthand as "" must not make every typed value look like a revert.
-    if (revertTarget !== "" && revertTarget === baselines[c.id]) {
+    if (!noRevert && revertTarget !== "" && revertTarget === baselines[c.id]) {
       var ent = edited.get(selectedEl);
       if (ent && ent.changes[c.prop] !== undefined) pushUndoWrite(selectedEl, c.prop);
       if (ent) delete ent.changes[c.prop];
@@ -476,9 +743,9 @@
     // Don't bake a phantom patch the page never showed: if the browser would
     // reject this value (a typo like "banana" in a free-text field), the live
     // preview wouldn't change either, so leave any prior valid edit untouched.
-    if (!c.box && !CSS.supports(c.prop, v)) { status("ignored invalid " + c.prop + ": " + raw, false); return; }
+    if (!c.box && !c.shapeOnly && !CSS.supports(c.prop, v)) { status("ignored invalid " + c.prop + ": " + raw, false); return; }
     pushUndoWrite(selectedEl, c.prop);
-    selectedEl.style.setProperty(c.prop, v);
+    applyChange(selectedEl, c.prop, v);  // routes rx to the child node; plain setProperty otherwise
     record(selectedEl, c.prop, v);
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
   }
@@ -568,27 +835,45 @@
     // Scale the resize grab-band to the element so small elements stay nudgeable.
     var margin = el.offsetHeight < 40 ? 4 : 10;
     // Gesture-batched undo: snapshot at start, push one batch at end.
-    var nudgePrev, resizePrev;
+    var nudgePrev, resizePrev, movePrev;
     interact(el)
       .draggable({
         // a nudge is a CSS transform, which has no effect on non-replaced inline
-        // elements - disable it there so a drag can't record a dead nudge patch
+        // elements - disable it there so a drag can't record a dead nudge patch.
+        // (Shapes are absolute SVGs, so they're always draggable.)
         enabled: !el.__wtInline,
         listeners: {
           start: function () {
             interacting = true; hoverBox.hidden = true;
-            var ch = (edited.get(el) || {}).changes;
-            nudgePrev = ch ? ch.nudge : undefined;
+            if (el.__wtShape) movePrev = snapshotProps(el, MOVE_PROPS);
+            else nudgePrev = ((edited.get(el) || {}).changes || {}).nudge;
           },
           end: function () {
             interacting = false;
-            var ch = (edited.get(el) || {}).changes;
-            var cur = ch ? ch.nudge : undefined;
-            if (cur !== nudgePrev) undoStack.push([{ el: el, prop: "nudge", prev: nudgePrev }]);
+            if (el.__wtShape) {
+              pushGestureUndo(el, MOVE_PROPS, movePrev);
+            } else {
+              var cur = ((edited.get(el) || {}).changes || {}).nudge;
+              if (cur !== nudgePrev) undoStack.push([{ el: el, prop: "nudge", prev: nudgePrev }]);
+            }
           },
           move: function (event) {
             var e = entry(el);
             var sc = getParentScale(el);
+            // A shape is an absolute element: dragging is a true move - update its
+            // left/top inline and record them, not a transform nudge (ADR-0002).
+            // Read back from the inline style we set last frame (cheaper than
+            // getComputedStyle, which would force a style recalc every pointermove).
+            if (el.__wtShape) {
+              var left = Math.round((parseFloat(el.style.left) || 0) + event.dx / sc.x);
+              var top = Math.round((parseFloat(el.style.top) || 0) + event.dy / sc.y);
+              el.style.left = left + "px";
+              el.style.top = top + "px";
+              record(el, "left", left + "px");
+              record(el, "top", top + "px");
+              positionBox(selBox, el);
+              return;
+            }
             e._x += event.dx / sc.x; e._y += event.dy / sc.y;
             var sx = Math.round(e._x / 4) * 4, sy = Math.round(e._y / 4) * 4;
             if (sx === 0 && sy === 0) {            // dragged back to origin: not a real nudge
@@ -604,27 +889,22 @@
         },
       })
       .resizable({
-        // resize is meaningless on inline (non-replaced) elements - disable it there
-        enabled: !el.__wtInline,
+        // resize is meaningless on inline (non-replaced) elements - disable it there.
+        // Shapes resize via the visible grips instead (setupGripResize): interact's
+        // edge band sits *inside* the element, but users aim at the grips, which
+        // straddle the edge - so for shapes the whole body stays draggable (move)
+        // and resize is grip-only, with no confusing near-edge dead zone.
+        enabled: !el.__wtInline && !el.__wtShape,
         edges: { right: true, bottom: true, top: false, left: false },
         margin: margin,
         listeners: {
           start: function () {
             interacting = true; hoverBox.hidden = true;
-            var ch = (edited.get(el) || {}).changes || {};
-            resizePrev = {
-              "width": ch.width, "height": ch.height,
-              "max-width": ch["max-width"], "min-height": ch["min-height"],
-            };
+            resizePrev = snapshotProps(el, RESIZE_PROPS);
           },
           end: function () {
             interacting = false;
-            var ch = (edited.get(el) || {}).changes || {};
-            var batch = [];
-            ["width", "height", "max-width", "min-height"].forEach(function (p) {
-              if (ch[p] !== resizePrev[p]) batch.push({ el: el, prop: p, prev: resizePrev[p] });
-            });
-            if (batch.length) undoStack.push(batch);
+            pushGestureUndo(el, RESIZE_PROPS, resizePrev);
           },
           move: function (event) {
             resizeWrite(el, event.rect);
@@ -634,10 +914,59 @@
       });
   }
 
+  // ---- grip resize ----------------------------------------------------------
+  // The visible grips are now functional handles (not just hints): interact's
+  // edge band sits inside the element, so users aiming at a grip - which straddles
+  // or sits outside the edge - kept missing it. Driving resize straight off the
+  // grips fixes that for shapes (whose interact resize is disabled) and is a free
+  // win for every other element too. width=right grip, height=bottom, both=corner.
+  [{ cls: "wt-grip-r", doW: true, doH: false },
+   { cls: "wt-grip-b", doW: false, doH: true },
+   { cls: "wt-grip-br", doW: true, doH: true }]
+    .forEach(function (spec) {
+      var grip = selBox.querySelector("." + spec.cls);
+      if (!grip) return;
+      var doW = spec.doW, doH = spec.doH;
+      grip.addEventListener("pointerdown", function (ev) {
+        if (!selectedEl || selectedEl.__wtInline) return;
+        ev.preventDefault();
+        ev.stopPropagation();               // don't let it bubble into a select/drag
+        var el = selectedEl;
+        var start = el.getBoundingClientRect();
+        var sc = getParentScale(el);
+        var startX = ev.clientX, startY = ev.clientY;
+        var prev = snapshotProps(el, RESIZE_PROPS);
+        interacting = true; hoverBox.hidden = true;
+        try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* older engines */ }
+        function move(e) {
+          if (selectedEl !== el) return;   // deselected mid-gesture (e.g. Esc) - stop writing
+          // start.* is the border-box in viewport px; the pointer delta is too. Add them
+          // in that space, THEN divide by the parent scale once, so both terms land in the
+          // CSS layout px resizeWrite writes - correct even under a transform-scaled ancestor.
+          resizeWrite(el, {
+            width: (doW ? start.width + (e.clientX - startX) : start.width) / sc.x,
+            height: (doH ? start.height + (e.clientY - startY) : start.height) / sc.y,
+          });
+          positionBox(selBox, el);
+        }
+        function up() {
+          interacting = false;
+          grip.removeEventListener("pointermove", move);
+          grip.removeEventListener("pointerup", up);
+          grip.removeEventListener("pointercancel", up);
+          pushGestureUndo(el, RESIZE_PROPS, prev);
+        }
+        grip.addEventListener("pointermove", move);
+        grip.addEventListener("pointerup", up);
+        grip.addEventListener("pointercancel", up);
+      });
+    });
+
   // ---- picker ---------------------------------------------------------------
   var lastHoverEl = null;
   document.addEventListener("mousemove", function (ev) {
     if (interacting) { hoverBox.hidden = true; return; }  // don't flicker during drag/resize
+    if (pendingShape) { hoverBox.hidden = true; return; }  // place mode: no select-hover
     var el = ev.target;
     if (isOverlay(el) || el === document.body || el === document.documentElement) {
       hoverBox.hidden = true;
@@ -669,7 +998,15 @@
     if (isOverlay(ev.target)) return;          // let panel/bar controls work
     ev.preventDefault();                        // editor mode: no navigation
     ev.stopPropagation();
-    selectEl(ev.target);                        // always select the deepest target
+    if (pendingShape) {                         // place mode: drop a shape at the click point
+      placeShape(pendingShape, ev.clientX + window.scrollX, ev.clientY + window.scrollY);
+      return;
+    }
+    // A click inside a shape lands on its child <polygon>/<rect>; select the <svg>
+    // wrapper (the thing in `edited`) instead of the inert child.
+    var target = ev.target;
+    var wrap = target.closest && target.closest("svg.wt-shape");
+    selectEl(wrap || target);                   // otherwise select the deepest target
   }, true);
 
   window.addEventListener("scroll", reposition, true);
@@ -683,7 +1020,11 @@
 
   // ---- keyboard -------------------------------------------------------------
   document.addEventListener("keydown", function (ev) {
-    if (ev.key === "Escape") { deselect(); return; }
+    if (ev.key === "Escape") {
+      if (pendingShape) { exitPlaceMode(); status("placement cancelled"); return; }
+      deselect();
+      return;
+    }
     if ((ev.metaKey || ev.ctrlKey) && (ev.key === "s" || ev.key === "S")) {
       ev.preventDefault();
       save();
@@ -702,7 +1043,20 @@
   function save() {
     var patches = [];
     edited.forEach(function (e, el) {
-      if (Object.keys(e.changes).length) {
+      if (e.shape) {
+        // A created shape is an insert, not a restyle: carry the shape kind +
+        // self-describing geometry, an anchor (where to insert in source), and the
+        // full seeded style as `changes`. Server stores patches verbatim (ADR-0002).
+        patches.push({
+          op: "create",
+          shape: e.shape.kind,
+          renderer: "svg",
+          geometry: e.shape.geometry,
+          anchor: { parent: fingerprint(el.parentElement || document.body), position: "append" },
+          fingerprint: fingerprint(el),
+          changes: e.changes,
+        });
+      } else if (Object.keys(e.changes).length) {
         patches.push({ fingerprint: fingerprint(el), changes: e.changes });
       }
     });
@@ -754,6 +1108,18 @@
         missed = [];
         var n = 0, total = (batch.patches || []).length;
         (batch.patches || []).forEach(function (p) {
+          // A create patch re-injects the shape via makeShape (it has no source element
+          // to relocate); its stored id + changes reproduce it exactly (ADR-0002).
+          if (p.op === "create") {
+            var cfp = p.fingerprint || {};
+            var cid = cfp.id || ("wt-shape-" + Math.random().toString(36).slice(2, 8));
+            if (document.getElementById(cid)) { n++; return; }  // already on the page
+            var cch = p.changes || {};
+            makeShape(p.shape, parseFloat(cch.left) || 0, parseFloat(cch.top) || 0,
+              { id: cid, restore: true, geometry: p.geometry, changes: Object.assign({}, cch) });
+            n++;
+            return;
+          }
           var fp = p.fingerprint || {}, el = null;
           try {
             el = fp.id ? document.getElementById(fp.id)

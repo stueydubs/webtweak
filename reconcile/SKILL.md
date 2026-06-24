@@ -17,6 +17,8 @@ A `<page>.webtweak.json` file sitting next to the edited page:
 
 Only `status: "pending"` batches are reconciled. `reconciled` batches are history - never re-apply them.
 
+Two patch shapes share the array. An **edit patch** (`{ fingerprint, changes }`, no `op`) restyles an element that already exists in source - the original and most common case. A **create patch** (`{ op: "create", ... }`) *inserts* a new shape element - webtweak's only element-creation feature. Branch on `op`: treat anything without `op` (or with `op: "edit"`) as an edit patch; `op: "create"` is handled in **"The `create` op"** below.
+
 - `fingerprint`: `{ tag, id, classes, text, ownText, selector, siblingIndex, openTag }`. `ownText` is the element's own direct text (excluding descendants') - prefer it for matching leaf/text elements; `text` includes descendant text - use it to disambiguate containers. `openTag` is the opening tag with any injected inline `style` stripped, so it matches clean source. `selector` is a positional `nth-of-type` path - a weak tiebreaker only. `siblingIndex` is the element's 0-based position among siblings sharing its tag+classes - use it to name *which* one when several are otherwise identical.
 - `changes`: CSS property→value (kebab-case). A position nudge lives *inside* `changes` as `changes.nudge = { dx, dy }` (a 4px-snapped pixel offset), not a separate patch field.
 - `viewport`: the authoring window width in px (an integer).
@@ -41,6 +43,29 @@ Only `status: "pending"` batches are reconciled. `reconciled` batches are histor
 7. **Write** the CSS into the stylesheet already governing the element, in house conventions. Show a concise diff summary.
 8. **Mark done.** `scripts/wtreconcile.py mark <file> <sessionId>` flips that batch to `reconciled` (timestamped); it stays in the file as history, never delete it. On success it prints `marked N batch(es) reconciled` (N≥1) and exits 0; on a wrong/unknown sessionId it prints `... nothing marked` to stderr and exits non-zero. Treat a non-zero exit (or the absence of a `marked N` success line) as: nothing was flipped, so the edits are still pending and would re-apply next run - resolve that before telling the user it's done.
 9. **Stop at source.** Reconcile's job ends at writing source and marking the batch. Never push, commit, or deploy unless the user explicitly asks for it in this session - summarise what changed and let them decide.
+
+## The `create` op
+
+A create patch inserts a brand-new decorative shape (square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon) that the user drew on the page. This is the one place reconcile *adds* source rather than restyling it. Shape:
+
+```
+{ op: "create", shape: "triangle", renderer: "svg",
+  geometry: { viewBox: "0 0 100 100", el: "polygon", points: "50,0 100,100 0,100", attrs: null },
+  anchor: { parent: <fingerprint>, position: "append" },
+  fingerprint: <fingerprint of the drawn <svg>, carrying a throwaway wt-shape-<rand> id>,
+  changes: { position, left, top, width, height, fill, stroke, stroke-width, rx? } }
+```
+
+The overlay renders every shape as one inline `<svg class="wt-shape">` wrapping a single child primitive (`geometry.el` = `rect` | `ellipse` | `polygon`), drawn into a fixed `0 0 100 100` viewBox with `preserveAspectRatio="none"`. `fill`/`stroke`/`stroke-width` are inherited SVG presentation properties set on the `<svg>` so they cascade to the child; `rx` (rect/square corner radius only) is a `<rect>` geometry property and is meant for the child node.
+
+**Write a clean element + clean CSS:**
+1. **Insert the element** at the anchor. Default: append a single `<svg>` near the end of `<body>` (`anchor.parent` fingerprints where webtweak placed it - usually `body`; honour it if it cleanly maps to a source container, else fall back to end-of-`<body>` and say so). Build the child from `geometry` (`el` + `points` for polygons, or `attrs` for rect/ellipse), keep `viewBox="0 0 100 100"`, `preserveAspectRatio="none"`, and `vector-effect="non-scaling-stroke"` on the child so the stroke stays even when stretched.
+2. **Strip the `wt-shape-<rand>` id.** It is a throwaway overlay handle, never source identity. Give the element a clean, intention-revealing hook instead - a `.shape-…` class with a rule in the stylesheet (house style), or a semantic id if the site uses ids. Drop the `wt-shape` class too; it is overlay-internal.
+3. **Map the style.** `fill`/`stroke`/`stroke-width` go on the `<svg>` (they cascade); `rx` goes on the child `<rect>`. `position`/`left`/`top`/`width`/`height` set the absolute placement and size. Prefer a CSS rule over a fat inline `style` (match how the site handles its other decorative elements); a small inline `style` for the one-off position is acceptable if the site has no decorative-layer convention - ask if unsure.
+4. **Absolute placement is sanctioned here.** A create patch is the documented exception to the "never bake `position: absolute`" rule (that rule governs flow content + nudges, per ADR-0001). A decorative shape is a genuine absolute layer, so `position: absolute; left; top` is the *correct* output, not a hack. (Contrast a `nudge`, which still reconciles to clean margin/padding.) Consider whether the shape should be positioned relative to a sensible containing block - if `anchor.parent` is a positioned container, scope it there; if it is loose on `<body>`, that is fine for a page-level decoration but worth a one-line note.
+5. **Ask when ambiguous**, exactly as for edit patches: if placement/containing-block or the scope (one-off vs a reusable `.shape-star` utility) is genuinely unclear, STOP and ask rather than guess. Watch the batch `viewport` for responsiveness - a shape pinned at desktop pixels may need a media-query or a percentage-based position on mobile; flag it.
+
+Mark the batch reconciled with the helper exactly as for edit patches.
 
 ## Helper script
 

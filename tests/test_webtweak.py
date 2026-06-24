@@ -153,6 +153,23 @@ class ApplyBatchTests(unittest.TestCase):
         self.assertEqual(out["batches"][0]["status"], "reconciled")
         self.assertEqual(out["batches"][0]["patches"], [{"old": True}])
 
+    def test_create_patch_stored_verbatim(self):
+        # A shape-creation patch (op:"create") must survive apply_batch untouched: the
+        # server is patch-agnostic, so element creation needed no apply_batch change
+        # (ADR-0002). Guards against a future regression that special-cases patches.
+        create = {
+            "op": "create", "shape": "triangle", "renderer": "svg",
+            "geometry": {"viewBox": "0 0 100 100", "el": "polygon",
+                         "points": "50,0 100,100 0,100", "attrs": None},
+            "anchor": {"parent": {"tag": "body", "selector": "body"}, "position": "append"},
+            "fingerprint": {"tag": "svg", "id": "wt-shape-abc123", "selector": "#wt-shape-abc123"},
+            "changes": {"position": "absolute", "left": "400px", "top": "350px",
+                        "width": "90px", "height": "80px", "fill": "#3366cc",
+                        "stroke": "#cc2222", "stroke-width": "4px"},
+        }
+        out = wt.apply_batch(self.doc, _payload(patches=[create]), "T0")
+        self.assertEqual(out["batches"][0]["patches"], [create])  # preserved exactly
+
     def test_mixed_order_preserved_only_matching_pending_replaced(self):
         doc = {"target": "p.html", "batches": [
             {"sessionId": "s1", "status": "reconciled", "savedAt": "T0", "viewport": 1440, "patches": []},

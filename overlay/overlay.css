@@ -62,6 +62,47 @@ html { user-select: none; }
 .wt-btn.wt-primary { background: #ffd479; color: #1a1300; border-color: #ffd479; font-weight: 600; }
 .wt-btn.wt-primary:hover { background: #ffdd94; }
 
+/* --- shape palette ------------------------------------------------------- */
+.wt-shapes { position: relative; }
+.wt-palette {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 40px);
+  gap: 6px;
+  padding: 8px;
+  background: #1a1d23;
+  border: 1px solid #2c303a;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+}
+.wt-palette[hidden] { display: none; }
+.wt-shape-item {
+  width: 40px; height: 40px;
+  display: flex; align-items: center; justify-content: center;
+  background: #0f1115;
+  border: 1px solid #2c303a;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 7px;
+}
+.wt-shape-item:hover { border-color: #ffd479; background: #15171c; }
+.wt-shape-item svg { width: 100%; height: 100%; fill: #ffd479; display: block; }
+
+/* place mode: a crosshair over the page + a click-to-place hint */
+html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
+.wt-place-hint {
+  position: fixed;
+  top: 56px; left: 50%; transform: translateX(-50%);
+  background: #ffd479; color: #1a1300;
+  border-radius: 8px;
+  padding: 8px 14px; font-size: 12px; font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.wt-place-hint[hidden] { display: none; }
+.wt-place-hint b { font-weight: 800; }
+
 /* --- hover + selection boxes -------------------------------------------- */
 .wt-box {
   position: fixed;
@@ -82,17 +123,22 @@ html { user-select: none; }
   white-space: nowrap;
 }
 
-/* resize grips - visual affordance for the right/bottom drag zones */
+/* resize grips - functional drag handles for the right/bottom/corner zones.
+   pointer-events:auto re-enables them over the pointer-events:none selection box,
+   so they can be grabbed directly (the overlay drives resize off them). */
 .wt-grip {
   position: absolute;
-  width: 8px; height: 8px;
+  width: 11px; height: 11px;
   background: #ffd479;
   border: 1px solid #1a1300;
   border-radius: 2px;
+  pointer-events: auto;
+  touch-action: none;          /* let the overlay handle the drag, not the browser */
 }
-.wt-grip-r { right: -4px; top: calc(50% - 4px); cursor: ew-resize; }
-.wt-grip-b { bottom: -4px; left: calc(50% - 4px); cursor: ns-resize; }
-.wt-grip-br { right: -4px; bottom: -4px; cursor: nwse-resize; }
+.wt-grip:hover { background: #ffe6a6; transform: scale(1.15); }
+.wt-grip-r { right: -6px; top: calc(50% - 5px); cursor: ew-resize; }
+.wt-grip-b { bottom: -6px; left: calc(50% - 5px); cursor: ns-resize; }
+.wt-grip-br { right: -6px; bottom: -6px; cursor: nwse-resize; }
 
 /* --- properties panel --------------------------------------------------- */
 .wt-panel {

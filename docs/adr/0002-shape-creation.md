@@ -1,0 +1,26 @@
+# Shape creation: webtweak's first element-creation feature, on an inline-SVG renderer, with absolute placement as the sanctioned ADR-0001 exception
+
+Until now webtweak only ever *edited elements that already exist* in the source page (ADR-0001: capture intent, don't rewrite source). Drawing new shapes - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon - on the page is the tool's first **element-creation** feature, a genuine extension of the contract rather than another property. We extend the contract cleanly by adding a new patch *operation*, `op: "create"`, alongside the existing edit patches, so the reconcile half learns to *insert* source, not only restyle it. The server stays patch-agnostic (`apply_batch`/`applyBatch` stores patches verbatim), so no server change was needed.
+
+Three decisions shape the design:
+
+**One uniform renderer: inline SVG for every shape.** A shape is one `<svg class="wt-shape" data-wt-shape="<kind>" viewBox="0 0 100 100" preserveAspectRatio="none">` wrapping a single child primitive - `<rect>` (square/rectangle, radius -> `rx`), `<ellipse>` (circle/ellipse), or `<polygon>` with precomputed `points` (the rest). We chose SVG over clip-path divs because:
+- `fill`/`stroke`/`stroke-width` are *inherited* SVG presentation properties, so setting them on the `<svg>` cascades to the child - one place to edit colour for every shape kind, through the existing `writeControl` path unchanged.
+- A real **stroke renders on every shape**, including triangles and stars. A CSS `border` is clipped away on a `clip-path` shape; an SVG `stroke` is not.
+- `<svg>` is already in the overlay's `REPLACED` set, so width/height, the resize grips, and absolute positioning work on it for free.
+- `preserveAspectRatio="none"` lets a shape stretch to any w x h; `vector-effect="non-scaling-stroke"` on the child keeps stroke thickness even under that stretch.
+
+One non-uniformity falls out of the SVG model: `rx` (corner radius) is a non-inherited `<rect>` geometry property, so unlike fill/stroke it cannot be set on the `<svg>` and inherited. Its control reads and writes the child node instead (routed through `applyChange`/`host`), and it is shown only for square/rectangle. We accepted this small special-case rather than abandon a real stroke on polygons (the whole reason for SVG over clip-path).
+
+**Free absolute placement is the documented exception to "never bake `position: absolute`".** Shapes drop at the click point as `position: absolute` elements, and that absolute style is the *correct* reconcile output, not a hack. ADR-0001's no-absolute rule was written for flow content and position *nudges* (which still reconcile to clean margin/padding); a decorative shape is genuinely a free absolute layer. A created shape is therefore the one patch type whose `position: absolute; left; top` is meant to land in source verbatim.
+
+**A shape reuses the existing `edited` plumbing.** It is just an entry in the `edited` Map marked `e.shape = { kind, geometry }`, so selection, `record()`, `dirty`, undo, `save()`, and `restore()` all work almost unchanged. At creation we seed `e.changes` with the full initial style (position/left/top/width/height/fill/stroke/stroke-width) so the create patch is self-contained even if the user never touches a control. On save, a shape entry emits `{ op: "create", shape, renderer: "svg", geometry, anchor, fingerprint, changes }`; on restore, that patch re-injects the shape via the same `makeShape` factory; undoing creation removes the element.
+
+**Interaction model.** A shape is placed two ways - click the palette then click the page, or drag the shape straight from the palette and release where you want it (HTML5 drag-and-drop). Because the whole shape is an absolute layer, *dragging anywhere on its body is a true move* (updates `left`/`top`), not a transform nudge - so interact.js's edge-resize is disabled for shapes and resize is driven from the selection **grips** instead. The grips were promoted from visual hints to real handles: interact's resize band sits *inside* the element edge, but users aim at the grips drawn *on* the edge and kept missing, so the overlay now drives resize directly off the grips (a fix that helps every resizable element, not just shapes).
+
+## Consequences
+
+- Reconcile gains an insert path (see `reconcile/SKILL.md` -> "The `create` op"): build a clean `<svg>` at the anchor, strip the throwaway `wt-shape-<rand>` id in favour of a clean class/id, map `fill`/`stroke`/`stroke-width`/`rx` + position/size into source CSS, and ask when placement or scope is ambiguous - the same judgment work as the rest of reconcile.
+- The `wt-shape-<rand>` id keeps a created shape out of fingerprint *class* capture (the `wt-` prefix is already stripped there) while still giving `restore()` a stable handle; reconcile replaces it with a real source hook.
+- The create patch is self-describing (`geometry` carries the inner-SVG structure), so reconcile never needs webtweak's shape table.
+- This is the first feature that makes webtweak able to add DOM, narrowing - but not closing - ADR-0001: the tool still never *rewrites* existing source; it only appends a self-contained, clearly-marked new element for Claude to reconcile.

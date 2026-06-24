@@ -124,6 +124,376 @@ def test_select_edit_nudge_resize_save_loop(served):
     assert "width" in card["changes"] and "height" in card["changes"]
 
 
+def _place_shape(page, kind, x, y):
+    """Open the palette, pick `kind`, and click the canvas at (x, y) to drop it."""
+    page.click("#wt-shape-btn")
+    page.click('.wt-shape-item[data-shape="' + kind + '"]')
+    page.mouse.click(x, y)                     # place mode: next canvas click drops it
+    page.wait_for_selector("svg.wt-shape")
+
+
+def test_create_shape_change_fill_save(served):
+    """Draw a shape from the palette, set its fill, save: a op:'create' patch lands
+    carrying the shape kind, geometry, anchor, and a self-contained changes snapshot."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+
+        _place_shape(page, "triangle", 400, 350)
+        # the dropped <svg> is selected, and the panel shows Shape / hides Type
+        assert page.eval_on_selector("#wt-seltag", "el => el.textContent").startswith("svg#wt-shape-")
+        vis = page.evaluate("""() => ({
+            shape: document.querySelector('.wt-group[data-group="Shape"]').hidden,
+            type: document.querySelector('.wt-group[data-group="Type"]').hidden,
+            box: document.querySelector('.wt-group[data-group="Box"]').hidden,
+        })""")
+        assert vis == {"shape": False, "type": True, "box": False}
+
+        # change the fill - it cascades from the <svg> wrapper to the child polygon
+        page.evaluate("""() => {
+            const f = document.getElementById('wt-fill');
+            f.value = '#3366cc';
+            f.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        assert page.eval_on_selector("svg.wt-shape polygon",
+                                     "el => getComputedStyle(el).fill") == "rgb(51, 102, 204)"
+
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')"
+        )
+        browser.close()
+
+    batch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]
+    create = next(p for p in batch["patches"] if p.get("op") == "create")
+    assert create["shape"] == "triangle"
+    assert create["renderer"] == "svg"
+    assert create["geometry"]["el"] == "polygon"          # self-describing inner SVG
+    assert create["anchor"]["position"] == "append"
+    assert create["fingerprint"]["id"].startswith("wt-shape-")  # throwaway id reconcile strips
+    ch = create["changes"]
+    assert ch["fill"] == "#3366cc"                        # the control edit
+    # self-contained even though only fill was touched: position + size were seeded
+    assert ch["position"] == "absolute"
+    assert ch["left"] == "400px" and ch["top"] == "350px"
+    assert "width" in ch and "height" in ch
+
+
+def test_created_shape_restored_after_reload(served):
+    """A created shape re-injects via restore() after a reload, with its edits intact."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+
+        _place_shape(page, "star", 500, 300)
+        page.evaluate("""() => {
+            const f = document.getElementById('wt-fill');
+            f.value = '#11aa55';
+            f.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')"
+        )
+
+        page.reload()
+        page.wait_for_selector("#wt-root")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
+        )
+        state = page.evaluate("""() => {
+            const svg = document.querySelector('svg.wt-shape');
+            return svg ? {
+                kind: svg.getAttribute('data-wt-shape'),
+                fill: getComputedStyle(svg.firstElementChild).fill,
+            } : null;
+        }""")
+        browser.close()
+
+    assert state == {"kind": "star", "fill": "rgb(17, 170, 85)"}  # shape + edit survived reload
+
+
+def test_shape_resizes_via_grip(served):
+    """A shape resizes by grabbing the visible grip handle directly (the grip sits at
+    the box edge; the overlay drives resize off it, not interact's inside-the-edge band
+    that users kept missing)."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+
+        _place_shape(page, "circle", 400, 350)   # circle: transparent corners, worst case
+        before = page.eval_on_selector("svg.wt-shape",
+            "el => ({ w: el.style.width, h: el.style.height })")
+        # grab the bottom-right grip at its real on-screen centre and drag outward
+        grip = page.eval_on_selector("#wt-selected .wt-grip-br", """el => {
+            const r = el.getBoundingClientRect();
+            return { cx: r.x + r.width / 2, cy: r.y + r.height / 2 };
+        }""")
+        page.mouse.move(grip["cx"], grip["cy"])
+        page.mouse.down()
+        page.mouse.move(grip["cx"] + 50, grip["cy"] + 35, steps=10)
+        page.mouse.up()
+        after = page.eval_on_selector("svg.wt-shape",
+            "el => ({ w: el.style.width, h: el.style.height })")
+        browser.close()
+
+    assert before == {"w": "80px", "h": "80px"}
+    assert int(after["w"][:-2]) > 80 and int(after["h"][:-2]) > 80  # grew via the grip
+
+
+def test_shape_drag_and_drop_from_palette(served):
+    """Dragging a palette shape onto the page drops it at the release point (in addition
+    to click-to-place)."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+
+        page.click("#wt-shape-btn")              # open the palette
+        # native HTML5 drag-and-drop: dragstart on the item, drop on the page at (560, 420)
+        placed = page.evaluate("""() => {
+            const item = document.querySelector('.wt-shape-item[data-shape="diamond"]');
+            const dt = new DataTransfer();
+            item.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+            const placing = document.documentElement.classList.contains('wt-placing');
+            const x = 560, y = 420, target = document.elementFromPoint(x, y);
+            target.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: dt, clientX: x, clientY: y }));
+            target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt, clientX: x, clientY: y }));
+            item.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+            const svg = document.querySelector('svg.wt-shape');
+            return {
+                placingDuringDrag: placing,
+                kind: svg && svg.getAttribute('data-wt-shape'),
+                left: svg && svg.style.left,
+                top: svg && svg.style.top,
+                selected: document.getElementById('wt-seltag').textContent.startsWith('svg#wt-shape-'),
+                placeModeCleared: document.getElementById('wt-place-hint').hidden,
+            };
+        }""")
+        browser.close()
+
+    assert placed["placingDuringDrag"] is True
+    assert placed["kind"] == "diamond"
+    assert placed["left"] == "560px" and placed["top"] == "420px"  # dropped at the release point
+    assert placed["selected"] is True
+    assert placed["placeModeCleared"] is True
+
+
+def test_shape_stroke_width_one_and_black_border_record(served):
+    """Regression: a shape has no authored baseline, so a 1px border width or a
+    #000000 stroke must be recorded - not mistaken for a 'revert' against the SVG UA
+    default the baseline peel resolves to, which would silently drop it from the patch."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        _place_shape(page, "square", 400, 350)
+        page.evaluate("""() => {
+            const sw = document.getElementById('wt-sw');
+            sw.value = '1'; sw.dispatchEvent(new Event('input', { bubbles: true }));
+            const st = document.getElementById('wt-stroke');
+            st.value = '#000000'; st.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')"
+        )
+        browser.close()
+    create = next(p for p in json.loads((tmp / "sample.webtweak.json").read_text())
+                  ["batches"][0]["patches"] if p.get("op") == "create")
+    assert create["changes"]["stroke-width"] == "1px"   # not swallowed as a revert
+    assert create["changes"]["stroke"] == "#000000"     # black border is recordable
+
+
+def test_shape_rx_radius_routes_to_child_and_patch(served):
+    """The Radius control writes rx onto the child <rect> (not the <svg>), the field
+    shows only for rect/square, and the value lands in the create patch."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        _place_shape(page, "square", 400, 350)
+        radius_shown = page.eval_on_selector("#wt-rx", "el => !el.closest('.wt-field').hidden")
+        page.evaluate("""() => {
+            const r = document.getElementById('wt-rx');
+            r.value = '14'; r.dispatchEvent(new Event('input', { bubbles: true }));
+        }""")
+        child_rx = page.eval_on_selector("svg.wt-shape rect", "el => getComputedStyle(el).rx")
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')"
+        )
+        browser.close()
+    assert radius_shown is True
+    assert child_rx == "14px"                            # applied to the child <rect>
+    create = next(p for p in json.loads((tmp / "sample.webtweak.json").read_text())
+                  ["batches"][0]["patches"] if p.get("op") == "create")
+    assert create["changes"]["rx"] == "14px"
+
+
+def test_shape_number_spinners_allow_zero(served):
+    """stroke-width and rx are 0-meaningful (no border / sharp corners), so their
+    spinners floor at 0 - while ordinary numbers (font-size) still floor at 1."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        mins = page.evaluate("""() => ({
+            sw: document.getElementById('wt-sw').getAttribute('min'),
+            rx: document.getElementById('wt-rx').getAttribute('min'),
+            fs: document.getElementById('wt-fs').getAttribute('min'),
+        })""")
+        browser.close()
+    assert mins == {"sw": "0", "rx": "0", "fs": "1"}
+
+
+def test_grip_resize_and_panel_edit_are_separate_undo_steps(served):
+    """A single-axis grip resize and a later panel edit of the same prop must be
+    distinct undo steps: one Cmd+Z reverts only the panel edit, leaving the resize."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        _place_shape(page, "square", 400, 350)
+        out = page.evaluate("""() => {
+            const svg = document.querySelector('svg.wt-shape');
+            const grip = document.querySelector('#wt-selected .wt-grip-r');  // width-only
+            const gr = grip.getBoundingClientRect();
+            const gx = gr.x + gr.width / 2, gy = gr.y + gr.height / 2;
+            grip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: gx, clientY: gy, pointerId: 1 }));
+            grip.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: gx + 40, clientY: gy, pointerId: 1 }));
+            grip.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: gx + 40, clientY: gy, pointerId: 1 }));
+            const afterGrip = svg.style.width;                       // ~120px
+            const w = document.getElementById('wt-w');
+            w.value = '150'; w.dispatchEvent(new Event('input', { bubbles: true }));
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+            return { afterGrip, afterUndo: svg.style.width };
+        }""")
+        browser.close()
+    assert out["afterGrip"] == "120px"
+    assert out["afterUndo"] == "120px"   # only the panel edit reverted; the grip resize stayed
+
+
+def test_shape_lands_at_cursor_under_transform_scale(served):
+    """Placement compensates for a transform:scale() ancestor (the containing block AND
+    scaled) so the shape lands at the click point, not overshot by the scale factor."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        page.evaluate("""() => {
+            document.body.style.transform = 'scale(0.5)';
+            document.body.style.transformOrigin = 'top left';
+        }""")
+        page.click("#wt-shape-btn")
+        page.click('.wt-shape-item[data-shape="circle"]')
+        page.mouse.click(500, 300)
+        page.wait_for_selector("svg.wt-shape")
+        landed = page.eval_on_selector("svg.wt-shape", """el => {
+            const r = el.getBoundingClientRect();
+            return Math.abs(r.left - 500) < 3 && Math.abs(r.top - 300) < 3;
+        }""")
+        browser.close()
+    assert landed   # divided the viewport error by the on-screen scale
+
+
+def test_undo_removes_a_created_shape(served):
+    """Cmd/Ctrl+Z right after placing a shape removes it and deselects (ADR-0002)."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        _place_shape(page, "triangle", 400, 350)
+        assert page.eval_on_selector_all("svg.wt-shape", "els => els.length") == 1
+        page.evaluate(
+            "() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))"
+        )
+        remaining = page.eval_on_selector_all("svg.wt-shape", "els => els.length")
+        panel_hidden = page.eval_on_selector("#wt-panel", "el => el.hidden")
+        browser.close()
+    assert remaining == 0           # the shape was removed
+    assert panel_hidden is True     # and the panel deselected
+
+
+def test_shape_margin_reverts_but_seeded_props_persist(served):
+    """A shape's seeded props (stroke-width/fill) have no baseline and always record,
+    but a NON-seeded margin added then cleared on a shape reverts normally - it must
+    not leave a stale no-op margin in the create patch."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        _place_shape(page, "square", 400, 350)
+        orig = page.eval_on_selector("#wt-margin", "el => el.value")
+        page.evaluate("""(orig) => {
+            const mg = document.getElementById('wt-margin');
+            mg.value = '20px'; mg.dispatchEvent(new Event('input', { bubbles: true }));
+            mg.value = orig; mg.dispatchEvent(new Event('input', { bubbles: true }));  // revert
+            const sw = document.getElementById('wt-sw');           // a seeded prop still records
+            sw.value = '1'; sw.dispatchEvent(new Event('input', { bubbles: true }));
+        }""", orig)
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')"
+        )
+        browser.close()
+    create = next(p for p in json.loads((tmp / "sample.webtweak.json").read_text())
+                  ["batches"][0]["patches"] if p.get("op") == "create")
+    assert "margin" not in create["changes"]             # reverted margin dropped, not stale
+    assert create["changes"]["stroke-width"] == "1px"    # seeded prop still recorded
+
+
+def test_shape_lands_at_cursor_on_positioned_body(served):
+    """Placement compensates for a positioned/offset <body> (the containing block for an
+    absolute child) so the shape lands at the click point, not shifted by the offset."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        page.evaluate("""() => {
+            document.body.style.position = 'relative';
+            document.body.style.margin = '40px';
+            document.body.style.border = '10px solid transparent';
+        }""")
+        page.click("#wt-shape-btn")
+        page.click('.wt-shape-item[data-shape="circle"]')
+        page.mouse.click(600, 300)
+        page.wait_for_selector("svg.wt-shape")
+        landed = page.eval_on_selector("svg.wt-shape", """el => {
+            const r = el.getBoundingClientRect();
+            return Math.abs(r.left - 600) < 2 && Math.abs(r.top - 300) < 2;
+        }""")
+        browser.close()
+    assert landed   # corrected for the 50px body offset, lands at the cursor
+
+
 def test_idless_sibling_fingerprint(served):
     """Select the 2nd .section-title (no id) and assert its fingerprint disambiguates."""
     tmp, port = served
