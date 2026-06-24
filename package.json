@@ -1,6 +1,6 @@
 {
   "name": "webtweak",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local visual editor for hand-coded HTML/CSS — captures edits as patches, Claude reconciles them into source",
   "bin": {
     "webtweak": "webtweak.js"
