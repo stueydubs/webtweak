@@ -326,7 +326,7 @@
 
   // ---- selection ------------------------------------------------------------
   function selectEl(el) {
-    if (!el || el === document.body || el === document.documentElement) return;
+    if (!el || el === document.body || el === document.documentElement) { deselect(); return; }
     if (selectedEl && window.interact) interact(selectedEl).unset();
     interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
     selectedEl = el;
