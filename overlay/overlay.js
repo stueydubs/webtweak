@@ -153,6 +153,7 @@
       if (el === selectedEl) { positionBox(selBox, el); populate(el); }
     });
     dirty = hasRealEdits();
+    editSeq++;
     refreshChanges();
     status("undone");
   }
@@ -650,6 +651,7 @@
       if (parent) parent.removeChild(el);
       edited.delete(el);
       dirty = hasRealEdits();
+      editSeq++;
       refreshChanges();
       status("shape removed - Cmd/Ctrl+Z to undo");
       return;
@@ -664,6 +666,7 @@
       else el.setAttribute("style", e.origStyle);
       edited.delete(el);
       dirty = hasRealEdits();  // don't leave a false 'unsaved changes' flag when nothing remains
+      editSeq++;
     }
     if (el === selectedEl) {
       entry(el); // re-arm a fresh baseline
@@ -797,6 +800,7 @@
     if (ent) delete ent.changes[c.prop];
     rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
     dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
+    editSeq++;
     refreshChanges();
     positionBox(selBox, selectedEl);
   }
@@ -1359,10 +1363,25 @@
     badge.title = title || "";
   }
 
-  function offerReload(text, title) {
+  // `unsafe` marks the offer whose consequence the user cannot see: reloading
+  // while our batch is still pending has restore() re-apply it on top of source
+  // Claude has already changed. Losing unsaved edits is a choice the badge
+  // states plainly; silently double-applying a patch is not, so that click
+  // re-checks and refuses if the batch is still pending.
+  function offerReload(text, title, unsafe) {
     offered = true;
     setBadge(text, "warn", title);
-    badge.onclick = function () { location.reload(); };
+    badge.onclick = unsafe ? confirmedReload : function () { location.reload(); };
+  }
+
+  function confirmedReload() {
+    fetchEdits().then(function (doc) {
+      if (doc && myPending(doc).length) {
+        status("still reconciling - your saved edits would be applied twice", false);
+        return;
+      }
+      location.reload();
+    });
   }
 
   function clearOffer() { offered = false; }
@@ -1428,9 +1447,10 @@
     fetchEdits().then(function (doc) {
       if (dirty || interacting) return;               // changed while we were asking
       if (doc && myPending(doc).length) {
-        offerReload("source changed - reload",
+        offerReload("reconciling...",
           "Your source changed while this session's edits are still pending. " +
-          "Waiting for Claude to mark them reconciled; click to reload anyway.");
+          "Waiting for Claude to mark them reconciled - reloading now would " +
+          "apply them twice.", true);
         return;
       }
       location.reload();   // refreshStatus runs again on the way back up

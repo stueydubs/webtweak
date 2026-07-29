@@ -144,17 +144,20 @@ function hostAllowed(req, port) {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
 }
 
+// Returns the exact bytes written, so a caller can recognise its own write.
 function writeJsonAtomic(filePath, doc) {
+  const body = JSON.stringify(doc, null, 2) + '\n';
   // Namespace the temp file by pid so two webtweak processes on the same page
   // cannot clobber each other's half-written file.
   const tmp = `${filePath}.${process.pid}.tmp`;
   try {
     const fd = fs.openSync(tmp, 'w');
     try {
-      fs.writeFileSync(fd, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+      fs.writeFileSync(fd, body, 'utf8');
       fs.fsyncSync(fd);            // durability parity with the reference implementation
     } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, filePath);
+    return body;
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (_) {}
     throw e;
@@ -211,7 +214,8 @@ function isSkippedDir(name) {
 // the gate, a symlink created at runtime would have us watching outside the root.
 function createWatcher(root, onChange, contains) {
   const watchers = new Map();
-  let timer = null, capped = false;
+  const timers = new Map();      // one debounce per event kind, not one shared
+  let capped = false;
 
   function fire(name) {
     // A nameless event (fs.watch permits one on some platforms) cannot be
@@ -220,14 +224,17 @@ function createWatcher(root, onChange, contains) {
     if (!name) return;
     const base = path.basename(name);
     if (isOwnArtefact(base) && !isEditsFile(base)) return;   // .tmp / .bak churn
-    clearTimeout(timer);
     // Editors write in bursts (temp file, rename, chmod); one reload is enough.
-    timer = setTimeout(() => onChange(isEditsFile(base) ? 'edits' : 'source', name), 120);
+    // Debounce per kind: a shared timer let an edits write cancel a pending
+    // source write, losing the reload that actually mattered.
+    const kind = isEditsFile(base) ? 'edits' : 'source';
+    clearTimeout(timers.get(kind));
+    timers.set(kind, setTimeout(() => { timers.delete(kind); onChange(kind, name); }, 120));
   }
 
   function forget(dir, w) {
     try { w.close(); } catch (_) {}
-    watchers.delete(dir);
+    if (watchers.get(dir) === w) watchers.delete(dir);
   }
 
   function mayWatch(child) {
@@ -274,7 +281,8 @@ function createWatcher(root, onChange, contains) {
     get count()  { return watchers.size; },
     get capped() { return capped; },
     close() {
-      clearTimeout(timer);
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
       for (const w of watchers.values()) { try { w.close(); } catch (_) {} }
       watchers.clear();
     },
@@ -449,15 +457,17 @@ function handleSave(body, targetName, editsPath, state, res) {
   if (!payload.target) payload = Object.assign({ target: targetName }, payload);
   const now = new Date().toISOString().slice(0, 19);
   doc = applyBatch(doc, payload, now);
-  try { writeJsonAtomic(editsPath, doc); }
+  let written;
+  try { written = writeJsonAtomic(editsPath, doc); }
   catch (e) {
     return send(res, 500, JSON.stringify({ ok: false, error: e.message }), 'application/json');
   }
 
-  // Remember what we wrote so the watcher can tell our own save from a
-  // reconcile. Content, not a timestamp: a time window is a race, and a save
-  // followed closely by a mark is exactly the sequence that matters.
-  if (state) { try { state.lastSelfWrite = fs.readFileSync(editsPath, 'utf8'); } catch (_) {} }
+  // Remember exactly what we wrote so the watcher can tell our own save from a
+  // reconcile. The bytes we produced, not a re-read: a timestamp window is a
+  // race, and re-reading lets an external writer landing in between be recorded
+  // as "self", muting the very event we need.
+  if (state) state.lastSelfWrite = written;
   const n = (payload.patches || []).length;
   log(`saved ${n} patch(es) -> ${path.basename(editsPath)}`);
   send(res, 200, JSON.stringify({ ok: true, file: path.basename(editsPath), patches: n }), 'application/json');

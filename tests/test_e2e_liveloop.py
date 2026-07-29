@@ -135,10 +135,18 @@ def test_reconcile_order_does_not_double_apply(served):
         src = tmp / "sample.html"
         src.write_text(src.read_text().replace("</body>", "<!-- reconciled --></body>"))
         page.wait_for_function(
-            "document.getElementById('wt-badge').textContent.includes('reload')",
+            "document.getElementById('wt-badge').textContent.includes('reconciling')",
             timeout=8000)
         assert page.evaluate("window.__reload_probe") is True, \
             "reloaded mid-reconcile; restore() would re-apply the pending batch"
+
+        # Clicking the badge in this state must refuse too - the user cannot see
+        # that reloading here would apply their saved edits a second time.
+        page.click("#wt-badge")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.includes('twice')",
+            timeout=5000)
+        assert page.evaluate("window.__reload_probe") is True
 
         # Step 8: Claude marks it. Now the reload is safe and should happen.
         edits = tmp / "sample.webtweak.json"
