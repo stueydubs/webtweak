@@ -35,7 +35,6 @@
   var edited = new Map();
   var selectedEl = null;
   var dirty = false;       // unsaved changes since the last successful save
-  var editSeq = 0;         // bumped on every recorded change; see save()
   var persisted = false;   // this session has a saved/restored batch on disk to clear
   var missed = [];         // restored patches we couldn't re-locate - preserved across saves
   var interacting = false; // a drag/resize gesture is in progress
@@ -48,6 +47,7 @@
   function endGesture() {
     interacting = false;
     gestureEndedAt = Date.now();
+    refreshChanges();   // refreshes skipped during the gesture land here
   }
   function clickEndsGesture() {
     // Time-boxed rather than a sticky flag: if a gesture ever ends without a
@@ -69,7 +69,6 @@
   function record(el, prop, value) {
     entry(el).changes[prop] = value;
     dirty = true;
-    editSeq++;
     refreshChanges();
   }
   // True iff any edited element still holds real changes - the single source of
@@ -153,7 +152,6 @@
       if (el === selectedEl) { positionBox(selBox, el); populate(el); }
     });
     dirty = hasRealEdits();
-    editSeq++;
     refreshChanges();
     status("undone");
   }
@@ -315,7 +313,6 @@
         rebuildInline(svg, e);
       }
       dirty = true;                          // a fresh shape is an unsaved edit; a restored one is not
-      editSeq++;
       undoStack.push([{ el: svg, create: true }]);  // Cmd+Z removes the shape
     }
     return svg;
@@ -452,8 +449,7 @@
       parts.push("  </div>");
     });
     parts.push('  <button class="wt-btn wt-block" id="wt-reset">Reset this element</button>');
-    // Previously read "Claude reconciles them into clean CSS on save", which
-    // reads as though saving invokes Claude. It doesn't - Save writes a file.
+    // Save writes a file; reconcile is a separate step the user asks for.
     parts.push('  <p class="wt-note">Changes preview live and are captured as intent. On Save, webtweak writes them to the edits file - then ask Claude to reconcile.</p>');
     parts.push("</div>");
     return parts.join("\n");
@@ -628,7 +624,6 @@
   }
 
   function deselect() {
-    var had = selectedEl;
     if (pendingShape) exitPlaceMode();  // a Deselect/Esc during place mode also cancels placement
     if (selectedEl && window.interact) interact(selectedEl).unset();
     interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
@@ -636,7 +631,7 @@
     selBox.hidden = true;
     panel.hidden = true;
     crumbEl.textContent = "click an element to select";
-    if (had) refreshChanges();   // drop the list's stale current-selection highlight
+    refreshChanges();            // drop the list's stale current-selection highlight
   }
 
   function resetEl(el) {
@@ -651,7 +646,6 @@
       if (parent) parent.removeChild(el);
       edited.delete(el);
       dirty = hasRealEdits();
-      editSeq++;
       refreshChanges();
       status("shape removed - Cmd/Ctrl+Z to undo");
       return;
@@ -666,7 +660,6 @@
       else el.setAttribute("style", e.origStyle);
       edited.delete(el);
       dirty = hasRealEdits();  // don't leave a false 'unsaved changes' flag when nothing remains
-      editSeq++;
     }
     if (el === selectedEl) {
       entry(el); // re-arm a fresh baseline
@@ -800,7 +793,6 @@
     if (ent) delete ent.changes[c.prop];
     rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
     dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
-    editSeq++;
     refreshChanges();
     positionBox(selBox, selectedEl);
   }
@@ -969,8 +961,7 @@
               el.style.removeProperty("transform");
               delete e.changes.nudge;
               dirty = hasRealEdits();             // clear the stale unsaved flag if this was the only edit
-              editSeq++;
-              refreshChanges();                   // this branch skips record(), so refresh here
+              refreshChanges();                   // this branch skips record()
             } else {
               el.style.transform = "translate(" + sx + "px, " + sy + "px)";
               record(el, "nudge", { dx: sx, dy: sy });
@@ -1166,10 +1157,11 @@
     // through so the empty save clears that stale batch on disk.
     if (!patches.length && !persisted) { status("nothing changed yet"); return; }
     status("saving...");
-    // Anything recorded between here and the response is NOT in this payload,
-    // so clearing `dirty` unconditionally would mark unsaved work as saved -
-    // and the live-reload guard would then happily reload over it.
-    var seq = editSeq;
+    // Cleared BEFORE the request, not in the response handler: anything the user
+    // records while it is in flight is not in this payload, and its own
+    // record() sets `dirty` back to true. Clearing afterwards would mark that
+    // work as saved, and the live-reload guard would then reload over it.
+    dirty = false;
     fetch(RESERVED + "save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1178,8 +1170,7 @@
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j.ok) {
-          dirty = editSeq !== seq;   // true if the user edited while we were saving
-          clearOffer();              // a save resolves the "source changed" warning
+          offered = false;           // a save resolves the "source changed" warning
           persisted = patches.length > 0;  // empty save just cleared the batch
           status(patches.length
             // Name the artefact: it teaches the hand-off for free, and it is the
@@ -1188,23 +1179,23 @@
               (j.file ? " -> " + j.file : "")
             : "reverted - cleared saved edits", true);
           refreshStatus();
-          refreshChanges();
         } else {
+          dirty = hasRealEdits();    // the save did not land; it is still unsaved
           status("save failed: " + (j.error || "unknown"), false);
         }
       })
-      .catch(function () { status("save failed", false); });
+      .catch(function () {
+        dirty = hasRealEdits();
+        status("save failed", false);
+      });
   }
   document.getElementById("wt-save").addEventListener("click", save);
 
   // ---- restore this session's pending edits after a reload ------------------
   function restore() {
-    fetch(RESERVED + "edits")
-      .then(function (r) { return r.json(); })
+    fetchEdits()
       .then(function (doc) {
-        var batch = (doc.batches || []).filter(function (b) {
-          return b.status === "pending" && b.sessionId === SESSION;
-        })[0];
+        var batch = myPending(doc)[0];
         if (!batch) return;
         persisted = true;  // a saved batch exists on disk; a full revert must clear it
         missed = [];
@@ -1274,23 +1265,12 @@
     }).join(", ");
   }
 
-  // record() fires per pointermove, so during a drag a naive rebuild churned the
-  // whole list DOM dozens of times per second. Coalesce to one rebuild per frame
-  // for gestures only - panel edits stay synchronous, which keeps the list's
-  // observable behaviour simple everywhere except the one hot path.
-  var changesFrame = 0;
+  // record() fires per pointermove, so rebuilding on every one churned the whole
+  // list DOM dozens of times per drag. Skip while a gesture is running;
+  // endGesture() refreshes once on pointer-up. Nobody reads the list mid-drag.
   function refreshChanges() {
     if (!changesBox) return;          // called before the overlay finished mounting
-    if (!interacting) return rebuildChanges();
-    if (changesFrame) return;
-    changesFrame = requestAnimationFrame(function () {
-      changesFrame = 0;
-      rebuildChanges();
-    });
-  }
-
-  function rebuildChanges() {
-    if (!changesBox) return;
+    if (interacting) return;
     var rows = [];
     edited.forEach(function (e, el) {
       if (Object.keys(e.changes).length) rows.push({ el: el, e: e });
@@ -1363,29 +1343,6 @@
     badge.title = title || "";
   }
 
-  // `unsafe` marks the offer whose consequence the user cannot see: reloading
-  // while our batch is still pending has restore() re-apply it on top of source
-  // Claude has already changed. Losing unsaved edits is a choice the badge
-  // states plainly; silently double-applying a patch is not, so that click
-  // re-checks and refuses if the batch is still pending.
-  function offerReload(text, title, unsafe) {
-    offered = true;
-    setBadge(text, "warn", title);
-    badge.onclick = unsafe ? confirmedReload : function () { location.reload(); };
-  }
-
-  function confirmedReload() {
-    fetchEdits().then(function (doc) {
-      if (doc && myPending(doc).length) {
-        status("still reconciling - your saved edits would be applied twice", false);
-        return;
-      }
-      location.reload();
-    });
-  }
-
-  function clearOffer() { offered = false; }
-
   function fetchEdits() {
     return fetch(RESERVED + "edits", { cache: "no-store" })
       .then(function (r) { return r.json(); })
@@ -1398,63 +1355,77 @@
     });
   }
 
-  // Reflect the edits file's own view of the world: our session's batch is
-  // pending until Claude flips it to reconciled.
-  function refreshStatus() {
-    return fetchEdits().then(function (doc) {
-      if (!doc) return;
-      // An outstanding reload offer is the more important message; leave it up.
-      if (offered) return;
-      var batches = (doc.batches || []);
-      var mine = batches.filter(function (b) { return b && b.sessionId === SESSION; });
-      // Count only OUR pending changes: a second tab's batch is not this
-      // session's work and must not be reported as though it were.
-      var pending = myPending(doc);
-      var allReconciled = mine.length && mine.every(function (b) { return b.status === "reconciled"; });
+  // --- "is it safe to reload right now?" -------------------------------------
+  // One question, two halves, asked in exactly one place. Re-deriving it per
+  // call site is how one path ends up checking only half of it.
 
-      if (allReconciled && !hasRealEdits()) {
-        setBadge("reconciled", "ok", "Claude has folded this session's changes into your source");
-      } else if (pending.length) {
-        var n = pending.reduce(function (t, b) { return t + ((b.patches || []).length); }, 0);
-        setBadge(n + " pending", "pending",
-          n + " change(s) waiting for Claude to reconcile into source");
-      } else {
-        setBadge("");
-      }
+  // Unsaved work would be lost. Note this is `dirty`, not hasRealEdits(): after
+  // a Save the batch is on disk and restore() brings it back, and reloading
+  // after a save is the whole point - that is when Claude reconciles.
+  // `interacting` matters too, because `dirty` genuinely flickers false mid-drag
+  // when a nudge passes back through its origin.
+  function localSafe() { return !dirty && !interacting; }
+
+  // Reconcile writes source FIRST and marks the batch second (SKILL.md steps 7
+  // then 8). Reloading in that window has restore() re-apply a still-pending
+  // batch on top of source Claude already rewrote - doubling a nudge, and
+  // re-emitting the same patches on the next Save.
+  function diskSafe(doc) { return !myPending(doc).length; }
+
+  // The only path to location.reload(). `onBlocked(reason)` decides what the
+  // user sees when it refuses.
+  function tryReload(onBlocked) {
+    if (!localSafe()) return onBlocked("unsaved");
+    return fetchEdits().then(function (doc) {
+      if (!localSafe()) return onBlocked("unsaved");   // changed while we asked
+      if (!diskSafe(doc)) return onBlocked("pending");
+      location.reload();
     });
   }
 
-  function onSourceChange() {
-    // Guard on `dirty` (unsaved), not on having edits at all: after a Save the
-    // pending batch is on disk and restore() re-applies it, so reloading is
-    // safe - and reloading after a save is the whole point, since that is when
-    // Claude reconciles. Blocking on "has any edits" would never reload.
-    // `interacting` matters too: `dirty` genuinely flickers false mid-drag when
-    // a nudge passes back through its origin, and reloading with the mouse
-    // still down would be baffling.
-    if (dirty || interacting) {
-      if (!offered) {
-        offerReload("source changed - reload",
-          "Your source changed on disk. You have unsaved edits; click to reload and lose them.");
-      }
-      return;
+  function offerReload(reason) {
+    offered = true;
+    if (reason === "pending") {
+      setBadge("reconciling...", "warn",
+        "Your source changed while this session's edits are still pending. " +
+        "Waiting for Claude to mark them reconciled - reloading now would apply them twice.");
+    } else {
+      setBadge("source changed - reload", "warn",
+        "Your source changed on disk. You have unsaved edits; click to reload and lose them.");
     }
-    // Reconcile writes source FIRST and marks the batch second (SKILL.md steps
-    // 7 then 8). Reloading in that window would have restore() re-apply a batch
-    // that is still pending, on top of source Claude has already changed -
-    // doubling a nudge, and re-emitting the same patches on the next Save. So
-    // wait for the batch to actually be marked; edits-change brings us back.
-    fetchEdits().then(function (doc) {
-      if (dirty || interacting) return;               // changed while we were asking
-      if (doc && myPending(doc).length) {
-        offerReload("reconciling...",
-          "Your source changed while this session's edits are still pending. " +
-          "Waiting for Claude to mark them reconciled - reloading now would " +
-          "apply them twice.", true);
-        return;
-      }
-      location.reload();   // refreshStatus runs again on the way back up
-    });
+    // The click re-asks rather than reloading blind: the user may have started
+    // editing since the offer went up, or the batch may still be pending.
+    badge.onclick = function () {
+      tryReload(function (why) {
+        status(why === "pending"
+          ? "still reconciling - your saved edits would be applied twice"
+          : "unsaved edits - save or reset first", false);
+      });
+    };
+  }
+
+  // Reflect the edits file's own view of the world: our session's batch is
+  // pending until Claude flips it to reconciled. Takes an already-fetched doc
+  // when the caller has one, so an event does not read the same file twice.
+  function refreshStatus(doc) {
+    if (doc === undefined) return fetchEdits().then(refreshStatus);
+    if (!doc || offered) return;   // an outstanding offer is the louder message
+    var pending = myPending(doc);
+    if (pending.length) {
+      var n = pending.reduce(function (t, b) { return t + ((b.patches || []).length); }, 0);
+      return setBadge(n + " pending", "pending",
+        n + " change(s) waiting for Claude to reconcile into source");
+    }
+    var mine = (doc.batches || []).filter(function (b) { return b && b.sessionId === SESSION; });
+    if (mine.length && !hasRealEdits()) {
+      return setBadge("reconciled", "ok",
+        "Claude has folded this session's changes into your source");
+    }
+    setBadge("");
+  }
+
+  function onSourceChange() {
+    tryReload(function (reason) { if (!offered) offerReload(reason); });
   }
 
   // The edits file is watched separately from source, because `mark` touches
@@ -1462,15 +1433,12 @@
   function onEditsChange() {
     fetchEdits().then(function (doc) {
       if (!doc) return;
-      var stillPending = myPending(doc).length;
-      if (!stillPending && !dirty && !interacting) {
-        // Our batch is reconciled and the source is final: restore() will not
-        // re-apply anything, so this reload is safe and shows the real result.
-        clearOffer();
-        location.reload();
+      if (localSafe() && diskSafe(doc)) {
+        offered = false;
+        location.reload();       // batch marked and source final: safe, and the real result
         return;
       }
-      if (!offered) refreshStatus();
+      refreshStatus(doc);
     });
   }
 
@@ -1489,6 +1457,9 @@
           "Lost the connection to webtweak; source changes will not reload the page.");
       }
     };
+    // ...and take the notice back down once it reconnects, or the page keeps
+    // claiming to be offline after the server returns.
+    es.onopen = function () { if (!offered) refreshStatus(); };
     // Release the socket promptly: an open SSE stream occupies one of the
     // browser's six per-origin connections.
     window.addEventListener("pagehide", function () { if (es) es.close(); });

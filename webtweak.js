@@ -20,6 +20,7 @@ const OVERLAY_DIR = path.join(TOOL_DIR, 'overlay');
 const RESERVED   = '/__webtweak__/';
 const MAX_BODY   = 8 * 1024 * 1024; // 8 MB cap on a save payload
 const MAX_BAKS   = 3;               // keep only the newest N corrupt-file backups
+const EDITS_SUFFIX = '.webtweak.json';   // the one place this convention lives
 const VERSION    = readVersion();
 
 function readVersion() {
@@ -184,19 +185,15 @@ function pruneBackups(editsPath) {
 
 const MAX_WATCHED_DIRS = 2000;   // inotify has a per-user ceiling; degrade before hitting it
 
-// webtweak's own writes must never trigger a reload, or every Save would bounce
-// the page the user is still editing. This one regex covers all of them - the
+// Classify a changed file. `null` means "webtweak's own churn - ignore": the
 // atomic temp (`x.webtweak.json.<pid>.tmp`) and the corrupt-file backup
-// (`x.webtweak.json.<iso>.bak`) both keep the `.webtweak.json.` infix. Matching
-// bare `.tmp`/`.bak` as well would hide the *user's* files of those names.
-function isOwnArtefact(name) {
-  return /\.webtweak\.json(\.|$)/.test(name);
-}
-
-// The edits file itself, so a reconcile marking a batch can be told apart from
-// webtweak writing its own save.
-function isEditsFile(name) {
-  return /\.webtweak\.json$/.test(name);
+// (`x.webtweak.json.<iso>.bak`) both keep the EDITS_SUFFIX infix, so one test
+// covers both. Note it deliberately does NOT match bare `.tmp`/`.bak`, which
+// would hide the *user's* files of those names.
+function classify(fullPath, editsPath) {
+  if (fullPath === editsPath) return 'edits';
+  if (path.basename(fullPath).indexOf(EDITS_SUFFIX) !== -1) return null;
+  return 'source';
 }
 
 function isSkippedDir(name) {
@@ -212,24 +209,27 @@ function isSkippedDir(name) {
 // uses Dirent.isDirectory() (does not follow symlinks) but an fs.watch event only
 // gives a name, so the child has to be stat'd - and a stat follows links. Without
 // the gate, a symlink created at runtime would have us watching outside the root.
-function createWatcher(root, onChange, contains) {
+function createWatcher(root, opts) {
+  const { onChange, contains, classify } = opts;
   const watchers = new Map();
   const timers = new Map();      // one debounce per event kind, not one shared
   let capped = false;
 
-  function fire(name) {
+  function fire(dir, name) {
     // A nameless event (fs.watch permits one on some platforms) cannot be
     // classified, so treating it as source would let our own Save bounce the
     // page - the exact failure this design exists to prevent. Ignore it.
     if (!name) return;
-    const base = path.basename(name);
-    if (isOwnArtefact(base) && !isEditsFile(base)) return;   // .tmp / .bak churn
+    // Classify on the FULL path, not the basename: under --root the tree can
+    // hold several pages, and a sibling's edits file is not this page's.
+    const full = path.join(dir, name);
+    const kind = classify(full);
+    if (!kind) return;
     // Editors write in bursts (temp file, rename, chmod); one reload is enough.
     // Debounce per kind: a shared timer let an edits write cancel a pending
     // source write, losing the reload that actually mattered.
-    const kind = isEditsFile(base) ? 'edits' : 'source';
     clearTimeout(timers.get(kind));
-    timers.set(kind, setTimeout(() => { timers.delete(kind); onChange(kind, name); }, 120));
+    timers.set(kind, setTimeout(() => { timers.delete(kind); onChange(kind, full); }, 120));
   }
 
   function forget(dir, w) {
@@ -254,8 +254,8 @@ function createWatcher(root, onChange, contains) {
         // keeps watchers.has() true, so a recreated directory of the same name
         // is never re-watched and live reload silently dies for that subtree -
         // and repeated churn leaks handles until MAX_WATCHED_DIRS is exhausted.
-        if (!fs.existsSync(dir)) { forget(dir, w); return fire(name); }
-        fire(name);
+        if (!fs.existsSync(dir)) { forget(dir, w); return fire(dir, name); }
+        fire(dir, name);
         if (!name || isSkippedDir(path.basename(name))) return;
         const child = path.join(dir, name);
         try {
@@ -303,14 +303,17 @@ function serveEvents(req, res, clients) {
   req.on('close', () => clients.delete(res));
 }
 
-function broadcast(clients, event, data) {
-  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+function writeAll(clients, payload) {
   for (const res of clients) {
     // write() on a dead response returns false rather than throwing, so a
     // try/catch alone would never prune. Check the state instead.
     if (res.writableEnded || res.destroyed) { clients.delete(res); continue; }
     try { res.write(payload); } catch (_) { clients.delete(res); }
   }
+}
+
+function broadcast(clients, event, data) {
+  writeAll(clients, `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 // --- HTTP helpers ----------------------------------------------------------
@@ -418,7 +421,7 @@ function serveStatic(filePath, size, method, range, res) {
 
 function editsPathFor(targetPath) {
   const stem = path.basename(targetPath, path.extname(targetPath));
-  return path.join(path.dirname(targetPath), stem + '.webtweak.json');
+  return path.join(path.dirname(targetPath), stem + EDITS_SUFFIX);
 }
 
 function handleSave(body, targetName, editsPath, state, res) {
@@ -467,7 +470,7 @@ function handleSave(body, targetName, editsPath, state, res) {
   // reconcile. The bytes we produced, not a re-read: a timestamp window is a
   // race, and re-reading lets an external writer landing in between be recorded
   // as "self", muting the very event we need.
-  if (state) state.lastSelfWrite = written;
+  state.lastSelfWrite = written;
   const n = (payload.patches || []).length;
   log(`saved ${n} patch(es) -> ${path.basename(editsPath)}`);
   send(res, 200, JSON.stringify({ ok: true, file: path.basename(editsPath), patches: n }), 'application/json');
@@ -609,6 +612,7 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     port:       port,
     realRoot:   fs.realpathSync(serveRoot),
     realTarget: fs.realpathSync(targetPath),
+    editsPath:  editsPathFor(targetPath),
     clients:    new Set(),          // open SSE streams
     lastSelfWrite: null,            // exact bytes we last wrote to the edits file
   };
@@ -621,19 +625,23 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
   // file is reported separately: reconcile writes source first and marks the
   // batch second, so the page needs to distinguish "source moved" from "my
   // batch was reconciled" to avoid re-applying a batch that is still pending.
-  const watcher = createWatcher(serveRoot, (kind, changed) => {
-    if (kind === 'edits') {
-      // Ignore the echo of our own save; only an outside writer is interesting.
-      let now = null;
-      try { now = fs.readFileSync(editsPathFor(targetPath), 'utf8'); } catch (_) {}
-      if (now !== null && now === state.lastSelfWrite) return;
-      return broadcast(state.clients, 'edits-change', { file: changed });
-    }
-    broadcast(state.clients, 'source-change', { file: changed });
-  }, real => contained(real, state.realRoot));
-  const ping = setInterval(() => {
-    for (const res of state.clients) { try { res.write(': ping\n\n'); } catch (_) {} }
-  }, 25_000);
+  const watcher = createWatcher(serveRoot, {
+    contains: real => contained(real, state.realRoot),
+    classify: full => classify(full, state.editsPath),
+    onChange: (kind, changed) => {
+      if (kind === 'edits') {
+        // Ignore the echo of our own save; only an outside writer is interesting.
+        let now = null;
+        try { now = fs.readFileSync(state.editsPath, 'utf8'); } catch (_) {}
+        if (now !== null && now === state.lastSelfWrite) return;
+        return broadcast(state.clients, 'edits-change', { file: path.basename(changed) });
+      }
+      broadcast(state.clients, 'source-change', { file: path.basename(changed) });
+    },
+  });
+  // An SSE comment line is the conventional keep-alive; writeAll gives it the
+  // same dead-client pruning broadcast has, which the old inline loop lacked.
+  const ping = setInterval(() => writeAll(state.clients, ': ping\n\n'), 25_000);
   ping.unref();                     // a heartbeat must not hold the process open
 
   server.listen(port, '127.0.0.1', () => {

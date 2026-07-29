@@ -175,6 +175,49 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 }
 .wt-panel[hidden] { display: none; }
 
+.wt-panel h3 {
+  margin: 2px 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffd479;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.wt-group { margin-bottom: 14px; }
+.wt-group > .wt-legend {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #717784;
+  margin-bottom: 6px;
+}
+.wt-field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
+.wt-field label { color: #aab0bb; flex: 0 0 78px; }
+.wt-field input[type="text"],
+.wt-field input[type="number"],
+.wt-field select {
+  flex: 1;
+  min-width: 0;
+  background: #0f1115;
+  border: 1px solid #2c303a;
+  color: #e8eaed;
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.wt-field input[type="color"] {
+  width: 34px; height: 24px; padding: 0;
+  background: none; border: 1px solid #2c303a; border-radius: 5px; cursor: pointer;
+}
+.wt-align { display: flex; gap: 4px; }
+.wt-align button {
+  flex: 1; background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
+  border-radius: 5px; padding: 4px 0; cursor: pointer; font-size: 12px;
+}
+.wt-align button.on { background: #ffd479; color: #1a1300; border-color: #ffd479; }
+.wt-block { width: 100%; margin-top: 4px; }
+.wt-note { color: #717784; font-size: 11px; line-height: 1.5; margin-top: 8px; }
 /* Bottom-left dock: the change list stacked above the hint.
    Deliberately NOT the right column - the properties panel lives there
    (top:56px, max-height:calc(100vh - 72px)) and a right-hand list overlapped it
@@ -246,49 +289,7 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-change.on   { border-color: #ffd479; background: #23262e; }
 .wt-change-el    { color: #e8eaed; }
 .wt-change-props { color: #8f96a3; font-size: 11px; }
-.wt-panel h3 {
-  margin: 2px 0 10px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #ffd479;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.wt-group { margin-bottom: 14px; }
-.wt-group > .wt-legend {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #717784;
-  margin-bottom: 6px;
-}
-.wt-field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
-.wt-field label { color: #aab0bb; flex: 0 0 78px; }
-.wt-field input[type="text"],
-.wt-field input[type="number"],
-.wt-field select {
-  flex: 1;
-  min-width: 0;
-  background: #0f1115;
-  border: 1px solid #2c303a;
-  color: #e8eaed;
-  border-radius: 5px;
-  padding: 4px 6px;
-  font-size: 12px;
-  font-family: ui-monospace, Menlo, monospace;
-}
-.wt-field input[type="color"] {
-  width: 34px; height: 24px; padding: 0;
-  background: none; border: 1px solid #2c303a; border-radius: 5px; cursor: pointer;
-}
-.wt-align { display: flex; gap: 4px; }
-.wt-align button {
-  flex: 1; background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
-  border-radius: 5px; padding: 4px 0; cursor: pointer; font-size: 12px;
-}
-.wt-align button.on { background: #ffd479; color: #1a1300; border-color: #ffd479; }
-.wt-block { width: 100%; margin-top: 4px; }
-.wt-note { color: #717784; font-size: 11px; line-height: 1.5; margin-top: 8px; }
+
 .wt-hint {
   background: #15171c; color: #aab0bb;
   border: 1px solid #2c303a; border-radius: 8px;

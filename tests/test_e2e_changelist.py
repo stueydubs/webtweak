@@ -10,39 +10,9 @@ import shutil
 
 import pytest
 
-from _server import make_page, start, stop
+from conftest import edit, open_page
 
-pytest.importorskip(
-    "playwright.sync_api",
-    reason="install Playwright to run the browser e2e: "
-           "pip install playwright && playwright install chromium",
-)
-from playwright.sync_api import sync_playwright  # noqa: E402
-
-pytestmark = pytest.mark.browser  # selected by marker in CI, never by filename
-
-
-@pytest.fixture
-def served():
-    tmp, page = make_page()
-    proc, port = start(page)
-    yield tmp, port
-    stop(proc)
-    shutil.rmtree(tmp, ignore_errors=True)
-
-
-def _open(p, port):
-    browser = p.chromium.launch()
-    page = browser.new_page(viewport={"width": 1280, "height": 900})
-    page.goto(f"http://127.0.0.1:{port}/sample.html")
-    page.wait_for_selector("#wt-root")
-    return browser, page
-
-
-def _edit(page, selector, field, value):
-    page.click(selector)
-    page.fill(field, value)
-    page.dispatch_event(field, "input")
+from _browser import sync_playwright, pytestmark  # noqa: F401
 
 
 def head(page):
@@ -56,7 +26,7 @@ def hidden(page):
 def test_hidden_until_something_changes(served):
     _, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
+        browser, page = open_page(p, port)
         assert hidden(page) is True
         page.click("#headline")                 # selecting alone is not a change
         assert hidden(page) is True
@@ -67,8 +37,8 @@ def test_counts_edited_elements_not_edits(served):
     """Two properties on one element is still one element changed."""
     _, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        _edit(page, "#headline", "#wt-fs", "52")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         assert hidden(page) is False
         assert "1 element changed" in head(page)
 
@@ -76,7 +46,7 @@ def test_counts_edited_elements_not_edits(served):
         page.dispatch_event("#wt-ls", "input")
         assert "1 element changed" in head(page)
 
-        _edit(page, ".lede", "#wt-fs", "19")    # a second element
+        edit(page, ".lede", "#wt-fs", "19")    # a second element
         assert "2 elements changed" in head(page)
         browser.close()
 
@@ -84,8 +54,8 @@ def test_counts_edited_elements_not_edits(served):
 def test_expanding_lists_each_element_and_its_props(served):
     _, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        _edit(page, "#headline", "#wt-fs", "52")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         page.click("#wt-changes-head")
         page.wait_for_selector("#wt-changes-list:not([hidden])")
         rows = page.eval_on_selector_all(".wt-change", "els => els.map(e => e.textContent)")
@@ -98,9 +68,9 @@ def test_expanding_lists_each_element_and_its_props(served):
 def test_clicking_an_entry_selects_that_element(served):
     _, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        _edit(page, "#headline", "#wt-fs", "52")
-        _edit(page, ".lede", "#wt-fs", "19")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
+        edit(page, ".lede", "#wt-fs", "19")
         page.click("#wt-changes-head")
         page.wait_for_selector("#wt-changes-list:not([hidden])")
         assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "p.lede"
@@ -115,9 +85,9 @@ def test_undo_and_reset_shrink_the_list(served):
     moment it is meant to build confidence - just before Save."""
     _, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        _edit(page, "#headline", "#wt-fs", "52")
-        _edit(page, ".lede", "#wt-fs", "19")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
+        edit(page, ".lede", "#wt-fs", "19")
         assert "2 elements changed" in head(page)
 
         page.keyboard.press("Control+z")        # undo the lede edit
@@ -134,8 +104,8 @@ def test_survives_a_reload_via_restore(served):
     them or it under-reports the session."""
     _, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        _edit(page, "#headline", "#wt-fs", "52")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')")

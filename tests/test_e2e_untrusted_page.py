@@ -15,15 +15,9 @@ from pathlib import Path
 import pytest
 
 from _server import start, stop
+from conftest import open_page
 
-pytest.importorskip(
-    "playwright.sync_api",
-    reason="install Playwright to run the browser e2e: "
-           "pip install playwright && playwright install chromium",
-)
-from playwright.sync_api import sync_playwright  # noqa: E402
-
-pytestmark = pytest.mark.browser  # selected by marker in CI, never by filename
+from _browser import sync_playwright, pytestmark  # noqa: F401
 
 # padding-top keeps the heading clear of the overlay's own top bar.
 HOSTILE = (
@@ -49,10 +43,7 @@ def test_element_id_cannot_execute_via_the_breadcrumb(hostile):
     """setCrumb used to build the breadcrumb with innerHTML, so selecting an
     element executed markup held in its id."""
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{hostile}/evil.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, hostile, "evil.html")
         page.click("h1")
         page.wait_for_timeout(300)
         assert page.evaluate("window.__PWNED") is None
@@ -64,10 +55,7 @@ def test_element_id_cannot_execute_via_the_breadcrumb(hostile):
 
 def test_element_class_cannot_execute_via_the_change_list(hostile):
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{hostile}/evil.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, hostile, "evil.html")
         page.click("p")
         page.fill("#wt-fs", "19")
         page.dispatch_event("#wt-fs", "input")
@@ -82,10 +70,7 @@ def test_element_class_cannot_execute_via_the_change_list(hostile):
 def test_hostile_names_survive_a_full_save(hostile):
     """The overlay must still function on such a page, not just refuse to run."""
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{hostile}/evil.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, hostile, "evil.html")
         page.click("h1")
         page.fill("#wt-fs", "52")
         page.dispatch_event("#wt-fs", "input")

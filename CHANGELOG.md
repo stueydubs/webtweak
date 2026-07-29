@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `reconciled` once Claude has folded the batch into source.
   - A live reload **never runs over unsaved edits**. With unsaved work the badge
     offers the reload instead of taking it.
-  - webtweak's own writes (`*.webtweak.json`, `.tmp`, `.bak`) are excluded from
-    the watch, so saving cannot bounce the page you are still editing.
+  - webtweak's own temp and backup files are excluded from the watch, so saving
+    cannot bounce the page you are still editing. The edits file itself *is*
+    watched, as its own event - reconcile marks a batch by touching only that
+    file, so without it the badge could never reach `reconciled`.
 - **`--root DIR`** serves an explicit web root instead of the page's own folder,
   so a page in a subfolder can resolve root-absolute assets (`/css/site.css`).
   Previously unsupported, which ruled out most real sites. The edits file still

@@ -62,7 +62,7 @@ In the browser:
 - **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
 - **Cmd/Ctrl+Z** undoes your last change, of any kind.
 - **Reset this element** discards all your edits to the selected element (also undoable).
-- **Review before you save.** A "N elements changed" list sits bottom-right; open it to see every element you've touched and what changed on it, and click an entry to jump back to that element.
+- **Review before you save.** A "N elements changed" list sits bottom-left; open it to see every element you've touched and what changed on it, and click an entry to jump back to that element.
 - **Save** when you're happy. **Cmd/Ctrl+S** saves, **Esc** deselects.
 
 A reload mid-session is safe: webtweak restores the current session's pending edits, and warns you if you have unsaved changes.
@@ -123,15 +123,17 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 ## Development
 
 ```bash
-python3 -m pytest tests/ --ignore=tests/test_e2e_browser.py    # unit + HTTP integration
+python3 -m pytest -m "not browser"      # unit + HTTP integration, no browser needed
 ```
 
-The browser end-to-end tests (`tests/test_e2e_browser.py`, 31 of them) skip unless Playwright is installed. They skip as a *single* line, so check for it rather than assuming green:
+The browser tests skip unless Playwright is installed, and a module skips as a *single* line - so check for the skip rather than assuming green:
 
 ```bash
 pip install playwright && playwright install chromium
-python3 -m pytest tests/                                        # everything, nothing skipped
+python3 -m pytest                        # everything, nothing skipped
 ```
+
+Browser tests carry the `browser` marker and CI selects on it, never on a filename: a new browser module that CI does not know about would otherwise read green while never executing.
 
 The unit tests drive `webtweak.js` itself (via `tests/_wtjs.py`), so they guard the code the package actually ships. CI runs the stdlib suite across Node 18/20/22/24 and the browser suite in a job where Playwright is always present.
 

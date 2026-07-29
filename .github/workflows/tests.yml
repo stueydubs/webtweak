@@ -49,13 +49,9 @@ jobs:
       # hardcoded path silently excluded three new browser modules once already.
       - name: Run browser e2e
         run: python -m pytest -q -m browser
-      - name: Fail if any browser test skipped instead of running
+      # pytest exits 5 when nothing was collected - a stable contract, unlike
+      # grepping its prose for "skipped".
+      - name: Fail if no browser test was collected
         run: |
-          python - <<'PY'
-          import subprocess, sys
-          out = subprocess.run([sys.executable, "-m", "pytest", "-q", "-m", "browser",
-                                "--collect-only"], capture_output=True, text=True).stdout
-          if "skipped" in out or "no tests ran" in out:
-              sys.exit("browser tests skipped in the job that installs Playwright:\n" + out)
-          print(out.strip().splitlines()[-1])
-          PY
+          python -m pytest -q -m browser --collect-only
+          test $? -ne 5

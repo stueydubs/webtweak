@@ -11,25 +11,9 @@ import shutil
 
 import pytest
 
-from _server import make_page, start, stop
+from conftest import edit, open_page, select_card
 
-sync_api = pytest.importorskip(
-    "playwright.sync_api",
-    reason="install Playwright to run the browser e2e: "
-           "pip install playwright && playwright install chromium",
-)
-from playwright.sync_api import sync_playwright  # noqa: E402
-
-pytestmark = pytest.mark.browser  # selected by marker in CI, never by filename
-
-
-@pytest.fixture
-def served():
-    tmp, page = make_page()
-    proc, port = start(page)
-    yield tmp, port
-    stop(proc)
-    shutil.rmtree(tmp, ignore_errors=True)
+from _browser import sync_playwright, pytestmark  # noqa: F401
 
 
 def _drag(page, box, dx, dy, steps=8):
@@ -47,19 +31,6 @@ def _box(page, sel):
     }""")
 
 
-def _select_card(page):
-    """Select div.card itself, not one of its children.
-
-    A plain page.click('.card') lands on the element's centre, which is over the
-    card's <p>, so the overlay selects the paragraph and the test silently
-    exercises the wrong element. The card has padding:24px, so clicking 8px in
-    from its corner hits the card's own box. The assertion makes a mis-select
-    fail loudly rather than quietly testing something else.
-    """
-    page.click(".card", position={"x": 8, "y": 8})
-    assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "div.card"
-
-
 def test_hover_recovers_after_escape_during_drag(served):
     """Pressing Esc mid-drag tears interact down without an 'end' event; the overlay
     must still reset `interacting` so the hover box keeps working afterwards."""
@@ -69,7 +40,7 @@ def test_hover_recovers_after_escape_during_drag(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _select_card(page)
+        select_card(page)
         box = _box(page, ".card")
         # start a drag and press Esc before releasing (interact.unset, no 'end' fires)
         cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
@@ -104,7 +75,7 @@ def test_select_edit_nudge_resize_save_loop(served):
         assert page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize") == "52px"
 
         # --- nudge: drag the card interior leftward ---
-        _select_card(page)
+        select_card(page)
         cardbox = _box(page, ".card")
         _drag(page, cardbox, -24, 0)
 
@@ -546,9 +517,7 @@ def test_selection_box_tracks_a_reflowing_edit(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click("#headline")
-        page.fill("#wt-fs", "80")
-        page.dispatch_event("#wt-fs", "input")
+        edit(page, "#headline", "#wt-fs", "80")
         tracks = page.evaluate("""() => {
             const el = document.getElementById('headline').getBoundingClientRect();
             const box = document.getElementById('wt-selected').getBoundingClientRect();
@@ -566,9 +535,7 @@ def test_reset_clears_unsaved_state(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click("#headline")
-        page.fill("#wt-fs", "70")
-        page.dispatch_event("#wt-fs", "input")
+        edit(page, "#headline", "#wt-fs", "70")
         page.click("#wt-reset")
         page.click("#wt-save")
         status = page.eval_on_selector("#wt-status", "el => el.textContent")
@@ -627,9 +594,7 @@ def test_revert_to_original_after_reload_clears_the_batch(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
         original_fs = page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize")
-        page.click("#headline")
-        page.fill("#wt-fs", "72")
-        page.dispatch_event("#wt-fs", "input")
+        edit(page, "#headline", "#wt-fs", "72")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')"
@@ -690,9 +655,7 @@ def test_edits_restored_after_reload(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click("#headline")
-        page.fill("#wt-fs", "60")
-        page.dispatch_event("#wt-fs", "input")
+        edit(page, "#headline", "#wt-fs", "60")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')"
@@ -747,9 +710,7 @@ def test_partial_restore_preserves_unrelocated_patches(served):
             "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
         )
         # make a real edit on the relocatable element and save
-        page.click("#headline")
-        page.fill("#wt-fs", "50")
-        page.dispatch_event("#wt-fs", "input")
+        edit(page, "#headline", "#wt-fs", "50")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')"
@@ -898,9 +859,7 @@ def test_in_session_save_then_revert_all_clears_batch(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
         original_fs = page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize")
-        page.click("#headline")
-        page.fill("#wt-fs", "72")
-        page.dispatch_event("#wt-fs", "input")
+        edit(page, "#headline", "#wt-fs", "72")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')"
@@ -926,7 +885,7 @@ def test_box_control_width_entry_is_recorded(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _select_card(page)                # block element, width controls enabled
+        select_card(page)                # block element, width controls enabled
         page.fill("#wt-w", "350")
         page.dispatch_event("#wt-w", "input")
         page.click("#wt-save")
@@ -947,7 +906,7 @@ def test_cleared_field_records_no_patch(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _select_card(page)
+        select_card(page)
         for field in ("#wt-fs", "#wt-w"):
             page.fill(field, "120")
             page.dispatch_event(field, "input")
@@ -968,7 +927,7 @@ def test_shorthand_margin_revert_records_nothing(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _select_card(page)                # .card { margin: 32px 0; }
+        select_card(page)                # .card { margin: 32px 0; }
         page.fill("#wt-margin", "32px 0")  # author shorthand == computed baseline
         page.dispatch_event("#wt-margin", "input")
         page.click("#wt-save")

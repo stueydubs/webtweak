@@ -11,33 +11,9 @@ import shutil
 
 import pytest
 
-from _server import make_page, start, stop
+from conftest import edit, open_page
 
-pytest.importorskip(
-    "playwright.sync_api",
-    reason="install Playwright to run the browser e2e: "
-           "pip install playwright && playwright install chromium",
-)
-from playwright.sync_api import sync_playwright  # noqa: E402
-
-pytestmark = pytest.mark.browser  # selected by marker in CI, never by filename
-
-
-@pytest.fixture
-def served():
-    tmp, page = make_page()
-    proc, port = start(page)
-    yield tmp, port
-    stop(proc)
-    shutil.rmtree(tmp, ignore_errors=True)
-
-
-def _open(p, port):
-    browser = p.chromium.launch()
-    page = browser.new_page(viewport={"width": 1280, "height": 900})
-    page.goto(f"http://127.0.0.1:{port}/sample.html")
-    page.wait_for_selector("#wt-root")
-    return browser, page
+from _browser import sync_playwright, pytestmark  # noqa: F401
 
 
 def test_source_change_reloads_a_clean_page(served):
@@ -45,7 +21,7 @@ def test_source_change_reloads_a_clean_page(served):
     having to guess that anything happened."""
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
+        browser, page = open_page(p, port)
         page.evaluate("window.__reload_probe = true")     # cleared by a real reload
         # Simulate Claude reconciling: touch the page's own source.
         src = tmp / "sample.html"
@@ -60,10 +36,8 @@ def test_source_change_never_reloads_over_unsaved_edits(served):
     background file write would be worse than having no live reload at all."""
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        page.click("#headline")
-        page.fill("#wt-fs", "52")
-        page.dispatch_event("#wt-fs", "input")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         page.evaluate("window.__reload_probe = true")
 
         src = tmp / "sample.html"
@@ -86,10 +60,8 @@ def test_badge_reports_pending_then_reconciled(served):
     window where the user is working."""
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        page.click("#headline")
-        page.fill("#wt-fs", "52")
-        page.dispatch_event("#wt-fs", "input")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')")
@@ -122,10 +94,8 @@ def test_reconcile_order_does_not_double_apply(served):
     """
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        page.click("#headline")
-        page.fill("#wt-fs", "52")
-        page.dispatch_event("#wt-fs", "input")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         page.click("#wt-save")
         page.wait_for_function(
             "document.getElementById('wt-status').textContent.startsWith('saved')")
@@ -168,7 +138,7 @@ def test_edits_marked_externally_reaches_the_badge(served):
     flaw - the first version of this feature ignored it to avoid save loops."""
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
+        browser, page = open_page(p, port)
         edits = tmp / "sample.webtweak.json"
         edits.write_text(json.dumps({
             "target": "sample.html",
@@ -186,10 +156,8 @@ def test_saving_does_not_trigger_a_reload(served):
     reason the watcher ignores *.webtweak.json and friends."""
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = _open(p, port)
-        page.click("#headline")
-        page.fill("#wt-fs", "52")
-        page.dispatch_event("#wt-fs", "input")
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
         page.evaluate("window.__reload_probe = true")
         page.click("#wt-save")
         page.wait_for_function(
