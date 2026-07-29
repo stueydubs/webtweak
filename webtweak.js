@@ -182,9 +182,18 @@ function pruneBackups(editsPath) {
 const MAX_WATCHED_DIRS = 2000;   // inotify has a per-user ceiling; degrade before hitting it
 
 // webtweak's own writes must never trigger a reload, or every Save would bounce
-// the page the user is still editing.
+// the page the user is still editing. This one regex covers all of them - the
+// atomic temp (`x.webtweak.json.<pid>.tmp`) and the corrupt-file backup
+// (`x.webtweak.json.<iso>.bak`) both keep the `.webtweak.json.` infix. Matching
+// bare `.tmp`/`.bak` as well would hide the *user's* files of those names.
 function isOwnArtefact(name) {
-  return /\.webtweak\.json(\.|$)/.test(name) || name.endsWith('.tmp') || name.endsWith('.bak');
+  return /\.webtweak\.json(\.|$)/.test(name);
+}
+
+// The edits file itself, so a reconcile marking a batch can be told apart from
+// webtweak writing its own save.
+function isEditsFile(name) {
+  return /\.webtweak\.json$/.test(name);
 }
 
 function isSkippedDir(name) {
@@ -195,15 +204,37 @@ function isSkippedDir(name) {
 // page a reload. Deliberately NOT fs.watch(recursive) - that only landed on
 // Linux in Node 20 and this package supports 18 - so we walk and watch each
 // directory. Failures degrade to "no live reload", never to a crash.
-function createWatcher(root, onChange) {
+//
+// `contains(realPath)` gates which directories may be watched: the initial walk
+// uses Dirent.isDirectory() (does not follow symlinks) but an fs.watch event only
+// gives a name, so the child has to be stat'd - and a stat follows links. Without
+// the gate, a symlink created at runtime would have us watching outside the root.
+function createWatcher(root, onChange, contains) {
   const watchers = new Map();
   let timer = null, capped = false;
 
   function fire(name) {
-    if (name && isOwnArtefact(path.basename(name))) return;
+    // A nameless event (fs.watch permits one on some platforms) cannot be
+    // classified, so treating it as source would let our own Save bounce the
+    // page - the exact failure this design exists to prevent. Ignore it.
+    if (!name) return;
+    const base = path.basename(name);
+    if (isOwnArtefact(base) && !isEditsFile(base)) return;   // .tmp / .bak churn
     clearTimeout(timer);
     // Editors write in bursts (temp file, rename, chmod); one reload is enough.
-    timer = setTimeout(() => onChange(name || ''), 120);
+    timer = setTimeout(() => onChange(isEditsFile(base) ? 'edits' : 'source', name), 120);
+  }
+
+  function forget(dir, w) {
+    try { w.close(); } catch (_) {}
+    watchers.delete(dir);
+  }
+
+  function mayWatch(child) {
+    let real;
+    try { real = fs.realpathSync(child); }
+    catch (_) { return false; }
+    return contains(real);
   }
 
   function watchDir(dir, depth) {
@@ -212,14 +243,20 @@ function createWatcher(root, onChange) {
     let w;
     try {
       w = fs.watch(dir, (_ev, name) => {
+        // Reap a directory that has been deleted. Without this its stale entry
+        // keeps watchers.has() true, so a recreated directory of the same name
+        // is never re-watched and live reload silently dies for that subtree -
+        // and repeated churn leaks handles until MAX_WATCHED_DIRS is exhausted.
+        if (!fs.existsSync(dir)) { forget(dir, w); return fire(name); }
         fire(name);
-        if (!name || isSkippedDir(name)) return;
+        if (!name || isSkippedDir(path.basename(name))) return;
         const child = path.join(dir, name);
-        try { if (fs.statSync(child).isDirectory()) watchDir(child, depth + 1); }
-        catch (_) {}                       // vanished between event and stat
+        try {
+          if (fs.lstatSync(child).isDirectory() && mayWatch(child)) watchDir(child, depth + 1);
+        } catch (_) {}                     // vanished between event and stat
       });
     } catch (_) { return; }                // permissions, ENOSPC - just skip it
-    w.on('error', () => {});
+    w.on('error', () => forget(dir, w));
     watchers.set(dir, w);
 
     let entries;
@@ -232,8 +269,10 @@ function createWatcher(root, onChange) {
 
   watchDir(root, 0);
   return {
-    count:  watchers.size,
-    capped,
+    // Getters, not snapshots: the walk continues at runtime as directories are
+    // created, so a value frozen at boot could only ever describe the first walk.
+    get count()  { return watchers.size; },
+    get capped() { return capped; },
     close() {
       clearTimeout(timer);
       for (const w of watchers.values()) { try { w.close(); } catch (_) {} }
@@ -259,6 +298,9 @@ function serveEvents(req, res, clients) {
 function broadcast(clients, event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) {
+    // write() on a dead response returns false rather than throwing, so a
+    // try/catch alone would never prune. Check the state instead.
+    if (res.writableEnded || res.destroyed) { clients.delete(res); continue; }
     try { res.write(payload); } catch (_) { clients.delete(res); }
   }
 }
@@ -371,7 +413,7 @@ function editsPathFor(targetPath) {
   return path.join(path.dirname(targetPath), stem + '.webtweak.json');
 }
 
-function handleSave(body, targetName, editsPath, res) {
+function handleSave(body, targetName, editsPath, state, res) {
   let payload;
   try { payload = JSON.parse(body || '{}'); }
   catch (_) { return sendError(res, 400, 'Bad JSON'); }
@@ -412,6 +454,10 @@ function handleSave(body, targetName, editsPath, res) {
     return send(res, 500, JSON.stringify({ ok: false, error: e.message }), 'application/json');
   }
 
+  // Remember what we wrote so the watcher can tell our own save from a
+  // reconcile. Content, not a timestamp: a time window is a race, and a save
+  // followed closely by a mark is exactly the sequence that matters.
+  if (state) { try { state.lastSelfWrite = fs.readFileSync(editsPath, 'utf8'); } catch (_) {} }
   const n = (payload.patches || []).length;
   log(`saved ${n} patch(es) -> ${path.basename(editsPath)}`);
   send(res, 200, JSON.stringify({ ok: true, file: path.basename(editsPath), patches: n }), 'application/json');
@@ -466,7 +512,7 @@ function createHandler(targetPath, serveRoot, state) {
         req.on('end', () => {
           if (received > MAX_BODY) return;                 // already answered above
           if (received < length) return sendError(res, 400, 'Incomplete request body');
-          handleSave(Buffer.concat(chunks).toString('utf8'), targetName, editsPath, res);
+          handleSave(Buffer.concat(chunks).toString('utf8'), targetName, editsPath, state, res);
         });
         req.on('error', () => sendError(res, 400, 'Incomplete request body'));
         return;
@@ -554,16 +600,27 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     realRoot:   fs.realpathSync(serveRoot),
     realTarget: fs.realpathSync(targetPath),
     clients:    new Set(),          // open SSE streams
+    lastSelfWrite: null,            // exact bytes we last wrote to the edits file
   };
   const handler   = createHandler(targetPath, serveRoot, state);
   const server    = http.createServer(handler);
   server.requestTimeout = 30_000;   // a lying Content-Length must not park a socket forever
 
   // Tell open pages when the source under them changes, so a reconcile shows up
-  // in the browser instead of the user having to guess and reload.
-  const watcher = createWatcher(serveRoot, changed => {
+  // in the browser instead of the user having to guess and reload. The edits
+  // file is reported separately: reconcile writes source first and marks the
+  // batch second, so the page needs to distinguish "source moved" from "my
+  // batch was reconciled" to avoid re-applying a batch that is still pending.
+  const watcher = createWatcher(serveRoot, (kind, changed) => {
+    if (kind === 'edits') {
+      // Ignore the echo of our own save; only an outside writer is interesting.
+      let now = null;
+      try { now = fs.readFileSync(editsPathFor(targetPath), 'utf8'); } catch (_) {}
+      if (now !== null && now === state.lastSelfWrite) return;
+      return broadcast(state.clients, 'edits-change', { file: changed });
+    }
     broadcast(state.clients, 'source-change', { file: changed });
-  });
+  }, real => contained(real, state.realRoot));
   const ping = setInterval(() => {
     for (const res of state.clients) { try { res.write(': ping\n\n'); } catch (_) {} }
   }, 25_000);
@@ -574,7 +631,11 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     state.port   = actual;          // --port 0 means the real port is only known now
     // With --root the page may sit in a subfolder of the web root, so its URL
     // is its path relative to that root, not just its basename.
-    const rel    = path.relative(serveRoot, targetPath).split(path.sep).join('/');
+    // Encode each segment: --root means intermediate directories now appear in
+    // the URL, and a name containing a space or '#' produced a link that opened
+    // the wrong path (or 404'd on the fragment).
+    const rel    = path.relative(serveRoot, targetPath)
+      .split(path.sep).map(encodeURIComponent).join('/');
     const url    = `http://127.0.0.1:${actual}/${rel}`;
     process.stdout.write(`webtweak editing: ${targetPath}\n`);
     process.stdout.write(`  serving ${serveRoot}\n`);
@@ -694,7 +755,9 @@ function main() {
       if (port > 65535) die(`--port must be between 0 and 65535, got ${port}`);
     } else if (a === '--root' || rootEq !== null) {
       const raw = rootEq !== null ? rootEq : args[++i];
-      if (raw === undefined) die('--root needs a directory, e.g. --root .');
+      // `--root=` yields '' rather than undefined, and path.resolve('') is the
+      // cwd - so without the falsy check it silently served the wrong directory.
+      if (!raw) die('--root needs a directory, e.g. --root .');
       rootArg = raw;
     } else if (a === '--no-browser') {
       noBrowser = true;

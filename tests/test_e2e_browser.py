@@ -20,6 +20,8 @@ sync_api = pytest.importorskip(
 )
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+pytestmark = pytest.mark.browser  # selected by marker in CI, never by filename
+
 
 @pytest.fixture
 def served():

@@ -25,12 +25,12 @@ jobs:
           python-version: '3.12'
       - name: Install pytest
         run: pip install pytest
-      - name: Run unit + loop tests
-        run: python -m pytest -q --ignore=tests/test_e2e_browser.py
+      - name: Run non-browser tests
+        run: python -m pytest -q -m "not browser"
 
-  # Separate job so Playwright is always installed here. The e2e module uses a
-  # module-level importorskip, so without a dedicated job its 31 tests collapse
-  # into a single skip line and the suite reads green while unrun.
+  # Separate job so Playwright is always installed here. The browser modules use
+  # a module-level importorskip, so without a dedicated job their tests collapse
+  # into one skip line per file and the suite reads green while unrun.
   e2e:
     runs-on: ubuntu-latest
     steps:
@@ -45,10 +45,17 @@ jobs:
         run: |
           pip install playwright pytest
           playwright install --with-deps chromium
+      # Every browser test, selected by marker rather than by filename - a
+      # hardcoded path silently excluded three new browser modules once already.
       - name: Run browser e2e
-        run: python -m pytest -q tests/test_e2e_browser.py
-      - name: Fail if the browser suite skipped instead of running
+        run: python -m pytest -q -m browser
+      - name: Fail if any browser test skipped instead of running
         run: |
-          python -m pytest tests/test_e2e_browser.py --collect-only -q \
-            | grep -q "test_" || {
-              echo "e2e collected nothing - Playwright import likely skipped"; exit 1; }
+          python - <<'PY'
+          import subprocess, sys
+          out = subprocess.run([sys.executable, "-m", "pytest", "-q", "-m", "browser",
+                                "--collect-only"], capture_output=True, text=True).stdout
+          if "skipped" in out or "no tests ran" in out:
+              sys.exit("browser tests skipped in the job that installs Playwright:\n" + out)
+          print(out.strip().splitlines()[-1])
+          PY

@@ -35,6 +35,7 @@
   var edited = new Map();
   var selectedEl = null;
   var dirty = false;       // unsaved changes since the last successful save
+  var editSeq = 0;         // bumped on every recorded change; see save()
   var persisted = false;   // this session has a saved/restored batch on disk to clear
   var missed = [];         // restored patches we couldn't re-locate - preserved across saves
   var interacting = false; // a drag/resize gesture is in progress
@@ -68,6 +69,7 @@
   function record(el, prop, value) {
     entry(el).changes[prop] = value;
     dirty = true;
+    editSeq++;
     refreshChanges();
   }
   // True iff any edited element still holds real changes - the single source of
@@ -312,6 +314,7 @@
         rebuildInline(svg, e);
       }
       dirty = true;                          // a fresh shape is an unsaved edit; a restored one is not
+      editSeq++;
       undoStack.push([{ el: svg, create: true }]);  // Cmd+Z removes the shape
     }
     return svg;
@@ -340,11 +343,16 @@
     '  <span class="wt-grip wt-grip-br"></span>',
     "</div>",
     panelHTML(),
-    '<div class="wt-changes wt-ui" id="wt-changes" hidden>',
-    '  <button class="wt-changes-head" id="wt-changes-head" aria-expanded="false"></button>',
-    '  <ul class="wt-changes-list" id="wt-changes-list" hidden></ul>',
+    // Change list and hint share the bottom-left corner, so they live in one
+    // flow container - fixed offsets on both let them overlap and swallow
+    // each other's clicks.
+    '<div class="wt-dock">',
+    '  <div class="wt-changes wt-ui" id="wt-changes" hidden>',
+    '    <button class="wt-changes-head" id="wt-changes-head" aria-expanded="false"></button>',
+    '    <ul class="wt-changes-list" id="wt-changes-list" hidden></ul>',
+    "  </div>",
+    '  <div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Cmd/Ctrl+S</b> save.</div>',
     "</div>",
-    '<div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Cmd/Ctrl+S</b> save.</div>',
     '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Click anywhere</b> to drop the shape. <b>Esc</b> to cancel.</div>',
   ].join("\n");
   // Mounted on <html>, not <body>: a transformed ancestor becomes the containing
@@ -582,10 +590,19 @@
   function setCrumb(el) {
     var chain = [], n = el;
     while (n && n.nodeType === 1 && n !== document.body) { chain.unshift(n); n = n.parentElement; }
-    crumbEl.innerHTML = chain.map(function (node, i) {
-      var label = describe(node);
-      return i === chain.length - 1 ? "<b>" + label + "</b>" : label;
-    }).join(" &rsaquo; ");
+    // Built with textContent, never innerHTML: describe() returns the page's own
+    // tag/id/class names, and webtweak is routinely pointed at repos the user did
+    // not write. An id like `a"><img src=x onerror=...>` used to execute here, in
+    // the overlay's origin - which can POST patches that Claude later reconciles
+    // into real source.
+    crumbEl.textContent = "";
+    chain.forEach(function (node, i) {
+      if (i) crumbEl.appendChild(document.createTextNode(" › "));
+      var last = i === chain.length - 1;
+      var part = document.createElement(last ? "b" : "span");
+      part.textContent = describe(node);
+      crumbEl.appendChild(part);
+    });
   }
 
   function status(msg, ok) {
@@ -610,6 +627,7 @@
   }
 
   function deselect() {
+    var had = selectedEl;
     if (pendingShape) exitPlaceMode();  // a Deselect/Esc during place mode also cancels placement
     if (selectedEl && window.interact) interact(selectedEl).unset();
     interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
@@ -617,6 +635,7 @@
     selBox.hidden = true;
     panel.hidden = true;
     crumbEl.textContent = "click an element to select";
+    if (had) refreshChanges();   // drop the list's stale current-selection highlight
   }
 
   function resetEl(el) {
@@ -946,6 +965,8 @@
               el.style.removeProperty("transform");
               delete e.changes.nudge;
               dirty = hasRealEdits();             // clear the stale unsaved flag if this was the only edit
+              editSeq++;
+              refreshChanges();                   // this branch skips record(), so refresh here
             } else {
               el.style.transform = "translate(" + sx + "px, " + sy + "px)";
               record(el, "nudge", { dx: sx, dy: sy });
@@ -1141,6 +1162,10 @@
     // through so the empty save clears that stale batch on disk.
     if (!patches.length && !persisted) { status("nothing changed yet"); return; }
     status("saving...");
+    // Anything recorded between here and the response is NOT in this payload,
+    // so clearing `dirty` unconditionally would mark unsaved work as saved -
+    // and the live-reload guard would then happily reload over it.
+    var seq = editSeq;
     fetch(RESERVED + "save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1149,7 +1174,8 @@
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j.ok) {
-          dirty = false;
+          dirty = editSeq !== seq;   // true if the user edited while we were saving
+          clearOffer();              // a save resolves the "source changed" warning
           persisted = patches.length > 0;  // empty save just cleared the batch
           status(patches.length
             // Name the artefact: it teaches the hand-off for free, and it is the
@@ -1244,13 +1270,32 @@
     }).join(", ");
   }
 
+  // record() fires per pointermove, so during a drag a naive rebuild churned the
+  // whole list DOM dozens of times per second. Coalesce to one rebuild per frame
+  // for gestures only - panel edits stay synchronous, which keeps the list's
+  // observable behaviour simple everywhere except the one hot path.
+  var changesFrame = 0;
   function refreshChanges() {
     if (!changesBox) return;          // called before the overlay finished mounting
+    if (!interacting) return rebuildChanges();
+    if (changesFrame) return;
+    changesFrame = requestAnimationFrame(function () {
+      changesFrame = 0;
+      rebuildChanges();
+    });
+  }
+
+  function rebuildChanges() {
+    if (!changesBox) return;
     var rows = [];
     edited.forEach(function (e, el) {
       if (Object.keys(e.changes).length) rows.push({ el: el, e: e });
     });
-    if (!rows.length) { changesBox.hidden = true; return; }
+    if (!rows.length) {
+      changesBox.hidden = true;
+      changesList.textContent = "";   // drop element refs held by stale rows
+      return;
+    }
     changesBox.hidden = false;
     changesHead.textContent = rows.length + " element" + (rows.length === 1 ? "" : "s") +
       " changed " + (changesOpen ? "▾" : "▸");
@@ -1267,7 +1312,11 @@
       // markup (tag, id, class names) and must never be parsed as HTML.
       var name = document.createElement("span");
       name.className = "wt-change-el";
-      name.textContent = (row.e.shape ? "shape " : "") + describe(row.el);
+      // A shape's id is a throwaway overlay handle (wt-shape-<rand>) that
+      // reconcile strips, so name the kind the user actually drew instead.
+      name.textContent = row.e.shape
+        ? "shape: " + (row.e.shape.kind || "shape")
+        : describe(row.el);
       var props = document.createElement("span");
       props.className = "wt-change-props";
       props.textContent = changeSummary(row.e);
@@ -1295,9 +1344,14 @@
   // when the source under the page changes, so a reconcile lands visibly here.
 
   var badge = document.getElementById("wt-badge");
-  var reloadPending = false;
+  var offered = false;    // a reload has been offered rather than taken
+  var es = null;
 
   function setBadge(text, kind, title) {
+    // Always drop any previous handler: a stale one from the "reload" badge
+    // would otherwise stay live on a later chip that styles itself
+    // cursor:default and does not look clickable.
+    badge.onclick = null;
     if (!text) { badge.hidden = true; return; }
     badge.hidden = false;
     badge.textContent = text;
@@ -1305,28 +1359,50 @@
     badge.title = title || "";
   }
 
+  function offerReload(text, title) {
+    offered = true;
+    setBadge(text, "warn", title);
+    badge.onclick = function () { location.reload(); };
+  }
+
+  function clearOffer() { offered = false; }
+
+  function fetchEdits() {
+    return fetch(RESERVED + "edits", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; });
+  }
+
+  function myPending(doc) {
+    return ((doc && doc.batches) || []).filter(function (b) {
+      return b && b.sessionId === SESSION && b.status === "pending";
+    });
+  }
+
   // Reflect the edits file's own view of the world: our session's batch is
   // pending until Claude flips it to reconciled.
   function refreshStatus() {
-    return fetch(RESERVED + "edits", { cache: "no-store" })
-      .then(function (r) { return r.json(); })
-      .then(function (doc) {
-        var batches = (doc && doc.batches) || [];
-        var mine = batches.filter(function (b) { return b && b.sessionId === SESSION; });
-        var pending = batches.filter(function (b) { return b && b.status === "pending"; });
-        var justReconciled = mine.length && mine.every(function (b) { return b.status === "reconciled"; });
+    return fetchEdits().then(function (doc) {
+      if (!doc) return;
+      // An outstanding reload offer is the more important message; leave it up.
+      if (offered) return;
+      var batches = (doc.batches || []);
+      var mine = batches.filter(function (b) { return b && b.sessionId === SESSION; });
+      // Count only OUR pending changes: a second tab's batch is not this
+      // session's work and must not be reported as though it were.
+      var pending = myPending(doc);
+      var allReconciled = mine.length && mine.every(function (b) { return b.status === "reconciled"; });
 
-        if (justReconciled && !hasRealEdits()) {
-          setBadge("reconciled", "ok", "Claude has folded this session's changes into your source");
-        } else if (pending.length) {
-          var n = pending.reduce(function (t, b) { return t + ((b.patches || []).length); }, 0);
-          setBadge(n + " pending", "pending",
-            n + " change(s) waiting for Claude to reconcile into source");
-        } else {
-          setBadge("");
-        }
-      })
-      .catch(function () { /* no edits file yet - nothing to report */ });
+      if (allReconciled && !hasRealEdits()) {
+        setBadge("reconciled", "ok", "Claude has folded this session's changes into your source");
+      } else if (pending.length) {
+        var n = pending.reduce(function (t, b) { return t + ((b.patches || []).length); }, 0);
+        setBadge(n + " pending", "pending",
+          n + " change(s) waiting for Claude to reconcile into source");
+      } else {
+        setBadge("");
+      }
+    });
   }
 
   function onSourceChange() {
@@ -1334,28 +1410,68 @@
     // pending batch is on disk and restore() re-applies it, so reloading is
     // safe - and reloading after a save is the whole point, since that is when
     // Claude reconciles. Blocking on "has any edits" would never reload.
-    if (dirty) {
-      if (reloadPending) return;
-      reloadPending = true;
-      // Deliberately no refreshStatus() here: it resolves asynchronously and
-      // would clobber this warning with a stale count.
-      setBadge("source changed - reload", "warn",
-        "Your source changed on disk. You have unsaved edits; click to reload and lose them.");
-      badge.onclick = function () { location.reload(); };
+    // `interacting` matters too: `dirty` genuinely flickers false mid-drag when
+    // a nudge passes back through its origin, and reloading with the mouse
+    // still down would be baffling.
+    if (dirty || interacting) {
+      if (!offered) {
+        offerReload("source changed - reload",
+          "Your source changed on disk. You have unsaved edits; click to reload and lose them.");
+      }
       return;
     }
-    location.reload();   // refreshStatus runs again on the way back up
+    // Reconcile writes source FIRST and marks the batch second (SKILL.md steps
+    // 7 then 8). Reloading in that window would have restore() re-apply a batch
+    // that is still pending, on top of source Claude has already changed -
+    // doubling a nudge, and re-emitting the same patches on the next Save. So
+    // wait for the batch to actually be marked; edits-change brings us back.
+    fetchEdits().then(function (doc) {
+      if (dirty || interacting) return;               // changed while we were asking
+      if (doc && myPending(doc).length) {
+        offerReload("source changed - reload",
+          "Your source changed while this session's edits are still pending. " +
+          "Waiting for Claude to mark them reconciled; click to reload anyway.");
+        return;
+      }
+      location.reload();   // refreshStatus runs again on the way back up
+    });
+  }
+
+  // The edits file is watched separately from source, because `mark` touches
+  // only that file - without this the badge could never reach "reconciled".
+  function onEditsChange() {
+    fetchEdits().then(function (doc) {
+      if (!doc) return;
+      var stillPending = myPending(doc).length;
+      if (!stillPending && !dirty && !interacting) {
+        // Our batch is reconciled and the source is final: restore() will not
+        // re-apply anything, so this reload is safe and shows the real result.
+        clearOffer();
+        location.reload();
+        return;
+      }
+      if (!offered) refreshStatus();
+    });
   }
 
   function connectEvents() {
     if (typeof EventSource === "undefined") return;   // no live reload; everything else works
-    var es;
     try { es = new EventSource(RESERVED + "events"); }
     catch (_) { return; }
     es.addEventListener("source-change", onSourceChange);
-    // EventSource reconnects on its own (the server sends a retry hint), so an
-    // error here is usually just the server restarting - stay quiet about it.
-    es.onerror = function () {};
+    es.addEventListener("edits-change", onEditsChange);
+    es.onerror = function () {
+      // EventSource reconnects on its own, so a transient error is not worth
+      // reporting. A CLOSED stream is terminal though, and silently losing live
+      // reload is exactly the kind of thing the user should be told about.
+      if (es && es.readyState === 2 && !offered) {
+        setBadge("live reload offline", null,
+          "Lost the connection to webtweak; source changes will not reload the page.");
+      }
+    };
+    // Release the socket promptly: an open SSE stream occupies one of the
+    // browser's six per-origin connections.
+    window.addEventListener("pagehide", function () { if (es) es.close(); });
   }
 
   restore();

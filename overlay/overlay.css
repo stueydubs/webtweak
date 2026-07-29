@@ -65,6 +65,7 @@ html { user-select: none; }
 .wt-badge-pending { border-color: #6b5a2a; background: #2a2418; color: #e0c068; }
 .wt-badge-ok      { border-color: #2f5c34; background: #1a2a1c; color: #8ad18a; }
 .wt-badge-warn    { border-color: #7a3a3a; background: #2e1c1c; color: #f0a0a0; cursor: pointer; }
+.wt-badge[hidden] { display: none; }
 .wt-btn {
   appearance: none;
   border: 1px solid #3a3f4b;
@@ -174,14 +175,28 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 }
 .wt-panel[hidden] { display: none; }
 
-/* Session change list - bottom-right, independent of the properties panel so it
-   stays visible when nothing is selected (which is exactly when you want to
-   review what you have done). */
-.wt-changes {
+/* Bottom-left dock: the change list stacked above the hint.
+   Deliberately NOT the right column - the properties panel lives there
+   (top:56px, max-height:calc(100vh - 72px)) and a right-hand list overlapped it
+   on laptop-height windows, painting over Reset and making it unclickable.
+   One flow container rather than two fixed corners, so the two can never
+   overlap and swallow each other's clicks. */
+.wt-dock {
   position: fixed;
-  bottom: 12px; right: 12px;
-  width: 270px;
-  max-height: 40vh;
+  bottom: 12px; left: 12px;
+  width: 320px;
+  max-height: calc(100vh - 68px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  pointer-events: none;         /* children opt back in via .wt-ui */
+}
+
+/* Independent of the properties panel, so it stays visible when nothing is
+   selected - which is exactly when you want to review a session. */
+.wt-changes {
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #1a1d23;
@@ -275,9 +290,9 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-block { width: 100%; margin-top: 4px; }
 .wt-note { color: #717784; font-size: 11px; line-height: 1.5; margin-top: 8px; }
 .wt-hint {
-  position: fixed; bottom: 12px; left: 12px;
   background: #15171c; color: #aab0bb;
   border: 1px solid #2c303a; border-radius: 8px;
-  padding: 8px 12px; font-size: 12px; max-width: 320px; line-height: 1.5;
+  padding: 8px 12px; font-size: 12px; line-height: 1.5;
+  flex: 0 0 auto;
 }
 .wt-hint b { color: #ffd479; }

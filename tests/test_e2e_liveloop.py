@@ -20,6 +20,8 @@ pytest.importorskip(
 )
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+pytestmark = pytest.mark.browser  # selected by marker in CI, never by filename
+
 
 @pytest.fixture
 def served():
@@ -103,15 +105,71 @@ def test_badge_reports_pending_then_reconciled(served):
             b["status"] = "reconciled"
             b["reconciledAt"] = "2026-07-29T12:00:00"
         edits.write_text(json.dumps(doc, indent=2))
-        # The edits file is deliberately not watched (it would loop on save), so
-        # drive the refresh the way a reconcile would - by touching real source.
-        src = tmp / "sample.html"
-        src.write_text(src.read_text().replace("</body>", "<!-- reconciled --></body>"))
-
+        # The edits file is watched separately from source (webtweak suppresses
+        # only the echo of its own save), so marking alone reaches the badge.
         page.wait_for_function(
             "document.getElementById('wt-badge') && "
             "document.getElementById('wt-badge').textContent.includes('reconciled')",
             timeout=8000)
+        browser.close()
+
+
+def test_reconcile_order_does_not_double_apply(served):
+    """The real reconcile order is: write source (SKILL.md step 7), THEN mark the
+    batch (step 8). Reloading in that window would have restore() re-apply a
+    still-pending batch on top of source Claude has already changed - doubling a
+    nudge and re-emitting the same patches on the next Save.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = _open(p, port)
+        page.click("#headline")
+        page.fill("#wt-fs", "52")
+        page.dispatch_event("#wt-fs", "input")
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')")
+        page.evaluate("window.__reload_probe = true")
+
+        # Step 7: Claude writes the CSS. The batch is still pending.
+        src = tmp / "sample.html"
+        src.write_text(src.read_text().replace("</body>", "<!-- reconciled --></body>"))
+        page.wait_for_function(
+            "document.getElementById('wt-badge').textContent.includes('reload')",
+            timeout=8000)
+        assert page.evaluate("window.__reload_probe") is True, \
+            "reloaded mid-reconcile; restore() would re-apply the pending batch"
+
+        # Step 8: Claude marks it. Now the reload is safe and should happen.
+        edits = tmp / "sample.webtweak.json"
+        doc = json.loads(edits.read_text())
+        for b in doc["batches"]:
+            b["status"] = "reconciled"
+            b["reconciledAt"] = "2026-07-29T12:00:00"
+        edits.write_text(json.dumps(doc, indent=2))
+
+        page.wait_for_function("window.__reload_probe === undefined", timeout=8000)
+        # restore() must not have re-applied anything: no pending batch remains.
+        assert page.eval_on_selector("#headline", "el => el.getAttribute('style')") in (None, "")
+        browser.close()
+
+
+def test_edits_marked_externally_reaches_the_badge(served):
+    """`mark` touches only the edits file. If that file were unwatched the badge
+    could never reach 'reconciled' in real use, which was the original design
+    flaw - the first version of this feature ignored it to avoid save loops."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = _open(p, port)
+        edits = tmp / "sample.webtweak.json"
+        edits.write_text(json.dumps({
+            "target": "sample.html",
+            "batches": [{"sessionId": "other", "status": "pending",
+                         "patches": [{"fingerprint": {"tag": "h1"}, "changes": {"color": "#111"}}]}],
+        }, indent=2))
+        page.wait_for_timeout(600)
+        # Another session's pending batch is not this session's work.
+        assert page.eval_on_selector("#wt-badge", "el => el.hidden") is True
         browser.close()
 
 
