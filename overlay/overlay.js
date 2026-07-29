@@ -38,6 +38,21 @@
   var persisted = false;   // this session has a saved/restored batch on disk to clear
   var missed = [];         // restored patches we couldn't re-locate - preserved across saves
   var interacting = false; // a drag/resize gesture is in progress
+  var gestureEndedAt = 0;  // when the last drag/resize finished (see endGesture)
+
+  // A drag or resize is followed by a browser `click` on whatever sits under the
+  // release point - typically a child of the element being dragged. Without this
+  // the selection silently jumps to that child, so the grips end up on the wrong
+  // element and the next resize targets something the user never chose.
+  function endGesture() {
+    interacting = false;
+    gestureEndedAt = Date.now();
+  }
+  function clickEndsGesture() {
+    // Time-boxed rather than a sticky flag: if a gesture ever ends without a
+    // trailing click, the guard must not swallow the user's next real click.
+    return Date.now() - gestureEndedAt < 300;
+  }
   var undoStack = [];      // stack of batches: each [{el, prop, prev}]
   var pendingShape = null; // shape kind awaiting a placement click (place mode)
 
@@ -106,7 +121,21 @@
         edited.delete(u.el);
         return;
       }
-      var ent = entry(u.el);
+      // Undoing a shape removal puts the element back where it was.
+      if (u.restore) {
+        if (u.restore.parent) u.restore.parent.insertBefore(u.el, u.restore.before);
+        edited.set(u.el, u.restore.entry);
+        if (els.indexOf(u.el) < 0) els.push(u.el);
+        return;
+      }
+      // entry() creates on miss, so undoing past a reset would resurrect a
+      // deleted element as a fresh entry - and save it as a patch whose
+      // fingerprint is computed on a node no longer in the document.
+      var ent = edited.get(u.el);
+      if (!ent) {
+        if (!document.contains(u.el)) return;      // element is gone; nothing to undo onto
+        ent = entry(u.el);
+      }
       if (u.prev === undefined) {
         delete ent.changes[u.prop];
         // rebuildInline only seeds _x/_y when nudge IS in changes; reset manually here.
@@ -308,10 +337,14 @@
     '  <span class="wt-grip wt-grip-br"></span>',
     "</div>",
     panelHTML(),
-    '<div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+S</b> save.</div>',
+    '<div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Cmd/Ctrl+S</b> save.</div>',
     '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Click anywhere</b> to drop the shape. <b>Esc</b> to cancel.</div>',
   ].join("\n");
-  document.body.appendChild(root);
+  // Mounted on <html>, not <body>: a transformed ancestor becomes the containing
+  // block for position:fixed descendants, so a page with `body { transform:
+  // scale(...) }` (the A4/print layouts webtweak explicitly supports) would
+  // render the whole Overlay scaled and anchored to the body box.
+  document.documentElement.appendChild(root);
 
   var hoverBox = document.getElementById("wt-hover");
   var selBox = document.getElementById("wt-selected");
@@ -458,9 +491,14 @@
     box.hidden = false;
   }
 
+  // Only strip the classes the Overlay itself writes onto a page element. A
+  // prefix match would erase a page's own `wt-` design-system classes from the
+  // fingerprint, leaving Claude nothing but a fragile positional selector.
+  var WT_OWN_CLASSES = { "wt-shape": 1 };
+
   function nonWtClasses(el) {
     return Array.prototype.filter.call(el.classList, function (c) {
-      return c.indexOf("wt-") !== 0;
+      return !WT_OWN_CLASSES[c];
     });
   }
 
@@ -575,14 +613,23 @@
     var e = edited.get(el);
     // A created shape has no authored baseline to revert to - resetting it removes it.
     if (e && e.shape) {
+      // Removing a shape is a delete, so it must be undoable: without this the
+      // button silently destroys work and Ctrl+Z pops some older, unrelated step.
+      var sib = el.nextSibling, parent = el.parentNode;
+      undoStack.push([{ el: el, restore: { entry: e, parent: parent, before: sib } }]);
       if (el === selectedEl) deselect();
-      if (el.parentNode) el.parentNode.removeChild(el);
+      if (parent) parent.removeChild(el);
       edited.delete(el);
       dirty = hasRealEdits();
-      status("shape removed");
+      status("shape removed - Cmd/Ctrl+Z to undo");
       return;
     }
     if (e) {
+      // Record every change being discarded so one Ctrl+Z brings them all back.
+      var steps = Object.keys(e.changes).map(function (p) {
+        return { el: el, prop: p, prev: e.changes[p] };
+      });
+      if (steps.length) undoStack.push(steps);
       if (e.origStyle == null) el.removeAttribute("style");
       else el.setAttribute("style", e.origStyle);
       edited.delete(el);
@@ -711,9 +758,23 @@
       if (p === "nudge") { ent._x = v.dx; ent._y = v.dy; }  // re-seed the drag accumulator to the snapped value
     });
   }
+  // Drop the override and the recorded change for one control, restoring the
+  // authored inline style plus whatever other edits remain on the element.
+  function revertControl(c) {
+    var ent = edited.get(selectedEl);
+    if (ent && ent.changes[c.prop] !== undefined) pushUndoWrite(selectedEl, c.prop);
+    if (ent) delete ent.changes[c.prop];
+    rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
+    dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
+    positionBox(selBox, selectedEl);
+  }
+
   function writeControl(c, raw) {
     if (!selectedEl) return;
-    if (raw === "" && c.kind !== "align") return;           // cleared field: nothing to apply/record
+    // Clearing a field means "I don't want this change after all", so it must
+    // drop any recorded change - not return early and leave the abandoned value
+    // sitting in the edits file for Claude to reconcile into real source.
+    if (raw === "" && c.kind !== "align") return revertControl(c);
     if (c.box) raw = Math.max(1, parseInt(raw, 10) || 1);   // width/height floor of 1, matching resize
     // Setting a control back to the value it was populated with means "revert this
     // property" - drop the override + the recorded change rather than baking a no-op
@@ -729,15 +790,7 @@
     var noRevert = selectedEl.__wtShape && (c.shapeOnly || c.box);
     // Guard the "" === "" trap: an engine that serialises an asymmetric computed
     // shorthand as "" must not make every typed value look like a revert.
-    if (!noRevert && revertTarget !== "" && revertTarget === baselines[c.id]) {
-      var ent = edited.get(selectedEl);
-      if (ent && ent.changes[c.prop] !== undefined) pushUndoWrite(selectedEl, c.prop);
-      if (ent) delete ent.changes[c.prop];
-      rebuildInline(selectedEl, ent);  // restore authored inline + remaining edits (preserves longhands)
-      dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
-      positionBox(selBox, selectedEl);
-      return;
-    }
+    if (!noRevert && revertTarget !== "" && revertTarget === baselines[c.id]) return revertControl(c);
     var v = c.unit ? raw + c.unit : raw;
     if (c.prop === "font-family") v = quoteFamily(raw);
     // Don't bake a phantom patch the page never showed: if the browser would
@@ -849,7 +902,7 @@
             else nudgePrev = ((edited.get(el) || {}).changes || {}).nudge;
           },
           end: function () {
-            interacting = false;
+            endGesture();
             if (el.__wtShape) {
               pushGestureUndo(el, MOVE_PROPS, movePrev);
             } else {
@@ -903,7 +956,7 @@
             resizePrev = snapshotProps(el, RESIZE_PROPS);
           },
           end: function () {
-            interacting = false;
+            endGesture();
             pushGestureUndo(el, RESIZE_PROPS, resizePrev);
           },
           move: function (event) {
@@ -950,7 +1003,7 @@
           positionBox(selBox, el);
         }
         function up() {
-          interacting = false;
+          endGesture();
           grip.removeEventListener("pointermove", move);
           grip.removeEventListener("pointerup", up);
           grip.removeEventListener("pointercancel", up);
@@ -1002,6 +1055,7 @@
       placeShape(pendingShape, ev.clientX + window.scrollX, ev.clientY + window.scrollY);
       return;
     }
+    if (clickEndsGesture()) return;             // tail of a drag/resize: keep the selection
     // A click inside a shape lands on its child <polygon>/<rect>; select the <svg>
     // wrapper (the thing in `edited`) instead of the inert child.
     var target = ev.target;

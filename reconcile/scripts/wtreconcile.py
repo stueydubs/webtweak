@@ -37,6 +37,22 @@ def _load(path: str) -> dict:
     if batches is not None and (not isinstance(batches, list)
                                 or any(not isinstance(b, dict) for b in batches)):
         _die(f"{path} has a malformed batches array (corrupt edits file)")
+    # One level deeper: without this, a malformed patches/changes container printed
+    # a partial listing and then died with a raw traceback, and `status`/`--full`
+    # disagreed with `pending` about whether the same file was corrupt at all.
+    for b in batches or []:
+        patches = b.get("patches")
+        if patches is None:
+            continue
+        if not isinstance(patches, list) or any(not isinstance(p, dict) for p in patches):
+            _die(f"{path} has a malformed patches array (corrupt edits file)")
+        for p in patches:
+            changes = p.get("changes")
+            if changes is not None and not isinstance(changes, dict):
+                _die(f"{path} has a malformed changes object (corrupt edits file)")
+            fp = p.get("fingerprint")
+            if fp is not None and not isinstance(fp, dict):
+                _die(f"{path} has a malformed fingerprint object (corrupt edits file)")
     return doc
 
 
@@ -47,7 +63,10 @@ def _save(path: str, doc: dict) -> None:
     tmp = p.parent / (p.name + ".tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            f.write(json.dumps(doc, indent=2) + "\n")
+            # ensure_ascii=False to match what the server writes (JSON.stringify
+            # emits raw UTF-8). Escaping here would rewrite every non-ASCII
+            # character on each mark, churning the diff in the site's own repo.
+            f.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
         tmp.replace(p)
@@ -102,7 +121,14 @@ def pending(args) -> None:
         print(f"[{i}] session={b.get('sessionId')} saved={b.get('savedAt')} "
               f"viewport={b.get('viewport')} patches={len(patches)}")
         for p in patches:
-            print(f"    - {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]")
+            # Flag create patches: they need a different reconcile path (insert
+            # clean source, absolute placement sanctioned), and reading them as
+            # edit patches sends Claude hunting for an element that isn't there.
+            if p.get("op") == "create":
+                lead = f"+ create {p.get('shape', 'shape')} ->"
+            else:
+                lead = "-"
+            print(f"    {lead} {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]")
 
 
 def mark(args) -> None:
@@ -159,7 +185,8 @@ def main() -> None:
     m = sub.add_parser("mark", help="mark pending batch(es) reconciled")
     m.add_argument("file")
     m.add_argument("session", nargs="?", default=None,
-                   help="sessionId to mark (all pending if omitted)")
+                   help="sessionId to mark (if omitted, marks the single pending "
+                        "batch; refuses when more than one is pending)")
     m.set_defaults(fn=mark)
 
     s = sub.add_parser("status", help="report pending vs reconciled counts")

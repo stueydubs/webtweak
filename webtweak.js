@@ -19,6 +19,14 @@ const TOOL_DIR   = path.dirname(path.resolve(__filename));
 const OVERLAY_DIR = path.join(TOOL_DIR, 'overlay');
 const RESERVED   = '/__webtweak__/';
 const MAX_BODY   = 8 * 1024 * 1024; // 8 MB cap on a save payload
+const MAX_BAKS   = 3;               // keep only the newest N corrupt-file backups
+const VERSION    = readVersion();
+
+function readVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(TOOL_DIR, 'package.json'), 'utf8')).version || '0.0.0';
+  } catch (_) { return '0.0.0'; }
+}
 
 const OVERLAY_ASSETS = {
   'overlay.js':       'application/javascript; charset=utf-8',
@@ -50,6 +58,13 @@ const MIME = {
   '.xml':  'text/xml; charset=utf-8',
   '.mp4':  'video/mp4',
   '.webm': 'video/webm',
+  '.mp3':  'audio/mpeg',
+  '.ogg':  'audio/ogg',
+  '.wasm': 'application/wasm',
+  '.map':  'application/json',
+  '.csv':  'text/csv; charset=utf-8',
+  '.jsonld':      'application/ld+json',
+  '.webmanifest': 'application/manifest+json',
 };
 
 // --- pure functions (no I/O) -----------------------------------------------
@@ -110,10 +125,35 @@ function applyBatch(doc, payload, now) {
   return doc;
 }
 
+// webtweak binds to loopback, but "loopback" is not an origin boundary: any page
+// the user has open can POST to a guessable localhost port, and a text/plain body
+// is a CORS *simple* request so no preflight stands in the way. The edits file is
+// read back as instructions during reconcile, so an unauthenticated write reaches
+// real source. Only same-origin (or origin-less, i.e. curl) requests may save.
+function originAllowed(req, port) {
+  const origin = req.headers['origin'];
+  if (origin === undefined) return true;      // non-browser client; no ambient authority
+  return origin === `http://127.0.0.1:${port}` || origin === `http://localhost:${port}`;
+}
+
+// Reject a forged Host header (DNS rebinding): an attacker-controlled name that
+// resolves to 127.0.0.1 would otherwise make the served directory same-origin.
+function hostAllowed(req, port) {
+  const host = req.headers['host'];
+  if (host === undefined) return true;        // HTTP/1.0 client
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+}
+
 function writeJsonAtomic(filePath, doc) {
-  const tmp = filePath + '.tmp';
+  // Namespace the temp file by pid so two webtweak processes on the same page
+  // cannot clobber each other's half-written file.
+  const tmp = `${filePath}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+    const fd = fs.openSync(tmp, 'w');
+    try {
+      fs.writeFileSync(fd, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+      fs.fsyncSync(fd);            // durability parity with the reference implementation
+    } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, filePath);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch (_) {}
@@ -121,15 +161,32 @@ function writeJsonAtomic(filePath, doc) {
   }
 }
 
+// Keep only the newest MAX_BAKS corrupt-file backups; they land in the user's own
+// site repo next to the page, so unbounded growth is their mess, not ours.
+function pruneBackups(editsPath) {
+  const dir  = path.dirname(editsPath);
+  const base = path.basename(editsPath) + '.';
+  let baks;
+  try {
+    baks = fs.readdirSync(dir)
+      .filter(f => f.startsWith(base) && f.endsWith('.bak'))
+      .sort();
+  } catch (_) { return; }
+  for (const f of baks.slice(0, Math.max(0, baks.length - MAX_BAKS))) {
+    try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
+  }
+}
+
 // --- HTTP helpers ----------------------------------------------------------
 
-function send(res, code, body, ctype) {
+function send(res, code, body, ctype, method) {
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8');
   res.writeHead(code, {
     'Content-Type':   ctype,
     'Content-Length': buf.length,
     'Cache-Control':  'no-store',
   });
+  if (method === 'HEAD') return res.end();
   res.end(buf);
 }
 
@@ -168,19 +225,59 @@ function serveEdits(editsPath, res) {
   send(res, 200, body, 'application/json');
 }
 
-function serveHtml(filePath, targetName, res) {
+function contained(p, root) {
+  return p === root || p.startsWith(root + path.sep);
+}
+
+function serveHtml(filePath, targetName, method, res) {
   let html;
   try { html = fs.readFileSync(filePath, 'utf8'); }
   catch (e) { return sendError(res, 500, 'Read error'); }
-  send(res, 200, injectOverlay(html, targetName), 'text/html; charset=utf-8');
+  send(res, 200, injectOverlay(html, targetName), 'text/html; charset=utf-8', method);
 }
 
-function serveStatic(filePath, res) {
-  let buf;
-  try { buf = fs.readFileSync(filePath); }
-  catch (_) { return sendError(res, 404, 'Not found'); }
+// Any HTML that is not the target page is served as-is, so following a nav link
+// out of the target gives you the real page rather than a mis-aimed editor.
+function servePlainHtml(filePath, method, res) {
+  let html;
+  try { html = fs.readFileSync(filePath, 'utf8'); }
+  catch (e) { return sendError(res, 500, 'Read error'); }
+  send(res, 200, html, 'text/html; charset=utf-8', method);
+}
+
+// Stream rather than readFileSync: this server is single-threaded, so slurping a
+// hero video or a large PDF blocks every other request (including the overlay's
+// own assets). Range support matters too - Safari and iOS refuse to play a
+// <video> without it, which would make the page render unlike production.
+function serveStatic(filePath, size, method, range, res) {
   const ctype = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-  send(res, 200, buf, ctype);
+  const head  = { 'Content-Type': ctype, 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' };
+
+  let start = 0, end = size - 1, code = 200;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(range || '');
+  if (m && size > 0) {
+    if (m[1] === '' && m[2] === '') return sendError(res, 416, 'Range Not Satisfiable');
+    if (m[1] === '') { start = Math.max(0, size - parseInt(m[2], 10)); }
+    else {
+      start = parseInt(m[1], 10);
+      if (m[2] !== '') end = Math.min(end, parseInt(m[2], 10));
+    }
+    if (isNaN(start) || isNaN(end) || start > end || start >= size) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}`, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    code = 206;
+    head['Content-Range'] = `bytes ${start}-${end}/${size}`;
+  }
+
+  head['Content-Length'] = size === 0 ? 0 : end - start + 1;
+  res.writeHead(code, head);
+  if (method === 'HEAD' || size === 0) return res.end();
+
+  const stream = fs.createReadStream(filePath, { start, end });
+  stream.on('error', () => res.destroy());
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
 }
 
 function handleSave(body, targetName, serveRoot, res) {
@@ -203,11 +300,19 @@ function handleSave(body, targetName, serveRoot, res) {
     }
     try { doc = JSON.parse(raw); }
     catch (_) {
-      // Corrupt JSON - back up and start fresh
-      const stamp  = Date.now();
-      const backup = editsPath + '.' + stamp + '.bak';
-      try { fs.renameSync(editsPath, backup); } catch (_) {}
+      // Corrupt JSON - back up and start fresh. If the backup cannot be taken we
+      // must NOT continue: writeJsonAtomic would overwrite the only copy of a
+      // file the user may still be able to salvage by hand.
+      const backup = `${editsPath}.${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
+      try { fs.renameSync(editsPath, backup); }
+      catch (e) {
+        return send(res, 500, JSON.stringify({
+          ok: false,
+          error: `edits file is corrupt and could not be backed up: ${e.message}`,
+        }), 'application/json');
+      }
       log(`edits file corrupt; backed up to ${path.basename(backup)}`);
+      pruneBackups(editsPath);
     }
   }
 
@@ -224,22 +329,32 @@ function handleSave(body, targetName, serveRoot, res) {
   send(res, 200, JSON.stringify({ ok: true, file: path.basename(editsPath), patches: n }), 'application/json');
 }
 
-function createHandler(targetPath, serveRoot) {
+function createHandler(targetPath, serveRoot, state) {
   const targetName = path.basename(targetPath);
   const stem       = path.basename(targetName, path.extname(targetName));
 
   return function (req, res) {
     const rawPath = (req.url || '/').split('?')[0];
 
+    // A forged Host means someone is driving us through a name they control.
+    if (!hostAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
+
     // --- webtweak API endpoints and overlay assets -------------------------
     if (rawPath.startsWith(RESERVED)) {
       const name = rawPath.slice(RESERVED.length);
 
       if (name === 'edits' && req.method === 'GET') {
+        if (!originAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
         return serveEdits(path.join(serveRoot, stem + '.webtweak.json'), res);
       }
 
       if (name === 'save' && req.method === 'POST') {
+        if (!originAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
+        // Require a JSON content-type: text/plain would make this a CORS simple
+        // request that no preflight can stop.
+        const ctype = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+        if (ctype !== 'application/json') return sendError(res, 415, 'Expected application/json');
+
         const lenStr = req.headers['content-length'];
         const length = parseInt(lenStr, 10);
         if (!lenStr || isNaN(length) || length < 0) return sendError(res, 400, 'Bad Content-Length');
@@ -249,11 +364,15 @@ function createHandler(targetPath, serveRoot) {
         let received = 0;
         req.on('data', chunk => {
           received += chunk.length;
-          if (received <= MAX_BODY) chunks.push(chunk);
+          if (received > MAX_BODY) {   // stop reading rather than draining the whole upload
+            sendError(res, 413, 'Payload too large');
+            return req.destroy();
+          }
+          chunks.push(chunk);
         });
         req.on('end', () => {
-          if (received > MAX_BODY) return sendError(res, 413, 'Payload too large');
-          if (received < length)   return sendError(res, 400, 'Incomplete request body');
+          if (received > MAX_BODY) return;                 // already answered above
+          if (received < length) return sendError(res, 400, 'Incomplete request body');
           handleSave(Buffer.concat(chunks).toString('utf8'), targetName, serveRoot, res);
         });
         req.on('error', () => sendError(res, 400, 'Incomplete request body'));
@@ -272,20 +391,40 @@ function createHandler(targetPath, serveRoot) {
     catch (_) { return sendError(res, 400, 'Bad URL'); }
 
     // Resolve and contain within serveRoot (path-traversal guard)
-    const local = path.resolve(serveRoot, decoded.replace(/^\/+/, ''));
-    if (local !== serveRoot &&
-        !local.startsWith(serveRoot + path.sep))
-      return sendError(res, 403, 'Forbidden');
+    let local = path.resolve(serveRoot, decoded.replace(/^\/+/, ''));
+    if (!contained(local, serveRoot)) return sendError(res, 403, 'Forbidden');
 
-    // No directory listings
     let stat;
     try { stat = fs.statSync(local); }
     catch (_) { return sendError(res, 404, 'Not found'); }
-    if (stat.isDirectory()) return sendError(res, 404, 'No listing');
+
+    // A directory serves its index.html if present. Listings stay off either way:
+    // without this, every root-relative nav link on the page dead-ends.
+    if (stat.isDirectory()) {
+      const index = path.join(local, 'index.html');
+      try {
+        if (!fs.statSync(index).isFile()) throw new Error('not a file');
+      } catch (_) { return sendError(res, 404, 'No listing'); }
+      local = index;
+      stat  = fs.statSync(local);
+    }
+
+    // path.resolve does not follow symlinks, so a link inside the served
+    // directory could otherwise hand out a file from anywhere on disk.
+    let real;
+    try { real = fs.realpathSync(local); }
+    catch (_) { return sendError(res, 404, 'Not found'); }
+    if (!contained(real, state.realRoot)) return sendError(res, 403, 'Forbidden');
 
     const ext = path.extname(local).toLowerCase();
-    if (ext === '.html' || ext === '.htm') return serveHtml(local, targetName, res);
-    serveStatic(local, res);
+    if (ext === '.html' || ext === '.htm') {
+      // Only the target page gets the overlay. Injecting into every HTML file
+      // handed the editor a page it could not correctly fingerprint, and wrote
+      // those patches into the *target's* edits file.
+      if (real === state.realTarget) return serveHtml(local, targetName, req.method, res);
+      return servePlainHtml(local, req.method, res);
+    }
+    serveStatic(local, stat.size, req.method, req.headers['range'], res);
   };
 }
 
@@ -297,24 +436,50 @@ function openBrowser(url) {
     win32:  ['cmd',      ['/c', 'start', '', url]],
   };
   const [cmd, args] = cmds[os.platform()] || ['xdg-open', [url]];
-  execFile(cmd, args, { detached: true }, () => {});
+  const child = execFile(cmd, args, { detached: true }, () => {});
+  child.unref();   // detached alone still holds an event-loop reference
 }
 
 // --- server ----------------------------------------------------------------
 
+// Edits left pending from a previous session are invisible otherwise: restore()
+// only re-applies the current session's own batch, so they silently accumulate.
+function countPending(targetPath) {
+  const stem      = path.basename(targetPath, path.extname(targetPath));
+  const editsPath = path.join(path.dirname(targetPath), stem + '.webtweak.json');
+  try {
+    const doc = JSON.parse(fs.readFileSync(editsPath, 'utf8'));
+    if (!doc || !Array.isArray(doc.batches)) return 0;
+    return doc.batches.filter(b => b && b.status === 'pending').length;
+  } catch (_) { return 0; }
+}
+
 function serve(targetPath, port, openBrowserFlag) {
   const serveRoot = path.dirname(targetPath);
-  const handler   = createHandler(targetPath, serveRoot);
+  // Resolved once at boot: the containment check compares real paths, so the
+  // root it compares against must be real too (macOS /tmp -> /private/tmp).
+  const state = {
+    port:       port,
+    realRoot:   fs.realpathSync(serveRoot),
+    realTarget: fs.realpathSync(targetPath),
+  };
+  const handler   = createHandler(targetPath, serveRoot, state);
   const server    = http.createServer(handler);
+  server.requestTimeout = 30_000;   // a lying Content-Length must not park a socket forever
 
   server.listen(port, '127.0.0.1', () => {
     const actual = server.address().port;
+    state.port   = actual;          // --port 0 means the real port is only known now
     const url    = `http://127.0.0.1:${actual}/${path.basename(targetPath)}`;
     process.stdout.write(`webtweak editing: ${targetPath}\n`);
     process.stdout.write(`  serving ${serveRoot}\n`);
     // Flush before remaining lines so the test harness sees the port immediately.
     process.stdout.write(`  listening on 127.0.0.1:${actual}\n`, () => {
       process.stdout.write(`  open    ${url}\n`);
+      const pending = countPending(targetPath);
+      if (pending) {
+        process.stdout.write(`  note    ${pending} batch(es) from a previous session are not yet reconciled\n`);
+      }
       process.stdout.write(`  Ctrl-C to stop.\n\n`);
     });
     if (openBrowserFlag) openBrowser(url);
@@ -336,45 +501,111 @@ function serve(targetPath, port, openBrowserFlag) {
 
 // --- CLI -------------------------------------------------------------------
 
+const USAGE = 'Usage: webtweak <page.html> [--port N] [--no-browser]';
+
+const HELP = `webtweak ${VERSION} - a local visual editor for hand-coded HTML/CSS.
+
+${USAGE}
+
+Opens your page in the browser with an editing overlay. Drag, resize and
+restyle by eye; webtweak records what changed - it never edits your source.
+On Save it writes <page>.webtweak.json next to the page, and Claude
+reconciles those changes into your real HTML/CSS.
+
+Arguments:
+  <page.html>       the local source page to edit; its directory is served
+                    so CSS, images and fonts resolve as they do in your build
+
+Options:
+  --port N          port to listen on (default 8723; 0 picks any free port)
+  --no-browser      start the server without opening a browser
+  --install-skill   copy the reconcile skill into ~/.claude/skills/ and exit
+  -v, --version     print the version and exit
+  -h, --help        show this help and exit
+
+Reconciling needs Python 3 and Claude. Run --install-skill once, then ask
+Claude Code to "reconcile page.html".
+
+Home: https://github.com/stueydubs/webtweak`;
+
+// Works identically for a git clone, a global install and npx - the skill is
+// copied out of the installed package rather than the user's cwd.
+function installSkill() {
+  const src  = path.join(TOOL_DIR, 'reconcile');
+  const dest = path.join(os.homedir(), '.claude', 'skills', 'webtweak-reconcile');
+  if (!fs.existsSync(path.join(src, 'SKILL.md'))) {
+    process.stderr.write(`webtweak: bundled skill not found at ${src}\n`);
+    process.exit(1);
+  }
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.cpSync(src, dest, { recursive: true });
+    // npm does not preserve the +x bit on every install path; the skill invokes
+    // this script directly, so make sure it is runnable wherever it landed.
+    try { fs.chmodSync(path.join(dest, 'scripts', 'wtreconcile.py'), 0o755); } catch (_) {}
+  } catch (e) {
+    process.stderr.write(`webtweak: could not install skill: ${e.message}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`webtweak: reconcile skill installed to ${dest}\n`);
+  process.stdout.write('  restart Claude Code, then ask it to "reconcile <page>.html"\n');
+  process.exit(0);
+}
+
+function die(msg) {
+  process.stderr.write(`webtweak: ${msg}\n`);
+  process.exit(1);
+}
+
 function main() {
   const args = process.argv.slice(2);
   let htmlFile = null, port = 8723, noBrowser = false;
 
   for (let i = 0; i < args.length; i++) {
-    if ((args[i] === '--port') && args[i + 1]) {
-      port = parseInt(args[++i], 10);
-      if (isNaN(port)) { process.stderr.write('webtweak: --port must be a number\n'); process.exit(1); }
-    } else if (args[i] === '--no-browser') {
+    const a = args[i];
+    // Accept --port=N as well as --port N; argparse did, so users expect it.
+    const eq = a.startsWith('--port=') ? a.slice('--port='.length) : null;
+
+    if (a === '--port' || eq !== null) {
+      const raw = eq !== null ? eq : args[++i];
+      if (raw === undefined) die('--port needs a number, e.g. --port 8723');
+      if (!/^\d+$/.test(raw)) die(`--port must be a whole number, got ${raw}`);
+      port = parseInt(raw, 10);
+      if (port > 65535) die(`--port must be between 0 and 65535, got ${port}`);
+    } else if (a === '--no-browser') {
       noBrowser = true;
-    } else if (args[i] === '--help' || args[i] === '-h') {
-      process.stdout.write('Usage: webtweak <page.html> [--port N] [--no-browser]\n');
+    } else if (a === '--install-skill') {
+      installSkill();
+    } else if (a === '--help' || a === '-h') {
+      process.stdout.write(HELP + '\n');
       process.exit(0);
-    } else if (!args[i].startsWith('-')) {
-      htmlFile = args[i];
+    } else if (a === '--version' || a === '-v') {
+      process.stdout.write(VERSION + '\n');
+      process.exit(0);
+    } else if (!a.startsWith('-')) {
+      if (htmlFile !== null) die(`expected one page, got two: ${htmlFile} and ${a}`);
+      htmlFile = a;
     } else {
-      process.stderr.write(`webtweak: unknown option ${args[i]}\n`);
-      process.exit(1);
+      die(`unknown option ${a}\n${USAGE}`);
     }
   }
 
-  if (!htmlFile) {
-    process.stderr.write('webtweak: path to an .html file is required\n');
-    process.stderr.write('Usage: webtweak <page.html> [--port N] [--no-browser]\n');
-    process.exit(1);
-  }
+  if (!htmlFile) die(`path to an .html file is required\n${USAGE}`);
 
   const targetPath = path.resolve(htmlFile);
-  if (!fs.existsSync(targetPath)) {
-    process.stderr.write(`webtweak: not a file: ${targetPath}\n`);
-    process.exit(1);
-  }
+  let stat;
+  try { stat = fs.statSync(targetPath); }
+  catch (_) { die(`no such file: ${targetPath}`); }
+  if (stat.isDirectory()) die(`that's a directory, not a page: ${targetPath}\n${USAGE}`);
+
   const ext = path.extname(targetPath).toLowerCase();
-  if (ext !== '.html' && ext !== '.htm') {
-    process.stderr.write(`webtweak: expected an .html file, got ${ext || 'no extension'}\n`);
-    process.exit(1);
-  }
+  if (ext !== '.html' && ext !== '.htm')
+    die(`expected an .html file, got ${ext || 'no extension'}: ${targetPath}`);
 
   serve(targetPath, port, !noBrowser);
 }
 
-main();
+// Importable as a module so the pure functions can be unit-tested directly.
+// Requiring this file must never start a server.
+if (require.main === module) main();
+else module.exports = { injectOverlay, overlayMarkup, applyBatch };

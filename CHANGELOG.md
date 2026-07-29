@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
+### Security
+- The save endpoint now rejects cross-origin writes. Any page open in the same
+  browser could previously POST to webtweak's (fixed, guessable) port and write
+  a batch into the edits file - which Claude then reads as instructions during
+  reconcile, so an unauthenticated write reached real source. Saves now require a
+  same-origin `Origin` (or none, for a non-browser client) and
+  `Content-Type: application/json`; `text/plain` was a CORS *simple* request no
+  preflight could stop.
+- A forged `Host` header is now rejected, closing a DNS-rebinding path that made
+  the served directory readable by an attacker-controlled page.
+- Symlinks can no longer escape the served directory. The traversal guard resolved
+  `..` correctly but did not resolve symlinks, so a link inside your site folder
+  served any file on disk.
+
 ### Added
 - **Shape creation** - draw decorative shapes (square, rectangle, circle,
   ellipse, triangle, star, diamond, pentagon, hexagon) onto the page from a new
@@ -40,6 +56,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ancestor (e.g. A4/print-preview layouts).
 - Picking a shape to place now clears any current selection first, so its grips
   can't swallow the placement click; Deselect/Esc cancels an in-progress placement.
+- **Clearing a field now reverts that change** instead of doing nothing. Typing a
+  value and then emptying the box left the abandoned value recorded, so it shipped
+  to Claude and got written into your real source.
+- **The selection no longer jumps after a drag.** Every nudge or resize was
+  followed by a browser click that re-selected whichever child sat under the
+  cursor, so the grips silently moved to an element you never chose and the next
+  resize targeted the wrong thing.
+- **Reset is undoable.** It recorded no undo step, so on a shape it was an
+  unrecoverable delete, and on any element it discarded every edit with no way back.
+- Undoing past a Reset no longer resurrects the deleted element as a phantom
+  patch carrying a fingerprint computed on a detached node.
+- A directory URL now serves its `index.html` instead of 404ing, so root-relative
+  nav links (`href="/"`) work. Directory listings stay off.
+- The overlay is only injected into the page you opened. Following a nav link
+  previously gave you a fully functional editor pointed at the wrong page, whose
+  saves landed in the original page's edits file with mismatched fingerprints.
+- The overlay UI mounts on `<html>` rather than `<body>`, so a page with
+  `body { transform: scale(...) }` (A4/print layouts) no longer renders the whole
+  editor scaled and mis-anchored.
+- A page's own `wt-`prefixed classes are no longer stripped from the fingerprint;
+  only webtweak's own `wt-shape` class is.
+- If a corrupt edits file cannot be backed up, the save now fails loudly instead
+  of overwriting the only copy while logging that a backup was taken. Backups are
+  capped at the newest 3.
+- `--version` works; `--port` validates its range instead of crashing with a raw
+  Node stack trace; `--port=N` is accepted; a directory argument says so; passing
+  two pages is an error rather than silently using the last.
+- The reconcile helper writes UTF-8 rather than `\u` escapes, matching the server,
+  so marking a batch no longer rewrites every non-ASCII character in your repo.
+
+### Changed
+- `--help` now documents every flag, the loop, and the Python 3 requirement.
+- New `--install-skill` flag copies the bundled reconcile skill into
+  `~/.claude/skills/`, which works identically for a clone, a global install and
+  npx. Previously only a git clone had a documented path.
+- Static files stream rather than being read whole, and `Range` requests are
+  supported - a large asset no longer blocks the single-threaded server, and
+  `<video>` plays in Safari and on iOS.
+- Added MIME types for `.webmanifest`, `.map`, `.mp3`, `.ogg`, `.wasm`, `.csv`
+  and `.jsonld`, which previously loaded as `application/octet-stream`.
+- Startup reports any batches left unreconciled from a previous session.
+- `reconcile/scripts/wtreconcile.py` is executable, as the skill's own
+  instructions assume. It previously failed with `Permission denied` for everyone.
+- The reconcile skill now covers the zero-match case, fingerprint truncation, and
+  a verification pass; it requires every patch to be accounted for before a batch
+  is marked, so a skipped patch can no longer be silently retired. Its nudge
+  guidance is corrected: small offsets are intent, never drag jitter, and
+  `position: relative` is an acceptable clean form.
+
+### Removed
+- The parallel Python implementation (`webtweak.py`). The unit tests asserted
+  against it while users ran `webtweak.js`, so two deliberately broken invariants
+  in the shipped code - including "a reconciled batch is never modified" - left the
+  suite fully green. The tests now drive `webtweak.js` itself, and CI runs them
+  across Node 18/20/22/24 plus a dedicated browser job where Playwright is always
+  installed (its 31 e2e tests previously collapsed into one silent skip line).
 
 ## [0.1.1] - 2026-06-24
 

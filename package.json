@@ -1,7 +1,11 @@
 {
   "name": "webtweak",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local visual editor for hand-coded HTML/CSS — captures edits as patches, Claude reconciles them into source",
+  "author": "Stuart Walker (https://github.com/stueydubs)",
+  "bugs": {
+    "url": "https://github.com/stueydubs/webtweak/issues"
+  },
   "bin": {
     "webtweak": "webtweak.js"
   },
@@ -15,9 +19,16 @@
   },
   "keywords": [
     "visual-editor",
+    "html-editor",
+    "css-editor",
+    "wysiwyg",
+    "pinegrow-alternative",
+    "local-editor",
+    "claude-code",
+    "claude",
+    "ai",
     "css",
     "html",
-    "wysiwyg",
     "local"
   ],
   "license": "MIT",

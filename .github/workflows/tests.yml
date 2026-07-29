@@ -1,0 +1,52 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The stdlib suite across every Node the package claims to support. webtweak.js
+  # uses no API newer than ES2017, but `engines: >=18` was previously untested.
+  stdlib:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run unit + loop tests
+        run: python -m pytest -q --ignore=tests/test_e2e_browser.py
+
+  # Separate job so Playwright is always installed here. The e2e module uses a
+  # module-level importorskip, so without a dedicated job its 31 tests collapse
+  # into a single skip line and the suite reads green while unrun.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Playwright
+        run: |
+          pip install playwright pytest
+          playwright install --with-deps chromium
+      - name: Run browser e2e
+        run: python -m pytest -q tests/test_e2e_browser.py
+      - name: Fail if the browser suite skipped instead of running
+        run: |
+          python -m pytest tests/test_e2e_browser.py --collect-only -q \
+            | grep -q "test_" || {
+              echo "e2e collected nothing - Playwright import likely skipped"; exit 1; }

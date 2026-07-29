@@ -38,6 +38,26 @@ def _drag(page, box, dx, dy, steps=8):
     page.mouse.up()
 
 
+def _box(page, sel):
+    return page.eval_on_selector(sel, """el => {
+        const r = el.getBoundingClientRect();
+        return {x: r.x, y: r.y, width: r.width, height: r.height};
+    }""")
+
+
+def _select_card(page):
+    """Select div.card itself, not one of its children.
+
+    A plain page.click('.card') lands on the element's centre, which is over the
+    card's <p>, so the overlay selects the paragraph and the test silently
+    exercises the wrong element. The card has padding:24px, so clicking 8px in
+    from its corner hits the card's own box. The assertion makes a mis-select
+    fail loudly rather than quietly testing something else.
+    """
+    page.click(".card", position={"x": 8, "y": 8})
+    assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "div.card"
+
+
 def test_hover_recovers_after_escape_during_drag(served):
     """Pressing Esc mid-drag tears interact down without an 'end' event; the overlay
     must still reset `interacting` so the hover box keeps working afterwards."""
@@ -47,11 +67,8 @@ def test_hover_recovers_after_escape_during_drag(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click(".card")
-        box = page.eval_on_selector(".card", """el => {
-            const r = el.getBoundingClientRect();
-            return {x: r.x, y: r.y, width: r.width, height: r.height};
-        }""")
+        _select_card(page)
+        box = _box(page, ".card")
         # start a drag and press Esc before releasing (interact.unset, no 'end' fires)
         cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
         page.mouse.move(cx, cy)
@@ -85,14 +102,14 @@ def test_select_edit_nudge_resize_save_loop(served):
         assert page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize") == "52px"
 
         # --- nudge: drag the card interior leftward ---
-        page.click(".card")
-        cardbox = page.eval_on_selector(".card", """el => {
-            const r = el.getBoundingClientRect();
-            return {x: r.x, y: r.y, width: r.width, height: r.height};
-        }""")
+        _select_card(page)
+        cardbox = _box(page, ".card")
         _drag(page, cardbox, -24, 0)
 
         # --- resize: drag the bottom-right grip outward ---
+        # Re-read the box: the nudge above moved the card, so the pre-drag
+        # coordinates no longer point at the grip.
+        cardbox = _box(page, ".card")
         page.mouse.move(cardbox["x"] + cardbox["width"] - 3, cardbox["y"] + cardbox["height"] - 3)
         page.mouse.down()
         page.mouse.move(cardbox["x"] + cardbox["width"] + 30,
@@ -117,8 +134,9 @@ def test_select_edit_nudge_resize_save_loop(served):
     h1 = patches["headline"]
     assert h1["changes"]["font-size"] == "52px"
 
-    # the card carries a 4px-snapped nudge and a resize
-    card = next(p for k, p in patches.items() if "card" in k)
+    # the card carries a 4px-snapped nudge and a resize. Match the card itself,
+    # not a descendant whose positional selector also contains "card".
+    card = next(p for k, p in patches.items() if k.endswith("div.card"))
     assert "nudge" in card["changes"]
     assert card["changes"]["nudge"]["dx"] % 4 == 0
     assert "width" in card["changes"] and "height" in card["changes"]
@@ -906,7 +924,7 @@ def test_box_control_width_entry_is_recorded(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click(".card")               # block element, width controls enabled
+        _select_card(page)                # block element, width controls enabled
         page.fill("#wt-w", "350")
         page.dispatch_event("#wt-w", "input")
         page.click("#wt-save")
@@ -927,7 +945,7 @@ def test_cleared_field_records_no_patch(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click(".card")
+        _select_card(page)
         for field in ("#wt-fs", "#wt-w"):
             page.fill(field, "120")
             page.dispatch_event(field, "input")
@@ -948,7 +966,7 @@ def test_shorthand_margin_revert_records_nothing(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        page.click(".card")               # .card { margin: 32px 0; }
+        _select_card(page)                # .card { margin: 32px 0; }
         page.fill("#wt-margin", "32px 0")  # author shorthand == computed baseline
         page.dispatch_event("#wt-margin", "input")
         page.click("#wt-save")

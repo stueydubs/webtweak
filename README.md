@@ -2,15 +2,19 @@
 
 **▶ Live demo &amp; site: https://stueydubs.github.io/webtweak/**
 
-[![webtweak demo — edit by eye, Claude writes the CSS](site/demo-poster.png)](https://stueydubs.github.io/webtweak/)
+[![webtweak demo — edit by eye, Claude writes the CSS](https://raw.githubusercontent.com/stueydubs/webtweak/main/site/demo-poster.png)](https://stueydubs.github.io/webtweak/)
 
 A local, open-source visual editor for hand-coded HTML/CSS pages. You drag, resize, and restyle an existing page by eye; webtweak captures what you changed as machine-readable patches; Claude reconciles those patches into the real source (and pushes only if you ask).
 
-It is deliberately **half of a loop**. webtweak never rewrites your source - it only captures *intent*. The judgment-heavy work of locating elements and writing clean CSS is done by Claude on reconcile. That asymmetry is why a tool that would otherwise rival Pinegrow fits in a single Python file plus a browser overlay. See [`docs/adr/0001`](docs/adr/0001-capture-intent-not-rewrite-source.md).
+It is deliberately **half of a loop**. webtweak never rewrites your source - it only captures *intent*. The judgment-heavy work of locating elements and writing clean CSS is done by Claude on reconcile. That asymmetry is why a tool that would otherwise rival Pinegrow fits in one dependency-free script plus a browser overlay. See [`docs/adr/0001`](https://github.com/stueydubs/webtweak/blob/main/docs/adr/0001-capture-intent-not-rewrite-source.md).
+
+**You need Claude for the second half.** Claude Code with the bundled skill is the smooth path (`webtweak --install-skill`), but any Claude conversation works - paste `reconcile/SKILL.md` and your edits file. And without an LLM at all, `page.webtweak.json` is still a plain readable list of exactly what you changed, which you can apply by hand.
+
+**What v1 is for:** base layout and appearance work on hand-coded pages - resize, restyle, nudge, and drop in decorative shapes. It is *not* a responsive-design tool (you author at one viewport), it does not reorder your DOM, and it does not edit copy. Full list under [What v1 does not do](#what-v1-does-not-do).
 
 ## Install
 
-**Requirements:** Node.js 18+. No npm packages required.
+**Requirements:** Node.js 18+ for the editor. **Python 3** as well if you want the reconcile helper. No npm packages required.
 
 ```bash
 npm install -g webtweak
@@ -44,6 +48,9 @@ This boots a local server, serves the page's own directory (so CSS, images, and 
 |---|---|
 | `--port N` | Serve on port N (default 8723; `--port 0` picks any free port) |
 | `--no-browser` | Don't auto-open the browser |
+| `--install-skill` | Copy the reconcile skill into `~/.claude/skills/` and exit |
+| `-v`, `--version` | Print the version |
+| `-h`, `--help` | Show help |
 
 In the browser:
 
@@ -51,7 +58,9 @@ In the browser:
 - **Drag the interior** to nudge its position (snaps to a 4px grid).
 - **Drag the right, bottom, or corner grip** (the gold handles on the selection box) to resize it.
 - **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding.
-- **Reset this element** undoes your edits to the selected element.
+- **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
+- **Cmd/Ctrl+Z** undoes your last change, of any kind.
+- **Reset this element** discards all your edits to the selected element (also undoable).
 - **Save** when you're happy. **Cmd/Ctrl+S** saves, **Esc** deselects.
 
 A reload mid-session is safe: webtweak restores the current session's pending edits, and warns you if you have unsaved changes.
@@ -65,9 +74,22 @@ A reload mid-session is safe: webtweak restores the current session's pending ed
 
 Your source is never touched until that reconcile step - running webtweak is consequence-free.
 
+**Add these to your site's `.gitignore`** if you don't want the artefacts tracked (though the edits file makes a decent visual changelog if you do):
+
+```gitignore
+*.webtweak.json.tmp
+*.webtweak.json.*.bak
+```
+
 ## Installing the reconcile skill
 
-The reconcile step is packaged as a [Claude Code](https://claude.ai/code) skill. Copy it into your Claude skills directory:
+The reconcile step is packaged as a [Claude Code](https://claude.ai/code) skill. Install it from wherever webtweak lives:
+
+```bash
+webtweak --install-skill
+```
+
+That works for a git clone, a global install, and npx alike. To copy it by hand from a clone instead:
 
 ```bash
 mkdir -p ~/.claude/skills
@@ -88,31 +110,33 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
 - **Single viewport.** Changes are authored as base CSS; the session's viewport width is recorded so Claude can warn about mobile breakage, but deliberate per-breakpoint authoring is v2.
 - **Limited property set.** Borders, shadows, flex/grid alignment editors, and hover states are out of the v1 panel.
-- **Serves the page's own directory as web root.** A page in a subfolder that references site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 those and render with fallback styling. Open such a page from the repo root (or pass a path relative to it) so the real site root is `/`.
+- **Serves the page's own directory as web root.** A page in a subfolder that references site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 those and render with fallback styling. There is no `--root` flag yet, and the working directory makes no difference - the served root is always the page's own folder. Editing a page that depends on root-absolute assets is not supported in v1.
 
 ## Development
 
 ```bash
-python3 -m pytest tests/         # unit + HTTP integration tests (stdlib only)
+python3 -m pytest tests/ --ignore=tests/test_e2e_browser.py    # unit + HTTP integration
 ```
 
-The browser end-to-end test (`tests/test_e2e_browser.py`) skips unless Playwright is installed:
+The browser end-to-end tests (`tests/test_e2e_browser.py`, 31 of them) skip unless Playwright is installed. They skip as a *single* line, so check for it rather than assuming green:
 
 ```bash
 pip install playwright && playwright install chromium
-python3 -m pytest tests/test_e2e_browser.py
+python3 -m pytest tests/                                        # everything, nothing skipped
 ```
 
-Python stdlib only, no runtime dependencies. interact.js is vendored under `overlay/` for the drag/resize physics.
+The unit tests drive `webtweak.js` itself (via `tests/_wtjs.py`), so they guard the code the package actually ships. CI runs the stdlib suite across Node 18/20/22/24 and the browser suite in a job where Playwright is always present.
+
+No runtime dependencies. interact.js is vendored under `overlay/` for the drag/resize physics.
 
 ## Layout
 
-- `webtweak` - the CLI/server (pure functions `inject_overlay` and `apply_batch` plus a thin HTTP handler)
+- `webtweak.js` - the CLI/server: pure functions `injectOverlay` and `applyBatch` plus a thin HTTP handler. Node stdlib only. This is what ships.
 - `overlay/` - the browser overlay (`overlay.js`, `overlay.css`, vendored `interact.min.js`)
 - `fixtures/sample.html` - a sample editorial page for manual testing and the e2e
 - `tests/` - unit, integration, and browser tests
-- `reconcile/` - the Claude Code reconcile skill (`SKILL.md`) and the `wtreconcile.py` helper
-- `CONTEXT.md`, `docs/` - the domain language, the PRD, the ADR, and the issue breakdown
+- `reconcile/` - the Claude Code reconcile skill (`SKILL.md`) and the `wtreconcile.py` helper (Python 3)
+- `CONTEXT.md`, `docs/` - the domain language, the PRD, the ADRs, and the issue breakdown
 
 ## License
 

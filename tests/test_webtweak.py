@@ -1,22 +1,17 @@
-"""Unit tests for webtweak's pure functions: inject_overlay and apply_batch.
+"""Unit tests for webtweak's pure functions: injectOverlay and applyBatch.
 
-The `webtweak` executable has no .py extension, so we load it as a module by
-path. Tests exercise the public function signatures only - never HTTP or
-private handler methods (see docs/issues/0001, 0006).
+These drive **webtweak.js** - the implementation the npm package ships and users
+actually run - via tests/_wtjs.py. They previously tested a parallel Python
+reference that was not shipped, which meant a breakage in the real code (for
+instance a resave clobbering a *reconciled* batch) left the suite fully green.
+
+Tests exercise the public function signatures only - never HTTP or private
+handler internals (see docs/issues/0001, 0006).
 """
 
-import importlib.util
-import pathlib
 import unittest
-from importlib.machinery import SourceFileLoader
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-# Load pure functions from the Python reference implementation (webtweak.py).
-_loader = SourceFileLoader("webtweak", str(ROOT / "webtweak.py"))
-_spec = importlib.util.spec_from_loader("webtweak", _loader)
-assert _spec is not None
-wt = importlib.util.module_from_spec(_spec)
-_loader.exec_module(wt)
+import _wtjs as wt
 
 
 class InjectOverlayTests(unittest.TestCase):
@@ -31,9 +26,12 @@ class InjectOverlayTests(unittest.TestCase):
     def test_uses_the_last_body_close(self):
         html = "<body>a</body><!-- </body> in a comment --><body>b</body>"
         out = wt.inject_overlay(html, "p.html")
-        # injected once, before the final </body>
         self.assertEqual(out.count("webtweak overlay"), 1)
-        self.assertLess(out.rindex("webtweak overlay"), out.rindex("</body>"))
+        # Exactly one </body> may follow the injection point. Comparing indices
+        # instead would also pass if the markup went in before the *first*
+        # </body>, since a later one would still sit after it.
+        tail = out[out.index("webtweak overlay"):]
+        self.assertEqual(tail.count("</body>"), 1)
 
     def test_appends_when_no_body_close(self):
         html = "<div>no body tag here</div>"
