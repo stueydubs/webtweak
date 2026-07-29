@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The loop closes in the browser.** webtweak now watches the files it serves
+  and pushes an event when the source under the page changes, so a reconcile
+  lands visibly: the page reloads itself and you watch your drag become real
+  CSS. Previously the hand-off was blind - you saved, switched to Claude, and
+  had no signal at all until you reloaded by hand.
+  - A **reconcile badge** in the bar reads `N pending` after a save and
+    `reconciled` once Claude has folded the batch into source.
+  - A live reload **never runs over unsaved edits**. With unsaved work the badge
+    offers the reload instead of taking it.
+  - webtweak's own writes (`*.webtweak.json`, `.tmp`, `.bak`) are excluded from
+    the watch, so saving cannot bounce the page you are still editing.
+- **`--root DIR`** serves an explicit web root instead of the page's own folder,
+  so a page in a subfolder can resolve root-absolute assets (`/css/site.css`).
+  Previously unsupported, which ruled out most real sites. The edits file still
+  lands beside the page, not in the root.
+- **Session change list** - a collapsible "N elements changed" panel listing
+  every element you have touched and what changed on it; click an entry to
+  select and scroll to it. `edited` held the whole session but the properties
+  panel only ever showed one element, so reviewing meant saving and opening the
+  JSON.
+
+### Changed
+- The save confirmation names the edits file it wrote, which teaches the
+  hand-off for free.
+- The panel note no longer reads as though saving invokes Claude. Save writes a
+  file; reconcile is a separate step you ask for.
+
 ## [0.2.0] - 2026-07-29
 
 ### Security

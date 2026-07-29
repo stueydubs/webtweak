@@ -48,6 +48,23 @@ html { user-select: none; }
 }
 .wt-crumb b { color: #e8eaed; }
 .wt-status { color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right; }
+/* Reconcile state: where this session's changes have got to in the loop. */
+.wt-badge {
+  appearance: none;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid #3a3f4b;
+  background: #23262e;
+  color: #b8bcc4;
+  cursor: default;
+  white-space: nowrap;
+}
+.wt-badge-pending { border-color: #6b5a2a; background: #2a2418; color: #e0c068; }
+.wt-badge-ok      { border-color: #2f5c34; background: #1a2a1c; color: #8ad18a; }
+.wt-badge-warn    { border-color: #7a3a3a; background: #2e1c1c; color: #f0a0a0; cursor: pointer; }
 .wt-btn {
   appearance: none;
   border: 1px solid #3a3f4b;
@@ -156,6 +173,64 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   font-size: 12px;
 }
 .wt-panel[hidden] { display: none; }
+
+/* Session change list - bottom-right, independent of the properties panel so it
+   stays visible when nothing is selected (which is exactly when you want to
+   review what you have done). */
+.wt-changes {
+  position: fixed;
+  bottom: 12px; right: 12px;
+  width: 270px;
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  background: #1a1d23;
+  color: #e8eaed;
+  border: 1px solid #2c303a;
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  overflow: hidden;
+}
+.wt-changes[hidden] { display: none; }
+.wt-changes-head {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #ffd479;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  padding: 10px 12px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.wt-changes-list {
+  margin: 0;
+  padding: 0 6px 6px;
+  list-style: none;
+  overflow-y: auto;
+}
+.wt-changes-list[hidden] { display: none; }
+.wt-change {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #e8eaed;
+  font: inherit;
+  text-align: left;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.wt-change:hover { background: #23262e; }
+.wt-change.on   { border-color: #ffd479; background: #23262e; }
+.wt-change-el    { color: #e8eaed; }
+.wt-change-props { color: #8f96a3; font-size: 11px; }
 .wt-panel h3 {
   margin: 2px 0 10px;
   font-size: 12px;

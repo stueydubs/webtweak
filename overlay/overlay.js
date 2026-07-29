@@ -68,6 +68,7 @@
   function record(el, prop, value) {
     entry(el).changes[prop] = value;
     dirty = true;
+    refreshChanges();
   }
   // True iff any edited element still holds real changes - the single source of
   // truth for the unsaved-changes (beforeunload) guard, so resets that empty the
@@ -150,6 +151,7 @@
       if (el === selectedEl) { positionBox(selBox, el); populate(el); }
     });
     dirty = hasRealEdits();
+    refreshChanges();
     status("undone");
   }
 
@@ -323,6 +325,7 @@
     '  <span class="wt-logo">webtweak</span>',
     '  <span class="wt-crumb" id="wt-crumb">click an element to select</span>',
     '  <span class="wt-status" id="wt-status"></span>',
+    '  <button class="wt-badge" id="wt-badge" hidden></button>',
     '  <div class="wt-shapes" id="wt-shapes">',
     '    <button class="wt-btn" id="wt-shape-btn">Shape ▾</button>',
     '    <div class="wt-palette" id="wt-palette" hidden></div>',
@@ -337,6 +340,10 @@
     '  <span class="wt-grip wt-grip-br"></span>',
     "</div>",
     panelHTML(),
+    '<div class="wt-changes wt-ui" id="wt-changes" hidden>',
+    '  <button class="wt-changes-head" id="wt-changes-head" aria-expanded="false"></button>',
+    '  <ul class="wt-changes-list" id="wt-changes-list" hidden></ul>',
+    "</div>",
     '<div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Cmd/Ctrl+S</b> save.</div>',
     '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Click anywhere</b> to drop the shape. <b>Esc</b> to cancel.</div>',
   ].join("\n");
@@ -436,7 +443,9 @@
       parts.push("  </div>");
     });
     parts.push('  <button class="wt-btn wt-block" id="wt-reset">Reset this element</button>');
-    parts.push('  <p class="wt-note">Changes preview live and are captured as intent. Claude reconciles them into clean CSS on save.</p>');
+    // Previously read "Claude reconciles them into clean CSS on save", which
+    // reads as though saving invokes Claude. It doesn't - Save writes a file.
+    parts.push('  <p class="wt-note">Changes preview live and are captured as intent. On Save, webtweak writes them to the edits file - then ask Claude to reconcile.</p>');
     parts.push("</div>");
     return parts.join("\n");
   }
@@ -597,6 +606,7 @@
     populate(el);
     panel.hidden = false;
     attachInteract(el);
+    refreshChanges();      // keep the list's current-selection highlight honest
   }
 
   function deselect() {
@@ -621,6 +631,7 @@
       if (parent) parent.removeChild(el);
       edited.delete(el);
       dirty = hasRealEdits();
+      refreshChanges();
       status("shape removed - Cmd/Ctrl+Z to undo");
       return;
     }
@@ -640,6 +651,7 @@
       positionBox(selBox, el);
       populate(el);
     }
+    refreshChanges();
     status("reset - save to drop these edits");
   }
 
@@ -766,6 +778,7 @@
     if (ent) delete ent.changes[c.prop];
     rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
     dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
+    refreshChanges();
     positionBox(selBox, selectedEl);
   }
 
@@ -1139,8 +1152,13 @@
           dirty = false;
           persisted = patches.length > 0;  // empty save just cleared the batch
           status(patches.length
-            ? "saved " + j.patches + " change" + (j.patches === 1 ? "" : "s")
+            // Name the artefact: it teaches the hand-off for free, and it is the
+            // file the user is about to ask Claude to reconcile.
+            ? "saved " + j.patches + " change" + (j.patches === 1 ? "" : "s") +
+              (j.file ? " -> " + j.file : "")
             : "reverted - cleared saved edits", true);
+          refreshStatus();
+          refreshChanges();
         } else {
           status("save failed: " + (j.error || "unknown"), false);
         }
@@ -1201,6 +1219,7 @@
           });
           n++;
         });
+        refreshChanges();
         if (total) {
           var lost = total - n;
           status("restored " + n + " of " + total + " edited element" + (total === 1 ? "" : "s") +
@@ -1209,5 +1228,138 @@
       })
       .catch(function () { /* no edits file yet */ });
   }
+  // ---- session change list --------------------------------------------------
+  // `edited` holds the whole session but the panel only ever shows one element,
+  // so after a handful of edits there was no way to review what you had done
+  // without saving and opening the JSON. Save should not be a leap of faith.
+
+  var changesBox  = document.getElementById("wt-changes");
+  var changesHead = document.getElementById("wt-changes-head");
+  var changesList = document.getElementById("wt-changes-list");
+  var changesOpen = false;
+
+  function changeSummary(e) {
+    return Object.keys(e.changes).map(function (p) {
+      return p === "nudge" ? "nudge " + e.changes[p].dx + "," + e.changes[p].dy : p;
+    }).join(", ");
+  }
+
+  function refreshChanges() {
+    if (!changesBox) return;          // called before the overlay finished mounting
+    var rows = [];
+    edited.forEach(function (e, el) {
+      if (Object.keys(e.changes).length) rows.push({ el: el, e: e });
+    });
+    if (!rows.length) { changesBox.hidden = true; return; }
+    changesBox.hidden = false;
+    changesHead.textContent = rows.length + " element" + (rows.length === 1 ? "" : "s") +
+      " changed " + (changesOpen ? "▾" : "▸");
+    changesHead.setAttribute("aria-expanded", changesOpen ? "true" : "false");
+    changesList.hidden = !changesOpen;
+    if (!changesOpen) return;
+
+    changesList.textContent = "";
+    rows.forEach(function (row) {
+      var li  = document.createElement("li");
+      var btn = document.createElement("button");
+      btn.className = "wt-change" + (row.el === selectedEl ? " on" : "");
+      // textContent, never innerHTML: these strings come from the page's own
+      // markup (tag, id, class names) and must never be parsed as HTML.
+      var name = document.createElement("span");
+      name.className = "wt-change-el";
+      name.textContent = (row.e.shape ? "shape " : "") + describe(row.el);
+      var props = document.createElement("span");
+      props.className = "wt-change-props";
+      props.textContent = changeSummary(row.e);
+      btn.appendChild(name);
+      btn.appendChild(props);
+      btn.addEventListener("click", function () {
+        if (!document.contains(row.el)) { status("that element is no longer on the page", false); return; }
+        selectEl(row.el);
+        row.el.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+      li.appendChild(btn);
+      changesList.appendChild(li);
+    });
+  }
+
+  changesHead.addEventListener("click", function () {
+    changesOpen = !changesOpen;
+    refreshChanges();
+  });
+
+  // ---- live source reload + reconcile status --------------------------------
+  // The other half of the loop runs in a different window: you save, tell Claude
+  // to reconcile, and until now had no way to know whether it worked without
+  // reloading by hand. The server watches the served tree and pushes an event
+  // when the source under the page changes, so a reconcile lands visibly here.
+
+  var badge = document.getElementById("wt-badge");
+  var reloadPending = false;
+
+  function setBadge(text, kind, title) {
+    if (!text) { badge.hidden = true; return; }
+    badge.hidden = false;
+    badge.textContent = text;
+    badge.className = "wt-badge" + (kind ? " wt-badge-" + kind : "");
+    badge.title = title || "";
+  }
+
+  // Reflect the edits file's own view of the world: our session's batch is
+  // pending until Claude flips it to reconciled.
+  function refreshStatus() {
+    return fetch(RESERVED + "edits", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (doc) {
+        var batches = (doc && doc.batches) || [];
+        var mine = batches.filter(function (b) { return b && b.sessionId === SESSION; });
+        var pending = batches.filter(function (b) { return b && b.status === "pending"; });
+        var justReconciled = mine.length && mine.every(function (b) { return b.status === "reconciled"; });
+
+        if (justReconciled && !hasRealEdits()) {
+          setBadge("reconciled", "ok", "Claude has folded this session's changes into your source");
+        } else if (pending.length) {
+          var n = pending.reduce(function (t, b) { return t + ((b.patches || []).length); }, 0);
+          setBadge(n + " pending", "pending",
+            n + " change(s) waiting for Claude to reconcile into source");
+        } else {
+          setBadge("");
+        }
+      })
+      .catch(function () { /* no edits file yet - nothing to report */ });
+  }
+
+  function onSourceChange() {
+    // Guard on `dirty` (unsaved), not on having edits at all: after a Save the
+    // pending batch is on disk and restore() re-applies it, so reloading is
+    // safe - and reloading after a save is the whole point, since that is when
+    // Claude reconciles. Blocking on "has any edits" would never reload.
+    if (dirty) {
+      if (reloadPending) return;
+      reloadPending = true;
+      // Deliberately no refreshStatus() here: it resolves asynchronously and
+      // would clobber this warning with a stale count.
+      setBadge("source changed - reload", "warn",
+        "Your source changed on disk. You have unsaved edits; click to reload and lose them.");
+      badge.onclick = function () { location.reload(); };
+      return;
+    }
+    location.reload();   // refreshStatus runs again on the way back up
+  }
+
+  function connectEvents() {
+    if (typeof EventSource === "undefined") return;   // no live reload; everything else works
+    var es;
+    try { es = new EventSource(RESERVED + "events"); }
+    catch (_) { return; }
+    es.addEventListener("source-change", onSourceChange);
+    // EventSource reconnects on its own (the server sends a retry hint), so an
+    // error here is usually just the server restarting - stay quiet about it.
+    es.onerror = function () {};
+  }
+
   restore();
+  refreshChanges();
+  refreshStatus();
+  connectEvents();
 })();

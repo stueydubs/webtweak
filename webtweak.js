@@ -177,6 +177,92 @@ function pruneBackups(editsPath) {
   }
 }
 
+// --- source watching -------------------------------------------------------
+
+const MAX_WATCHED_DIRS = 2000;   // inotify has a per-user ceiling; degrade before hitting it
+
+// webtweak's own writes must never trigger a reload, or every Save would bounce
+// the page the user is still editing.
+function isOwnArtefact(name) {
+  return /\.webtweak\.json(\.|$)/.test(name) || name.endsWith('.tmp') || name.endsWith('.bak');
+}
+
+function isSkippedDir(name) {
+  return name === 'node_modules' || name.startsWith('.');
+}
+
+// Watch the served tree so a reconcile (Claude rewriting the CSS) can push the
+// page a reload. Deliberately NOT fs.watch(recursive) - that only landed on
+// Linux in Node 20 and this package supports 18 - so we walk and watch each
+// directory. Failures degrade to "no live reload", never to a crash.
+function createWatcher(root, onChange) {
+  const watchers = new Map();
+  let timer = null, capped = false;
+
+  function fire(name) {
+    if (name && isOwnArtefact(path.basename(name))) return;
+    clearTimeout(timer);
+    // Editors write in bursts (temp file, rename, chmod); one reload is enough.
+    timer = setTimeout(() => onChange(name || ''), 120);
+  }
+
+  function watchDir(dir, depth) {
+    if (watchers.has(dir) || depth > 12) return;
+    if (watchers.size >= MAX_WATCHED_DIRS) { capped = true; return; }
+    let w;
+    try {
+      w = fs.watch(dir, (_ev, name) => {
+        fire(name);
+        if (!name || isSkippedDir(name)) return;
+        const child = path.join(dir, name);
+        try { if (fs.statSync(child).isDirectory()) watchDir(child, depth + 1); }
+        catch (_) {}                       // vanished between event and stat
+      });
+    } catch (_) { return; }                // permissions, ENOSPC - just skip it
+    w.on('error', () => {});
+    watchers.set(dir, w);
+
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch (_) { return; }
+    for (const e of entries) {
+      if (e.isDirectory() && !isSkippedDir(e.name)) watchDir(path.join(dir, e.name), depth + 1);
+    }
+  }
+
+  watchDir(root, 0);
+  return {
+    count:  watchers.size,
+    capped,
+    close() {
+      clearTimeout(timer);
+      for (const w of watchers.values()) { try { w.close(); } catch (_) {} }
+      watchers.clear();
+    },
+  };
+}
+
+// --- server-sent events ----------------------------------------------------
+
+function serveEvents(req, res, clients) {
+  res.writeHead(200, {
+    'Content-Type':  'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Connection':    'keep-alive',
+  });
+  if (res.socket) res.socket.setTimeout(0);   // an SSE stream is meant to idle
+  res.write('retry: 2000\n\n');
+  clients.add(res);
+  req.on('close', () => clients.delete(res));
+}
+
+function broadcast(clients, event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) {
+    try { res.write(payload); } catch (_) { clients.delete(res); }
+  }
+}
+
 // --- HTTP helpers ----------------------------------------------------------
 
 function send(res, code, body, ctype, method) {
@@ -280,15 +366,17 @@ function serveStatic(filePath, size, method, range, res) {
   stream.pipe(res);
 }
 
-function handleSave(body, targetName, serveRoot, res) {
+function editsPathFor(targetPath) {
+  const stem = path.basename(targetPath, path.extname(targetPath));
+  return path.join(path.dirname(targetPath), stem + '.webtweak.json');
+}
+
+function handleSave(body, targetName, editsPath, res) {
   let payload;
   try { payload = JSON.parse(body || '{}'); }
   catch (_) { return sendError(res, 400, 'Bad JSON'); }
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
     return sendError(res, 400, 'Bad JSON: expected an object');
-
-  const stem      = path.basename(targetName, path.extname(targetName));
-  const editsPath = path.join(serveRoot, stem + '.webtweak.json');
 
   let doc = null;
   if (fs.existsSync(editsPath)) {
@@ -331,7 +419,7 @@ function handleSave(body, targetName, serveRoot, res) {
 
 function createHandler(targetPath, serveRoot, state) {
   const targetName = path.basename(targetPath);
-  const stem       = path.basename(targetName, path.extname(targetName));
+  const editsPath  = editsPathFor(targetPath);
 
   return function (req, res) {
     const rawPath = (req.url || '/').split('?')[0];
@@ -345,7 +433,12 @@ function createHandler(targetPath, serveRoot, state) {
 
       if (name === 'edits' && req.method === 'GET') {
         if (!originAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
-        return serveEdits(path.join(serveRoot, stem + '.webtweak.json'), res);
+        return serveEdits(editsPath, res);
+      }
+
+      if (name === 'events' && req.method === 'GET') {
+        if (!originAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
+        return serveEvents(req, res, state.clients);
       }
 
       if (name === 'save' && req.method === 'POST') {
@@ -373,7 +466,7 @@ function createHandler(targetPath, serveRoot, state) {
         req.on('end', () => {
           if (received > MAX_BODY) return;                 // already answered above
           if (received < length) return sendError(res, 400, 'Incomplete request body');
-          handleSave(Buffer.concat(chunks).toString('utf8'), targetName, serveRoot, res);
+          handleSave(Buffer.concat(chunks).toString('utf8'), targetName, editsPath, res);
         });
         req.on('error', () => sendError(res, 400, 'Incomplete request body'));
         return;
@@ -445,8 +538,7 @@ function openBrowser(url) {
 // Edits left pending from a previous session are invisible otherwise: restore()
 // only re-applies the current session's own batch, so they silently accumulate.
 function countPending(targetPath) {
-  const stem      = path.basename(targetPath, path.extname(targetPath));
-  const editsPath = path.join(path.dirname(targetPath), stem + '.webtweak.json');
+  const editsPath = editsPathFor(targetPath);
   try {
     const doc = JSON.parse(fs.readFileSync(editsPath, 'utf8'));
     if (!doc || !Array.isArray(doc.batches)) return 0;
@@ -454,23 +546,36 @@ function countPending(targetPath) {
   } catch (_) { return 0; }
 }
 
-function serve(targetPath, port, openBrowserFlag) {
-  const serveRoot = path.dirname(targetPath);
+function serve(targetPath, serveRoot, port, openBrowserFlag) {
   // Resolved once at boot: the containment check compares real paths, so the
   // root it compares against must be real too (macOS /tmp -> /private/tmp).
   const state = {
     port:       port,
     realRoot:   fs.realpathSync(serveRoot),
     realTarget: fs.realpathSync(targetPath),
+    clients:    new Set(),          // open SSE streams
   };
   const handler   = createHandler(targetPath, serveRoot, state);
   const server    = http.createServer(handler);
   server.requestTimeout = 30_000;   // a lying Content-Length must not park a socket forever
 
+  // Tell open pages when the source under them changes, so a reconcile shows up
+  // in the browser instead of the user having to guess and reload.
+  const watcher = createWatcher(serveRoot, changed => {
+    broadcast(state.clients, 'source-change', { file: changed });
+  });
+  const ping = setInterval(() => {
+    for (const res of state.clients) { try { res.write(': ping\n\n'); } catch (_) {} }
+  }, 25_000);
+  ping.unref();                     // a heartbeat must not hold the process open
+
   server.listen(port, '127.0.0.1', () => {
     const actual = server.address().port;
     state.port   = actual;          // --port 0 means the real port is only known now
-    const url    = `http://127.0.0.1:${actual}/${path.basename(targetPath)}`;
+    // With --root the page may sit in a subfolder of the web root, so its URL
+    // is its path relative to that root, not just its basename.
+    const rel    = path.relative(serveRoot, targetPath).split(path.sep).join('/');
+    const url    = `http://127.0.0.1:${actual}/${rel}`;
     process.stdout.write(`webtweak editing: ${targetPath}\n`);
     process.stdout.write(`  serving ${serveRoot}\n`);
     // Flush before remaining lines so the test harness sees the port immediately.
@@ -479,6 +584,11 @@ function serve(targetPath, port, openBrowserFlag) {
       const pending = countPending(targetPath);
       if (pending) {
         process.stdout.write(`  note    ${pending} batch(es) from a previous session are not yet reconciled\n`);
+      }
+      if (watcher.count === 0) {
+        process.stdout.write(`  note    could not watch ${serveRoot} - live reload is off\n`);
+      } else if (watcher.capped) {
+        process.stdout.write(`  note    watching the first ${watcher.count} directories only; deep changes may not reload\n`);
       }
       process.stdout.write(`  Ctrl-C to stop.\n\n`);
     });
@@ -495,7 +605,13 @@ function serve(targetPath, port, openBrowserFlag) {
 
   process.on('SIGINT', () => {
     process.stdout.write('\nwebtweak stopped.\n');
+    clearInterval(ping);
+    watcher.close();
+    // An open SSE stream keeps its socket alive, so close() alone would hang.
+    for (const res of state.clients) { try { res.end(); } catch (_) {} }
+    state.clients.clear();
     server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 500).unref();
   });
 }
 
@@ -517,6 +633,9 @@ Arguments:
                     so CSS, images and fonts resolve as they do in your build
 
 Options:
+  --root DIR        serve DIR as the web root instead of the page's own folder.
+                    Use it when the page lives in a subfolder and references
+                    root-absolute assets (/css/site.css, /assets/...)
   --port N          port to listen on (default 8723; 0 picks any free port)
   --no-browser      start the server without opening a browser
   --install-skill   copy the reconcile skill into ~/.claude/skills/ and exit
@@ -559,12 +678,13 @@ function die(msg) {
 
 function main() {
   const args = process.argv.slice(2);
-  let htmlFile = null, port = 8723, noBrowser = false;
+  let htmlFile = null, rootArg = null, port = 8723, noBrowser = false;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     // Accept --port=N as well as --port N; argparse did, so users expect it.
     const eq = a.startsWith('--port=') ? a.slice('--port='.length) : null;
+    const rootEq = a.startsWith('--root=') ? a.slice('--root='.length) : null;
 
     if (a === '--port' || eq !== null) {
       const raw = eq !== null ? eq : args[++i];
@@ -572,6 +692,10 @@ function main() {
       if (!/^\d+$/.test(raw)) die(`--port must be a whole number, got ${raw}`);
       port = parseInt(raw, 10);
       if (port > 65535) die(`--port must be between 0 and 65535, got ${port}`);
+    } else if (a === '--root' || rootEq !== null) {
+      const raw = rootEq !== null ? rootEq : args[++i];
+      if (raw === undefined) die('--root needs a directory, e.g. --root .');
+      rootArg = raw;
     } else if (a === '--no-browser') {
       noBrowser = true;
     } else if (a === '--install-skill') {
@@ -602,7 +726,21 @@ function main() {
   if (ext !== '.html' && ext !== '.htm')
     die(`expected an .html file, got ${ext || 'no extension'}: ${targetPath}`);
 
-  serve(targetPath, port, !noBrowser);
+  // Default web root is the page's own directory. --root points it at the real
+  // site root so a subfolder page can resolve /css/site.css and friends.
+  let serveRoot = path.dirname(targetPath);
+  if (rootArg !== null) {
+    serveRoot = path.resolve(rootArg);
+    let rootStat;
+    try { rootStat = fs.statSync(serveRoot); }
+    catch (_) { die(`--root: no such directory: ${serveRoot}`); }
+    if (!rootStat.isDirectory()) die(`--root must be a directory: ${serveRoot}`);
+    // The page has to be reachable from the root, or none of its URLs work.
+    if (!contained(fs.realpathSync(targetPath), fs.realpathSync(serveRoot)))
+      die(`--root must contain the page.\n  root: ${serveRoot}\n  page: ${targetPath}`);
+  }
+
+  serve(targetPath, serveRoot, port, !noBrowser);
 }
 
 // Importable as a module so the pure functions can be unit-tested directly.

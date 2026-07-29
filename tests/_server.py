@@ -14,15 +14,18 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
-def start(page):
+def start(page, root=None):
     """Launch webtweak on an ephemeral port; return (proc, port).
 
     Reads the bound port back from the server's `listening on 127.0.0.1:<port>`
     stdout line, and fails fast (surfacing stderr) if the process dies first.
+    Pass `root` to exercise --root (serving a web root above the page).
     """
+    cmd = ["node", str(ROOT / "webtweak.js"), str(page), "--port", "0", "--no-browser"]
+    if root is not None:
+        cmd += ["--root", str(root)]
     proc = subprocess.Popen(
-        ["node", str(ROOT / "webtweak.js"), str(page), "--port", "0", "--no-browser"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

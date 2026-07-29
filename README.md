@@ -46,6 +46,7 @@ This boots a local server, serves the page's own directory (so CSS, images, and 
 
 | Flag | Effect |
 |---|---|
+| `--root DIR` | Serve `DIR` as the web root instead of the page's own folder. Use it when the page lives in a subfolder and references root-absolute assets (`/css/site.css`) |
 | `--port N` | Serve on port N (default 8723; `--port 0` picks any free port) |
 | `--no-browser` | Don't auto-open the browser |
 | `--install-skill` | Copy the reconcile skill into `~/.claude/skills/` and exit |
@@ -61,9 +62,16 @@ In the browser:
 - **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
 - **Cmd/Ctrl+Z** undoes your last change, of any kind.
 - **Reset this element** discards all your edits to the selected element (also undoable).
+- **Review before you save.** A "N elements changed" list sits bottom-right; open it to see every element you've touched and what changed on it, and click an entry to jump back to that element.
 - **Save** when you're happy. **Cmd/Ctrl+S** saves, **Esc** deselects.
 
 A reload mid-session is safe: webtweak restores the current session's pending edits, and warns you if you have unsaved changes.
+
+### Watching the loop close
+
+The bar carries a badge showing where your changes are: **N pending** once saved, **reconciled** once Claude has folded them into your source.
+
+webtweak also watches the files it serves. When Claude rewrites your CSS, the page reloads itself and the badge flips — so you *see* your drag become real CSS instead of guessing and reloading by hand. If you have unsaved edits when the source changes, it will never reload over them; it offers you the reload instead.
 
 ## The loop
 
@@ -110,7 +118,7 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
 - **Single viewport.** Changes are authored as base CSS; the session's viewport width is recorded so Claude can warn about mobile breakage, but deliberate per-breakpoint authoring is v2.
 - **Limited property set.** Borders, shadows, flex/grid alignment editors, and hover states are out of the v1 panel.
-- **Serves the page's own directory as web root.** A page in a subfolder that references site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 those and render with fallback styling. There is no `--root` flag yet, and the working directory makes no difference - the served root is always the page's own folder. Editing a page that depends on root-absolute assets is not supported in v1.
+- **Serves one directory as web root.** By default that is the page's own folder, so a page in a subfolder referencing site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 them. Pass `--root` at the real site root to fix it. Pages needing a build step (Tailwind compile, server-side partials) still won't render identically to production.
 
 ## Development
 
