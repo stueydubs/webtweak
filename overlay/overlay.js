@@ -845,7 +845,7 @@
     "  </div>",
     '  <div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Shift+Cmd/Ctrl+Z</b> redo, <b>Cmd/Ctrl+S</b> save.</div>',
     "</div>",
-    '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Click anywhere</b> to drop the shape. <b>Esc</b> to cancel.</div>',
+    '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Drag</b> to draw the shape, or <b>click</b> to drop it at a default size. <b>Esc</b> to cancel.</div>',
   ].join("\n");
   // Mounted on <html>, not <body>: a transformed ancestor becomes the containing
   // block for position:fixed descendants, so a page with `body { transform:
@@ -888,7 +888,7 @@
     var btn = document.createElement("button");
     btn.className = "wt-shape-item";
     btn.dataset.shape = kind;
-    btn.title = "Click then click the page, or drag me onto the page";
+    btn.title = "Click me, then drag on the page to draw - or drag me straight onto the page";
     btn.setAttribute("draggable", "true");   // also draggable straight onto the page
     btn.innerHTML = '<svg viewBox="-8 -8 116 116" preserveAspectRatio="none">' +
       innerMarkup(SHAPES[kind]) + "</svg>";
@@ -932,7 +932,7 @@
     deselect();   // clear any selection + its grips so they can't swallow the placement click
     pendingShape = kind;
     showPlaceModeUI();
-    status("click to place " + kind);
+    status("drag to draw the " + kind);
   }
   function showPlaceModeUI() {
     palette.hidden = true;
@@ -952,6 +952,114 @@
     selectEl(svg);
     status("added " + kind);
     return svg;
+  }
+
+  // ---- drag to draw ---------------------------------------------------------
+  // Press and drag on the page to size a shape as you go. Before this, a press-drag-
+  // release showed nothing at all until the button came back up - a `click` fires on
+  // release - and then dropped a fixed default size wherever the release landed. Both
+  // halves read as broken: nothing follows the pointer, and the size the user was
+  // plainly drawing is thrown away.
+  //
+  // A click is just a drag of zero length, so click-to-place still works: below the
+  // slop threshold the shape is restored to its declared default size. Without that,
+  // a click would drop a 1px shape, and hand-shake between press and release would
+  // silently turn a click into a 3px one.
+  var SLOP = 4;             // px of movement before a click becomes a draw
+  var drawing = null;       // { el, kind, x0, y0, dx, dy, moved } while drawing
+
+  function sizeDrawn(d, x, y) {
+    // Two corners, not a vector: the press point can be any corner of the rectangle,
+    // so a drag up and to the left draws exactly as one down and to the right.
+    var box = {
+      left: Math.min(d.x0, x) + d.dx,
+      top: Math.min(d.y0, y) + d.dy,
+      width: Math.max(1, Math.abs(x - d.x0)),
+      height: Math.max(1, Math.abs(y - d.y0)),
+    };
+    var e = entry(d.el);
+    ["left", "top", "width", "height"].forEach(function (p) {
+      var v = Math.round(box[p]) + "px";
+      e.changes[p] = v;
+      d.el.style.setProperty(p, v);
+    });
+  }
+  document.addEventListener("pointerdown", function (ev) {
+    if (!pendingShape || isOverlay(ev.target)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    var kind = pendingShape;
+    // The gesture owns the placement from here, so place mode ends now - which also
+    // stops the trailing `click` from dropping a second shape.
+    exitPlaceMode();
+    var x = ev.clientX + window.scrollX, y = ev.clientY + window.scrollY;
+    var el = makeShape(kind, x, y);
+    var e = entry(el);
+    // makeShape re-seats the shape when <body> is a positioned containing block, so
+    // the recorded left/top can differ from the document coords asked for. Keep that
+    // correction and apply it to every frame, rather than re-measuring per move.
+    drawing = {
+      el: el, kind: kind, x0: x, y0: y, moved: false,
+      dx: (parseFloat(e.changes.left) || 0) - x,
+      dy: (parseFloat(e.changes.top) || 0) - y,
+    };
+    interacting = true;                 // no hover box, and no change-list churn per frame
+    hoverBox.hidden = true;
+    sizeDrawn(drawing, x, y);           // start from nothing, so it grows out of the press
+    document.addEventListener("pointermove", drawMove, true);
+    document.addEventListener("pointerup", drawUp, true);
+    document.addEventListener("pointercancel", drawUp, true);
+  }, true);
+  function drawMove(ev) {
+    if (!drawing) return;
+    var x = ev.clientX + window.scrollX, y = ev.clientY + window.scrollY;
+    if (Math.abs(x - drawing.x0) > SLOP || Math.abs(y - drawing.y0) > SLOP) drawing.moved = true;
+    sizeDrawn(drawing, x, y);
+  }
+  function drawUp() {
+    if (!drawing) return;
+    var d = drawing;
+    drawing = null;
+    document.removeEventListener("pointermove", drawMove, true);
+    document.removeEventListener("pointerup", drawUp, true);
+    document.removeEventListener("pointercancel", drawUp, true);
+    if (!d.moved) {
+      // A click, not a draw: the declared default size, at the press point.
+      var spec = SHAPES[d.kind] || SHAPES.square;
+      var e = entry(d.el);
+      e.changes.left = Math.round(d.x0 + d.dx) + "px";
+      e.changes.top = Math.round(d.y0 + d.dy) + "px";
+      e.changes.width = spec.size.w + "px";
+      e.changes.height = spec.size.h + "px";
+      rebuildInline(d.el, e);
+    }
+    interacting = false;
+    refreshChanges();      // refreshes skipped during the gesture land here
+    swallowNextClick();
+    selectEl(d.el);
+    status("added " + d.kind);
+  }
+  // Eat exactly the `click` that belongs to the pointer sequence just finished, and
+  // nothing else. A press and release still produces a click, which would otherwise
+  // select whatever sits under the release point and drop the selection off the shape
+  // just drawn.
+  //
+  // Deliberately NOT endGesture()'s time box, which is right for a drag on an existing
+  // element but wrong here: it swallows every click for 300ms, so clicking another
+  // element straight after drawing did nothing at all. The listener is removed on the
+  // next task, and click is dispatched before any timer, so it can only ever eat this
+  // one - where a sticky flag would eat the user's next real click on any gesture the
+  // browser did not follow with one.
+  // Bound on `window`, not `document`, and that is the whole trick: the picker's own
+  // click listener is a capture listener on `document`, and stopPropagation does not
+  // stop other listeners on the SAME node - only later ones in the path. Listeners on
+  // one node run in registration order, and the picker's was registered at start-up,
+  // so a document-level guard always lost the race. `window` is one step earlier in
+  // the capture path, so stopping there stops the picker outright.
+  function swallowNextClick() {
+    function eat(ev) { ev.stopPropagation(); ev.preventDefault(); }
+    window.addEventListener("click", eat, true);
+    setTimeout(function () { window.removeEventListener("click", eat, true); }, 0);
   }
 
   function panelHTML() {
