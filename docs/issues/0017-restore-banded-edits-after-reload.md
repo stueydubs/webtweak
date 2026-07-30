@@ -4,7 +4,7 @@
 
 ## Parent
 
-[PRD: webtweak 0.5.0](../PRD-0.5.0.md)
+[PRD: webtweak 0.6.0](../PRD-0.6.0.md)
 
 ## What to build
 

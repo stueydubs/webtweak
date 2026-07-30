@@ -7,18 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **A rejected value no longer warns forever.** The status line has no timer, so
-  `ignored invalid margin: banana` sat there through every later successful edit,
-  reading as current long after it stopped being true. Any recorded edit - or
-  abandoning one - now supersedes it.
-- **A declined control refuses a write from any direction.** Disabling an input stops
-  a mouse and a keyboard, which is all you have, but the guard exists to stop a Patch
-  your element will not honour from being recorded at all - so the write path refuses
-  too, rather than trusting the attribute.
-- The session change list no longer leaves its header reading "1 element changed"
-  after the last change is reverted. The list itself was correctly hidden, so this was
-  never visible - but it is the panel's own account of your session, and it was wrong.
+## [0.5.0] - 2026-07-30
+
+A small release from using the tool: the last two bare text boxes in the Type group
+get proper controls, and three things found by driving the overlay in a real browser
+get fixed. No change to the Patch contract or the Edits file format, and **no need to
+reinstall the reconcile skill** - this release emits nothing it did not emit before.
 
 ### Added
 - **Line and Spacing stopped being bare text boxes.** Both were fields you typed a
@@ -34,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a `line-height: normal` they measure what the browser is actually rendering (it is
   font dependent, and does not even compute to a length) before stepping it, so the
   first press does something rather than nothing.
+
+### Fixed
+- **A rejected value no longer warns forever.** The status line has no timer, so
+  `ignored invalid margin: banana` sat there through every later successful edit,
+  reading as current long after it stopped being true. Any recorded edit - or
+  abandoning one - now supersedes it.
+- **A declined control refuses a write from any direction.** Disabling an input stops
+  a mouse and a keyboard, which is all you have, but the guard exists to stop a Patch
+  your element will not honour from being recorded at all - so the write path refuses
+  too, rather than trusting the attribute.
+- The session change list no longer leaves its header reading "1 element changed"
+  after the last change is reverted. The list itself was correctly hidden, so this was
+  never visible - but it is the panel's own account of your session, and it was wrong.
 
 ## [0.4.0] - 2026-07-30
 
@@ -331,7 +338,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/stueydubs/webtweak/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/stueydubs/webtweak/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/stueydubs/webtweak/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/stueydubs/webtweak/compare/v0.1.1...v0.2.0

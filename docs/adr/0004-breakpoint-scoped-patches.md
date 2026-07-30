@@ -1,6 +1,6 @@
 # Breakpoint-scoped Patches: the page's own media queries, previewed with an injected style block
 
-Per-breakpoint authoring (0.5.0) is the first feature that cannot be expressed in the Patch contract as it stands. A Patch says "this element, this property, this value"; a responsive edit says "this element, this property, this value **at this width**". We decided a Patch gains a **media dimension** - `changes` continues to carry base declarations, and a sibling `media` map carries one group of declarations per media condition - and that a breakpoint-scoped edit is previewed by an **injected `<style>` element containing real `@media` blocks**, because an inline style cannot be media-conditional.
+Per-breakpoint authoring (0.6.0) is the first feature that cannot be expressed in the Patch contract as it stands. A Patch says "this element, this property, this value"; a responsive edit says "this element, this property, this value **at this width**". We decided a Patch gains a **media dimension** - `changes` continues to carry base declarations, and a sibling `media` map carries one group of declarations per media condition - and that a breakpoint-scoped edit is previewed by an **injected `<style>` element containing real `@media` blocks**, because an inline style cannot be media-conditional.
 
 This is the first change to the Patch contract in the project's history, and 0.4.0 deliberately avoided touching it, so it gets an ADR rather than a changelog line.
 
