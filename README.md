@@ -58,11 +58,11 @@ In the browser:
 - **Click** any element to select it (a breadcrumb shows where it sits).
 - **Drag the interior** to nudge its position (snaps to a 4px grid).
 - **Drag the right, bottom, or corner grip** (the gold handles on the selection box) to resize it.
-- **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding, border and corner radius.
+- **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding, border, corner radius and shadow.
+- **Pick a font from your own page.** The Font field's ▾ lists every font stack the page already uses, plus any family it declares as `@font-face`. Picking one writes the whole stack, so its fallbacks survive the edit; typing a stack by hand still works for a font you're introducing for the first time.
 - **Give an element a border.** Width, Style and Colour compose one `border` declaration. On an element with no border, touching any one of them fills in the other two so a border appears immediately - otherwise a colour on its own would render nothing at all. Style `none` removes a border; clearing a field abandons the change.
   - If the element already has a rule on **one side only** (a line under a heading), the controls edit *that side* and the group says which - so recolouring a divider leaves it a divider instead of boxing the element in. If several sides differ, the controls switch off with an explanation rather than replacing a deliberate design with a box.
 - **Add a shadow from presets.** The Shadow field's ▾ offers a hairline, a card lift, a modal lift, a dramatic drop, an inset press, and `none` to take one off - so the property nobody remembers the syntax of is one you pick. Typing your own still works.
-- **Pick a font from your own page.** The Font field's ▾ lists every font stack the page already uses, plus any family it declares as `@font-face`. Picking one writes the whole stack, so its fallbacks survive the edit; typing a stack by hand still works for a font you're introducing for the first time.
 - **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
 - **Undo and redo** from the buttons in the top bar or the keyboard: **Cmd/Ctrl+Z** undoes your last change of any kind, **Shift+Cmd/Ctrl+Z** (or **Ctrl+Y**) puts it back. Each button dims when there is nothing left in that direction, so you can see where you are in history. Making a new edit drops the redo trail, so stepping forward can never splice in work you had abandoned.
 - **Reset this element** discards all your edits to the selected element (also undoable).
@@ -101,6 +101,8 @@ The reconcile step is packaged as a [Claude Code](https://claude.ai/code) skill.
 webtweak --install-skill
 ```
 
+**Re-run that after upgrading webtweak.** The skill is copied into your own skills directory, so an installed copy from an earlier version will not know about properties a newer overlay can emit - 0.4.0's `border`, `border-radius` and `box-shadow` among them.
+
 That works for a git clone, a global install, and npx alike. To copy it by hand from a clone instead:
 
 ```bash
@@ -121,7 +123,7 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 - **No structural reordering.** Moving an element above another (rewriting the DOM order in source) is deferred to v2. v1 is resize, restyle, and nudge.
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
 - **Single viewport.** Changes are authored as base CSS; the session's viewport width is recorded so Claude can warn about mobile breakage, but deliberate per-breakpoint authoring is v2.
-- **Limited property set.** Borders, shadows, flex/grid alignment editors, and hover states are out of the v1 panel.
+- **Limited property set.** Flex/grid alignment editors and hover/focus states are out of the panel. Borders and shadows are in as of 0.4.0, but not per-corner radii or per-side border controls: an element whose sides carry *different* borders is declined rather than edited, so a deliberate design can't be silently replaced with a box.
 - **Serves one directory as web root.** By default that is the page's own folder, so a page in a subfolder referencing site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 them. Pass `--root` at the real site root to fix it. Pages needing a build step (Tailwind compile, server-side partials) still won't render identically to production.
 
 ## Development

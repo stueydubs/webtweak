@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-30
+
+A property-set and quality-of-life release for the Overlay: a font picker fed by
+the Target page's own fonts, a Border group (border, corner radius, shadow) for
+existing elements, and redo. No change to the Patch contract, the Edits file
+format, or ADR-0001 - your existing edits files still reconcile the same way.
+
+**Upgrading: reinstall the bundled Reconcile skill** with `webtweak
+--install-skill`. Your installed copy predates this release, so it does not know
+about `border`, `border-radius` or `box-shadow` - and in particular it does not
+know that a per-side `border-bottom` must never be normalised into an all-sides
+`border`, which would turn a heading's rule into a box.
+
 ### Added
 - **Existing elements can have a border.** A decorative shape could have one and
   the card beside it could not, which read as a bug rather than a scope boundary.
@@ -284,7 +297,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/stueydubs/webtweak/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/stueydubs/webtweak/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/stueydubs/webtweak/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/stueydubs/webtweak/compare/v0.1.0...v0.1.1
