@@ -1,0 +1,39 @@
+# Issue 0014: Breakpoint discovery and the band picker
+
+> Labels: enhancement, ready-for-agent · Type: AFK
+
+## Parent
+
+[PRD: webtweak 0.5.0](../PRD-0.5.0.md)
+
+## What to build
+
+The Overlay learns which breakpoints the Target page declares, and lets the user say which one they are editing. Nothing is recorded differently yet - this ticket is the target selector that Issue 0015 writes through, and it must be shippable and honest on its own.
+
+A control in the top bar reads the current editing target: `base` by default, or a condition such as `≤600px`. Opening it lists every media query the page's own stylesheets declare, marking which of them match at the current window width, plus `base`. Picking one sets the editing target. The list is the second consumer of the suggestion-list widget the font picker introduced.
+
+Bands are gathered the way `@font-face` families are: `CSSMediaRule.conditionText` over readable stylesheets in a try/catch, so a CDN-hosted sheet degrades the list instead of throwing. Nested grouping rules are walked. webtweak's own stylesheet is skipped, or the Overlay would offer its own queries as the page's.
+
+**Several bands match at once**, which a browser prototype confirmed: at a 480px window both `(max-width: 900px)` and `(max-width: 600px)` match. So the target cannot be inferred silently. The default is the **narrowest matching band** - the most specific, and what someone who has just dragged their window narrow is thinking about - and the picker always shows which it chose. `base` stays selectable at any width, because "this is wrong everywhere and I happened to notice it on mobile" is a real edit.
+
+**Non-width conditions are listed as unavailable, with the reason.** The same sweep finds `print` and `prefers-color-scheme`; neither can be previewed by resizing a window, so offering them would invite a Patch for a change the user was never shown. They appear, greyed, saying why - following the mixed-side border guard, which declines out loud rather than hiding the case.
+
+**A manual condition can be typed**, so a page whose stylesheets are entirely unreadable, or which declares no queries at all, is not locked out of the release. The list is a convenience, never a gate - exactly as the font list is.
+
+## Acceptance criteria
+
+- [ ] The band picker lists every width media query the Target page declares
+- [ ] Bands matching the current window width are marked as matching
+- [ ] The default editing target is the narrowest matching band, and `base` when none match
+- [ ] `base` is selectable while a narrow band matches
+- [ ] A `print` (or other non-width) query is listed as unavailable, with a reason
+- [ ] An unreadable cross-origin stylesheet leaves the list populated from the readable ones rather than throwing
+- [ ] A page declaring no media queries offers `base` plus manual entry
+- [ ] A manually typed condition becomes the editing target
+- [ ] The picker shows the current target at a glance, without opening it
+- [ ] The shared page fixture gains media queries, and the existing suite still passes against it
+- [ ] Browser tests cover the above and carry the browser marker
+
+## Blocked by
+
+- None - can start immediately
