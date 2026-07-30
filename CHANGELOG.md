@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Colours show their hex.** A bare colour swatch is a rectangle and nothing else:
+  you could not read what colour an element already was, and you could not paste a
+  brand hex into it without going through the OS picker. Every swatch - Text,
+  Background, the border Colour, a shape's Fill and Stroke - now has an editable hex
+  beside it, and the two stay in step whichever one you use. It takes a hex with or
+  without the `#`, and a half-typed one stays quiet rather than warning on every
+  second keystroke about a value you are still typing.
 - **Margin and padding are edited per side.** They were single text boxes holding a
   four-value shorthand, so changing one side meant reading `30px 168px 0px 168px`,
   doing the arithmetic and retyping the lot. Now there are four boxes on one row - no

@@ -664,7 +664,7 @@
       var min = c.min === undefined ? (c.box || c.shapeOnly ? 0 : 1) : c.min;
       return '<input type="number" id="' + c.id + '" min="' + min + '"> px';
     }
-    if (c.kind === "color") return '<input type="color" id="' + c.id + '">';
+    if (c.kind === "color") return colourField(c);
     if (c.kind === "select") return select(c.id, c.opts);
     if (c.kind === "align") return alignButtons(c.id);
     if (c.suggest) return suggestField(c);
@@ -684,6 +684,16 @@
       }).join("") +
       '<button class="wt-link" id="' + c.id + '-link" type="button" aria-pressed="false"' +
       ' title="Link all four sides">&#128279;</button>' +
+      "</span>";
+  }
+  // The swatch keeps the control's own id (so it stays the value the write path reads)
+  // and gains a hex beside it. A bare colour input shows a rectangle and nothing else:
+  // you cannot read what the element currently is, and you cannot paste a brand hex.
+  function colourField(c) {
+    return '<span class="wt-colour">' +
+      '<input type="color" id="' + c.id + '">' +
+      '<input type="text" id="' + c.id + '-hex" spellcheck="false"' +
+      ' aria-label="' + c.label + ' hex" placeholder="#000000">' +
       "</span>";
   }
   // A text input with up/down buttons. The input stays free text, so a keyword or a
@@ -968,6 +978,7 @@
         });
       } else {
         set(c.id, shown);
+        if (c.kind === "color") set(c.id + "-hex", shown);   // the swatch's readable half
       }
     });
     // Group/field visibility: the Shape group shows only for shapes; Type + Colour
@@ -1354,8 +1365,35 @@
       node.addEventListener("input", function () { writeControl(c, this.value); });
       if (c.suggest) attachSuggest(c);
       if (c.step) attachStepper(c);
+      if (c.kind === "color") attachHex(c);
     }
   });
+
+  // ---- the hex beside a swatch ----------------------------------------------
+  // Both fields describe one colour, so each has to follow the other. The hex is
+  // deliberately forgiving about the `#` (a hex pasted from a style guide often loses
+  // it) and deliberately SILENT about an incomplete one: every keystroke fires an
+  // input event, so `#3f` arrives on the way to `#3fa9c2`, and warning about it would
+  // nag on every second keypress for a value the user is still typing.
+  function attachHex(c) {
+    var swatch = document.getElementById(c.id);
+    var hex = document.getElementById(c.id + "-hex");
+    if (!swatch || !hex) return;
+    hex.addEventListener("input", function () {
+      var value = normaliseHex(this.value);
+      if (!value) return;                 // mid-typing: not a colour yet, and not an error
+      swatch.value = value;               // keep the two in step
+      writeControl(c, value);
+    });
+    swatch.addEventListener("input", function () { hex.value = this.value; });
+  }
+  // A complete 3- or 6-digit hex, with or without the hash. Anything else is not yet
+  // a colour: returns null rather than guessing.
+  function normaliseHex(raw) {
+    var m = String(raw).trim().replace(/^#/, "");
+    if (!/^([0-9a-f]{3}|[0-9a-f]{6})$/i.test(m)) return null;
+    return "#" + m.toLowerCase();
+  }
 
   // ---- steppers -------------------------------------------------------------
   // Nudging a value by eye wants arrows, not typing. The arithmetic has three cases,

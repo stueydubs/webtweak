@@ -227,6 +227,15 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
    differ, and width/height on a non-replaced inline element. */
 .wt-field input:disabled,
 .wt-field select:disabled { opacity: 0.4; cursor: not-allowed; }
+/* --- colour: a swatch with a readable, editable hex ----------------------- */
+.wt-colour { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.wt-colour input[type="text"] {
+  flex: 0 1 82px; min-width: 0;
+  background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
+  border-radius: 5px; padding: 4px 6px;
+  font: 12px ui-monospace, Menlo, monospace;
+}
+
 /* --- per-side spacing ----------------------------------------------------- */
 /* Four boxes and a link toggle on ONE row, because vertical space is the panel's
    scarce dimension - it already scrolls on a short window. The boxes share the row
