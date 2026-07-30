@@ -7,16 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-30
+
+A panel release: the controls stop making you do arithmetic. Spacing is edited per
+side, sizes take any unit, colours show their hex, groups fold away and a single
+property can be put back. No change to the Patch contract - `padding-bottom` is just
+another property under it - so existing edits files reconcile unchanged.
+
+**Reinstalling the reconcile skill is worth it but not required** (`webtweak
+--install-skill`). Nothing this release emits will confuse an older copy; the new
+guidance is that sides *absent* from a Patch must be left alone, which is what keeps a
+`margin: 0 auto` centring intact.
+
 ### Added
-- **Groups fold, and a single property can be undone.** Two navigation problems rather
-  than styling ones. The panel is around 780px of content, so it scrolls on any window
-  shorter than about 800px and a group you are not using costs you the one you are -
-  every heading now collapses, and stays collapsed as you click between elements,
-  because that is panel state and not something to redo on every selection. And an
-  edited row now shows a small × beside its label that puts just that property back:
-  before this, undoing one property meant knowing that clearing its field did that,
-  which nothing on screen suggested. It goes through the undo stack like any other
-  change, so the revert is itself undoable.
+- **Margin and padding are edited per side.** They were single text boxes holding a
+  four-value shorthand, so changing one side meant reading `30px 168px 0px 168px`,
+  doing the arithmetic and retyping the lot. Now there are four boxes on one row - no
+  taller than before, because vertical space is the panel's scarce dimension - plus a
+  link button for "the same all round", which is the one thing the old box did well.
+
+  Each box takes any unit, and `auto`, so centring is now something you can *set*
+  rather than only lose. And only the side you touch is recorded: a Patch says
+  `padding-bottom: 40px` instead of all four sides. That removes a real hazard rather
+  than just some typing - on a centred block, the old shorthand carried the computed
+  px where the source said `auto`, and reconciling it literally killed the centring.
+  The reconcile skill is told the sides absent from a Patch must stay untouched.
+
+
 - **Size, Width and Height take any unit.** They were number inputs, so `2rem`, `80%`
   and `4ch` were not awkward to enter - they were impossible, and the panel quietly
   forced px onto layouts that were authored fluid. They are stepper fields now, showing
@@ -35,20 +52,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beside it, and the two stay in step whichever one you use. It takes a hex with or
   without the `#`, and a half-typed one stays quiet rather than warning on every
   second keystroke about a value you are still typing.
-- **Margin and padding are edited per side.** They were single text boxes holding a
-  four-value shorthand, so changing one side meant reading `30px 168px 0px 168px`,
-  doing the arithmetic and retyping the lot. Now there are four boxes on one row - no
-  taller than before, because vertical space is the panel's scarce dimension - plus a
-  link button for "the same all round", which is the one thing the old box did well.
-
-  Each box takes any unit, and `auto`, so centring is now something you can *set*
-  rather than only lose. And only the side you touch is recorded: a Patch says
-  `padding-bottom: 40px` instead of all four sides. That removes a real hazard rather
-  than just some typing - on a centred block, the old shorthand carried the computed
-  px where the source said `auto`, and reconciling it literally killed the centring.
-  The reconcile skill is told the sides absent from a Patch must stay untouched.
-
-## [0.5.0] - 2026-07-30
+- **Groups fold, and a single property can be undone.** Two navigation problems rather
+  than styling ones. The panel is around 780px of content, so it scrolls on any window
+  shorter than about 800px and a group you are not using costs you the one you are -
+  every heading now collapses, and stays collapsed as you click between elements,
+  because that is panel state and not something to redo on every selection. And an
+  edited row now shows a small × beside its label that puts just that property back:
+  before this, undoing one property meant knowing that clearing its field did that,
+  which nothing on screen suggested. It goes through the undo stack like any other
+  change, so the revert is itself undoable.## [0.5.0] - 2026-07-30
 
 A small release from using the tool: the last two bare text boxes in the Type group
 get proper controls, and three things found by driving the overlay in a real browser
@@ -379,7 +391,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/stueydubs/webtweak/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/stueydubs/webtweak/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/stueydubs/webtweak/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/stueydubs/webtweak/compare/v0.2.0...v0.3.0
