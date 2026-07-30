@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, so the swatch was already showing it. Style `none` removes a border and
   records as `border: none`; clearing any field abandons the whole change. See
   [ADR-0003](./docs/adr/0003-compose-shorthands-from-discrete-controls.md).
+- **Redo, and visible undo/redo buttons.** Undo was one-way and invisible: stepping
+  back too far meant redoing the work by hand, and nothing on screen said undo existed
+  or whether anything was left to undo - the only mention was a sentence in the hint
+  bar and the only feedback a status line after you had already lost your place. Both
+  buttons now sit in the top bar and dim when their stack is empty. `Shift+Cmd/Ctrl+Z`
+  and `Ctrl+Y` both redo. Redo covers every kind of change, including restoring a
+  shape whose creation you undid, and removing one again whose removal you undid.
+  Making a new edit drops the redo trail, so stepping forward can never splice an
+  abandoned branch of history into current work.
 - **A Shadow field, with presets.** `box-shadow` is the one property here that
   resists discrete controls: building it from parts would need four lengths, a colour
   and an inset flag, and a shadow's colour is almost always translucent while the

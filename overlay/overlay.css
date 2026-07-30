@@ -78,6 +78,10 @@ html { user-select: none; }
 }
 .wt-btn:hover { background: #2c303a; }
 .wt-btn.wt-primary { background: #ffd479; color: #1a1300; border-color: #ffd479; font-weight: 600; }
+/* Undo/Redo are the only place history is visible, so an empty stack has to LOOK
+   empty - the panel styles its own colours, so the default disabled rendering
+   barely shows through and a dead button reads as live. */
+.wt-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .wt-btn.wt-primary:hover { background: #ffdd94; }
 
 /* --- shape palette ------------------------------------------------------- */

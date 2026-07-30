@@ -56,6 +56,7 @@
     return Date.now() - gestureEndedAt < 300;
   }
   var undoStack = [];      // stack of batches: each [{el, prop, prev}]
+  var redoStack = [];      // inverses of undone batches, cleared by any new edit
   var pendingShape = null; // shape kind awaiting a placement click (place mode)
 
   function entry(el) {
@@ -80,7 +81,15 @@
     edited.forEach(function (e) { if (Object.keys(e.changes).length) any = true; });
     return any;
   }
-  // ---- undo -----------------------------------------------------------------
+  // ---- undo / redo ----------------------------------------------------------
+  // Every user edit goes through here, so this is where an abandoned redo branch
+  // dies: stepping forward must never splice work the user has moved on from back
+  // into the session.
+  function pushUndo(batch) {
+    undoStack.push(batch);
+    redoStack.length = 0;
+    refreshHistory();
+  }
   // Push a panel-input undo step before mutating changes[prop].
   // Consecutive calls for the same el+prop collapse into one step so typing
   // into a field leaves a single undo step regardless of how many keystrokes.
@@ -91,8 +100,14 @@
     // Only collapse consecutive PANEL writes of the same prop into one step. A gesture
     // batch (a drag/resize, tagged below) must stay its own step, or a single-axis grip
     // resize followed by typing the same prop would fuse into one undo.
-    if (top && !top.gesture && top.length === 1 && top[0].el === el && top[0].prop === prop) return;
-    undoStack.push([{ el: el, prop: prop, prev: prev }]);
+    // The redo branch dies either way: a collapsed keystroke is still a new edit, and
+    // after an undo the step it collapses into is one the user has stepped back past.
+    if (top && !top.gesture && top.length === 1 && top[0].el === el && top[0].prop === prop) {
+      redoStack.length = 0;
+      refreshHistory();
+      return;
+    }
+    pushUndo([{ el: el, prop: prop, prev: prev }]);
   }
   // Gesture-batched undo: snapshot the props at gesture start, then at end push one
   // batch for those that actually changed. Shared by shape move + both resize paths.
@@ -108,27 +123,37 @@
     props.forEach(function (p) {
       if (ch[p] !== prev[p]) batch.push({ el: el, prop: p, prev: prev[p] });
     });
-    if (batch.length) { batch.gesture = true; undoStack.push(batch); }  // own undo step, never collapsed
+    if (batch.length) { batch.gesture = true; pushUndo(batch); }  // own undo step, never collapsed
   }
   var MOVE_PROPS = ["left", "top"];                                  // a shape drag
   var RESIZE_PROPS = ["width", "height", "max-width", "min-height"]; // any resize gesture
 
-  function applyUndoBatch(batch) {
+  // Apply one history batch and RETURN ITS INVERSE, so redo needs no separate
+  // recording of forward operations: each step already carries the previous value,
+  // and the inverse only needs the current one, captured here as the step is applied.
+  // Creation and removal are already exact inverses of each other in this vocabulary,
+  // so undoing a creation yields a removal and vice versa - which means applying an
+  // inverse returns the original batch, and one applier serves both directions.
+  function applyHistory(batch) {
     // Collect unique elements so each element's inline is rebuilt exactly once.
-    var els = [];
+    var els = [], inverse = [];
     batch.forEach(function (u) {
-      // Undoing a shape's creation removes the element and its edited entry outright.
+      // Removes the element and its edited entry outright; the inverse puts both back,
+      // which needs the parent and following sibling captured before the removal.
       if (u.create) {
+        inverse.push({ el: u.el, restore: {
+          entry: edited.get(u.el), parent: u.el.parentNode, before: u.el.nextSibling } });
         if (u.el === selectedEl) deselect();
         if (u.el.parentNode) u.el.parentNode.removeChild(u.el);
         edited.delete(u.el);
         return;
       }
-      // Undoing a shape removal puts the element back where it was.
+      // Puts the element back where it was; the inverse removes it again.
       if (u.restore) {
         if (u.restore.parent) u.restore.parent.insertBefore(u.el, u.restore.before);
         edited.set(u.el, u.restore.entry);
         if (els.indexOf(u.el) < 0) els.push(u.el);
+        inverse.push({ el: u.el, create: true });
         return;
       }
       // entry() creates on miss, so undoing past a reset would resurrect a
@@ -139,6 +164,9 @@
         if (!document.contains(u.el)) return;      // element is gone; nothing to undo onto
         ent = entry(u.el);
       }
+      // The value being replaced IS the inverse's `prev` - including undefined, which
+      // both directions read as "this property was not in changes".
+      inverse.push({ el: u.el, prop: u.prop, prev: ent.changes[u.prop] });
       if (u.prev === undefined) {
         delete ent.changes[u.prop];
         // rebuildInline only seeds _x/_y when nudge IS in changes; reset manually here.
@@ -152,14 +180,33 @@
       rebuildInline(el, edited.get(el));
       if (el === selectedEl) { positionBox(selBox, el); populate(el); }
     });
+    // Recomputed in both directions, so the save prompt and the reconcile badge stay
+    // honest however far through history the user has stepped.
     dirty = hasRealEdits();
     refreshChanges();
-    status("undone");
+    if (batch.gesture) inverse.gesture = true;   // keep a gesture batch its own step
+    return inverse;
   }
 
   function undo() {
     if (!undoStack.length) { status("nothing to undo"); return; }
-    applyUndoBatch(undoStack.pop());
+    redoStack.push(applyHistory(undoStack.pop()));
+    refreshHistory();
+    status("undone");
+  }
+  function redo() {
+    if (!redoStack.length) { status("nothing to redo"); return; }
+    // Straight onto the undo stack, NOT via pushUndo: stepping forward through
+    // history is not a new edit, so it must not clear the branch behind it.
+    undoStack.push(applyHistory(redoStack.pop()));
+    refreshHistory();
+    status("redone");
+  }
+  // The buttons are the only place history is visible, so they have to be exact.
+  function refreshHistory() {
+    var u = document.getElementById("wt-undo"), r = document.getElementById("wt-redo");
+    if (u) u.disabled = !undoStack.length;
+    if (r) r.disabled = !redoStack.length;
   }
 
   // The value each control was populated with this selection, so an unchanged
@@ -427,7 +474,7 @@
         rebuildInline(svg, e);
       }
       dirty = true;                          // a fresh shape is an unsaved edit; a restored one is not
-      undoStack.push([{ el: svg, create: true }]);  // Cmd+Z removes the shape
+      pushUndo([{ el: svg, create: true }]);        // Cmd+Z removes the shape
     }
     return svg;
   }
@@ -445,6 +492,10 @@
     '    <button class="wt-btn" id="wt-shape-btn">Shape ▾</button>',
     '    <div class="wt-palette" id="wt-palette" hidden></div>',
     "  </div>",
+    // History was invisible: the only mention of undo was a sentence in the hint bar,
+    // and the only feedback a status line after the user had already lost their place.
+    '  <button class="wt-btn" id="wt-undo" title="Undo (Cmd/Ctrl+Z)" disabled>Undo</button>',
+    '  <button class="wt-btn" id="wt-redo" title="Redo (Shift+Cmd/Ctrl+Z)" disabled>Redo</button>',
     '  <button class="wt-btn" id="wt-deselect">Deselect</button>',
     '  <button class="wt-btn wt-primary" id="wt-save">Save</button>',
     "</div>",
@@ -463,7 +514,7 @@
     '    <button class="wt-changes-head" id="wt-changes-head" aria-expanded="false"></button>',
     '    <ul class="wt-changes-list" id="wt-changes-list" hidden></ul>',
     "  </div>",
-    '  <div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Cmd/Ctrl+S</b> save.</div>',
+    '  <div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Shift+Cmd/Ctrl+Z</b> redo, <b>Cmd/Ctrl+S</b> save.</div>',
     "</div>",
     '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Click anywhere</b> to drop the shape. <b>Esc</b> to cancel.</div>',
   ].join("\n");
@@ -778,7 +829,7 @@
       // Removing a shape is a delete, so it must be undoable: without this the
       // button silently destroys work and Ctrl+Z pops some older, unrelated step.
       var sib = el.nextSibling, parent = el.parentNode;
-      undoStack.push([{ el: el, restore: { entry: e, parent: parent, before: sib } }]);
+      pushUndo([{ el: el, restore: { entry: e, parent: parent, before: sib } }]);
       if (el === selectedEl) deselect();
       if (parent) parent.removeChild(el);
       edited.delete(el);
@@ -792,7 +843,7 @@
       var steps = Object.keys(e.changes).map(function (p) {
         return { el: el, prop: p, prev: e.changes[p] };
       });
-      if (steps.length) undoStack.push(steps);
+      if (steps.length) pushUndo(steps);
       if (e.origStyle == null) el.removeAttribute("style");
       else el.setAttribute("style", e.origStyle);
       edited.delete(el);
@@ -1306,7 +1357,7 @@
               pushGestureUndo(el, MOVE_PROPS, movePrev);
             } else {
               var cur = ((edited.get(el) || {}).changes || {}).nudge;
-              if (cur !== nudgePrev) undoStack.push([{ el: el, prop: "nudge", prev: nudgePrev }]);
+              if (cur !== nudgePrev) pushUndo([{ el: el, prop: "nudge", prev: nudgePrev }]);
             }
           },
           move: function (event) {
@@ -1474,6 +1525,8 @@
   }
 
   document.getElementById("wt-deselect").addEventListener("click", deselect);
+  document.getElementById("wt-undo").addEventListener("click", undo);
+  document.getElementById("wt-redo").addEventListener("click", redo);
 
   // ---- keyboard -------------------------------------------------------------
   document.addEventListener("keydown", function (ev) {
@@ -1492,6 +1545,16 @@
     if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey && (ev.key === "z" || ev.key === "Z")) {
       ev.preventDefault();
       undo();
+    }
+    // The undo binding above already excluded shift, so redo needs nothing reassigned.
+    // Both keys are checked in either case: holding shift makes ev.key "Z".
+    if ((ev.metaKey || ev.ctrlKey) && ev.shiftKey && (ev.key === "z" || ev.key === "Z")) {
+      ev.preventDefault();
+      redo();
+    }
+    if (ev.ctrlKey && !ev.shiftKey && (ev.key === "y" || ev.key === "Y")) {
+      ev.preventDefault();
+      redo();
     }
   });
 

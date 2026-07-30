@@ -64,7 +64,7 @@ In the browser:
 - **Add a shadow from presets.** The Shadow field's ▾ offers a hairline, a card lift, a modal lift, a dramatic drop, an inset press, and `none` to take one off - so the property nobody remembers the syntax of is one you pick. Typing your own still works.
 - **Pick a font from your own page.** The Font field's ▾ lists every font stack the page already uses, plus any family it declares as `@font-face`. Picking one writes the whole stack, so its fallbacks survive the edit; typing a stack by hand still works for a font you're introducing for the first time.
 - **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
-- **Cmd/Ctrl+Z** undoes your last change, of any kind.
+- **Undo and redo** from the buttons in the top bar or the keyboard: **Cmd/Ctrl+Z** undoes your last change of any kind, **Shift+Cmd/Ctrl+Z** (or **Ctrl+Y**) puts it back. Each button dims when there is nothing left in that direction, so you can see where you are in history. Making a new edit drops the redo trail, so stepping forward can never splice in work you had abandoned.
 - **Reset this element** discards all your edits to the selected element (also undoable).
 - **Review before you save.** A "N elements changed" list sits bottom-left; open it to see every element you've touched and what changed on it, and click an entry to jump back to that element.
 - **Save** when you're happy. **Cmd/Ctrl+S** saves, **Esc** deselects.
