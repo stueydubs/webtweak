@@ -229,16 +229,20 @@
     { group: "Type", id: "wt-ff", prop: "font-family", label: "Font", kind: "text",
       suggest: pageFonts, suggestTitle: "Fonts on this page", suggestPreview: true,
       read: function (cs) { return cs.fontFamily; } },  // full stack, so editing keeps fallbacks
-    { group: "Type", id: "wt-fs", prop: "font-size", label: "Size", kind: "number", unit: "px",
-      read: function (cs) { return px(cs.fontSize); } },
+    { group: "Type", id: "wt-fs", prop: "font-size", label: "Size", kind: "text", unit: "px", step: 1, min: 1,
+      // Shows its unit and takes one, so `2rem` is expressible - as a number input it
+      // was not merely awkward but impossible, and the panel quietly forced px.
+      read: function (cs) { return cs.fontSize; } },
     { group: "Type", id: "wt-fw", prop: "font-weight", label: "Weight", kind: "select",
       opts: ["100", "200", "300", "400", "500", "600", "700", "800", "900"],
       read: function (cs) { return String(parseInt(cs.fontWeight, 10) || 400); } },
     { group: "Type", id: "wt-lh", prop: "line-height", label: "Line", kind: "text",
       // Stepper rather than a number input, because a number input could hold none of
       // `normal`, `1.4em` or `24px` - all of which real stylesheets author and all of
-      // which this field accepts today.
-      step: 0.1,
+      // which this field accepts today. `keywordValue` is how the arrows get a number
+      // out of `normal`; a width or a size has no such fallback, so its arrows simply
+      // do nothing on a keyword rather than inventing one.
+      step: 0.1, keywordValue: measuredRatio,
       // show the unitless ratio (computed resolves to px); writing a bare number keeps it unitless
       read: function (cs) {
         if (cs.lineHeight === "normal") return "normal";
@@ -258,10 +262,12 @@
       read: function (cs) { return rgbToHex(cs.color); } },
     { group: "Colour", id: "wt-bg", prop: "background-color", label: "Background", kind: "color",
       read: function (cs) { return rgbToHex(cs.backgroundColor); } },
-    { group: "Box", id: "wt-w", prop: "width", label: "Width", kind: "number", unit: "px", box: true,
-      read: function (cs) { return px(cs.width); } },
-    { group: "Box", id: "wt-h", prop: "height", label: "Height", kind: "number", unit: "px", box: true,
-      read: function (cs) { return px(cs.height); } },
+    // Unit-aware for the same reason, and this is where it bites hardest: a fluid
+    // width was unreachable, so every width edit was a px width.
+    { group: "Box", id: "wt-w", prop: "width", label: "Width", kind: "text", unit: "px", box: true, step: 1, min: 1,
+      read: function (cs) { return cs.width; } },
+    { group: "Box", id: "wt-h", prop: "height", label: "Height", kind: "text", unit: "px", box: true, step: 1, min: 1,
+      read: function (cs) { return cs.height; } },
     // Four boxes on one row, not a shorthand in one box. Editing a single side used
     // to mean reading `30px 168px 0px 168px`, doing the arithmetic and retyping it -
     // and the Patch then carried all four sides whatever you touched, which is why
@@ -1136,17 +1142,21 @@
     // drop any recorded change - not return early and leave the abandoned value
     // sitting in the edits file for Claude to reconcile into real source.
     if (raw === "" && c.kind !== "align") return revertControl(c);
-    if (c.box) raw = Math.max(1, parseInt(raw, 10) || 1);   // width/height floor of 1, matching resize
-    var v = c.unit ? raw + c.unit : raw;
+    // A bare number means the control's own unit; a value that already carries one (or
+    // is a keyword) is passed through untouched. The width/height floor of 1 applies
+    // only to bare numbers - flooring "80%" through parseInt would silently make it 80px.
+    var bare = /^-?\d*\.?\d+$/.test(String(raw).trim());
+    if (c.box && bare) raw = Math.max(1, parseFloat(raw) || 1);   // matching the resize grips
+    var v = (c.unit && bare) ? raw + c.unit : raw;
     if (c.prop === "font-family") v = quoteFamily(raw);
     // Rejected first, before anything can interpret the value (see accepts).
     if (!accepts(c, v, raw)) return;
     // Setting a control back to the value it was populated with means "revert this
     // property" - drop the override + the recorded change rather than baking a no-op
     // (also stops an accidental opaque #000000 from a transparent-shown colour swatch).
-    // Some props (margin/padding/box-shadow) have a baseline in computed form that a
-    // typed value never matches literally, so resolve it through the element first.
-    var revertTarget = RESOLVE_TO_COMPARE[c.prop] ? resolveValue(c.prop, raw) : String(raw);
+    // Compared as the value about to be WRITTEN, not as typed: baselines carry units,
+    // so a bare "44" has to become "44px" before it can match "44px".
+    var revertTarget = RESOLVE_TO_COMPARE[c.prop] ? resolveValue(c.prop, v) : String(v);
     // A shape's seeded properties (fill/stroke/stroke-width/rx and width/height) have
     // no authored baseline and must stay in the self-contained create patch, so those
     // writes are always recorded - a 1px border or a #000000 fill can't be mistaken for
@@ -1168,7 +1178,10 @@
   // set would silently delete it instead of being ignored.
   function accepts(c, v, raw) {
     var prop = propOf(c);
-    if (c.box || c.shapeOnly) return true;   // a px number or a swatch is always valid
+    // shapeOnly props only: CSS.supports reports SVG presentation properties unevenly.
+    // Box controls used to be skipped here too, on the grounds that a number input
+    // could only hold a number - which stopped being true when they gained units.
+    if (c.shapeOnly) return true;
     if (CSS.supports(prop, v)) return true;
     status("ignored invalid " + prop + ": " + raw, false);
     return false;
@@ -1216,17 +1229,14 @@
     record(selectedEl, prop, raw);
     positionBox(selBox, selectedEl);
   }
-  // Is this write just putting the side back to what it already renders? Two lengths
-  // are compared RESOLVED, so `2rem` is recognised as the computed `32px` it equals.
-  // A keyword is compared literally, because resolving it destroys the distinction:
-  // `auto` computes to `0px` on a block that is not centred, so a resolved comparison
-  // would read "auto" as a revert against a `0px` baseline and record nothing - which
-  // is exactly how you would try to centre something and watch nothing happen.
-  function isRevert(prop, raw, baseline) {
-    var lengths = /\d/.test(raw) && /\d/.test(baseline);
-    return lengths ? resolveValue(prop, raw) === resolveValue(prop, baseline)
-                   : raw.trim() === baseline.trim();
-  }
+  // Is this write just putting the side back to what it already shows? Compared
+  // LITERALLY, deliberately. Resolving both through the element first looks smarter -
+  // it would spot that `2rem` equals a computed `32px` - but it loses twice over.
+  // `auto` resolves to `0px` on a block that is not centred, so centring would read as
+  // a revert and record nothing; and a deliberate px-to-rem conversion renders
+  // identically, so it would be silently dropped rather than captured as the edit it
+  // is. Recording a no-op patch is the cheaper mistake than losing intent.
+  function isRevert(prop, raw, baseline) { return raw.trim() === baseline.trim(); }
   function revertSide(c, prop, baseId) {
     var ent = edited.get(selectedEl);
     if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
@@ -1445,13 +1455,15 @@
     } else {
       // A keyword has no number to step. `line-height: normal` does not even compute
       // to a length - it stays the keyword - so the ratio has to be measured.
-      value = measuredRatio(selectedEl);
+      if (!c.keywordValue) return null;   // nothing sensible to step from
+      value = c.keywordValue(selectedEl);
       unit = "";
       if (value === null) return null;
     }
     if (isNaN(value)) return null;
     var stepped = value + sign * c.step;
-    if (stepped < 0) stepped = 0;               // a negative line-height is not a thing
+    var floor = c.min === undefined ? 0 : c.min;   // what the number input's `min` did
+    if (stepped < floor) stepped = floor;
     // Trim float noise (1.6 + 0.1 = 1.7000000000000002) without forcing decimals on
     // a value that does not need them.
     return String(+stepped.toFixed(4)) + unit;

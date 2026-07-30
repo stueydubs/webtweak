@@ -352,22 +352,32 @@ def test_shape_rx_radius_routes_to_child_and_patch(served):
     assert create["changes"]["rx"] == "14px"
 
 
-def test_shape_number_spinners_allow_zero(served):
-    """stroke-width and rx are 0-meaningful (no border / sharp corners), so their
-    spinners floor at 0 - while ordinary numbers (font-size) still floor at 1."""
+def test_number_floors_differ_by_what_zero_means(served):
+    """stroke-width and rx are 0-meaningful (no border / sharp corners) so they floor
+    at 0, while font-size floors at 1. Asserted through the controls rather than
+    through a `min` attribute: font-size is a stepper now, so its floor lives in the
+    step arithmetic instead of in the markup, and the guarantee is what matters.
+    """
     tmp, port = served
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        mins = page.evaluate("""() => ({
+        shape_mins = page.evaluate("""() => ({
             sw: document.getElementById('wt-sw').getAttribute('min'),
             rx: document.getElementById('wt-rx').getAttribute('min'),
-            fs: document.getElementById('wt-fs').getAttribute('min'),
         })""")
+        # font-size: step down from 1px and it must not go below 1
+        page.click("#headline")
+        page.fill("#wt-fs", "1px")
+        page.dispatch_event("#wt-fs", "input")
+        page.click("#wt-fs-down")
+        page.click("#wt-fs-down")
+        floored = page.eval_on_selector("#wt-fs", "el => el.value")
         browser.close()
-    assert mins == {"sw": "0", "rx": "0", "fs": "1"}
+    assert shape_mins == {"sw": "0", "rx": "0"}
+    assert floored == "1px"
 
 
 def test_grip_resize_and_panel_edit_are_separate_undo_steps(served):

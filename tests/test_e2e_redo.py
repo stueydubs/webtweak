@@ -59,7 +59,7 @@ def test_redo_restores_an_undone_property_change(served):
         browser.close()
     assert undone == "44px"                                    # the authored size
     assert redone == "52px"
-    assert field == "52"                                       # the panel came back too
+    assert field == "52px"                                     # the panel came back too
     assert patches(tmp)[0]["changes"]["font-size"] == "52px"
 
 

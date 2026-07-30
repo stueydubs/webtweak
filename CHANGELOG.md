@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Size, Width and Height take any unit.** They were number inputs, so `2rem`, `80%`
+  and `4ch` were not awkward to enter - they were impossible, and the panel quietly
+  forced px onto layouts that were authored fluid. They are stepper fields now, showing
+  their unit and keeping it when you use the arrows. A bare number still means px, so
+  the common case is unchanged.
+
+  Two things followed from that. The invalid-value gate now applies to these fields: it
+  used to be skipped on the grounds that a number input can only hold a number, which
+  stopped being true. And the revert check now compares the value about to be *written*
+  rather than what you typed - with a unit in the baseline, a bare `44` had to become
+  `44px` before it could be recognised as putting a 44px size back.
 - **Colours show their hex.** A bare colour swatch is a rectangle and nothing else:
   you could not read what colour an element already was, and you could not paste a
   brand hex into it without going through the OS picker. Every swatch - Text,

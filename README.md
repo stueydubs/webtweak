@@ -59,6 +59,7 @@ In the browser:
 - **Drag the interior** to nudge its position (snaps to a 4px grid).
 - **Drag the right, bottom, or corner grip** (the gold handles on the selection box) to resize it.
 - **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding, border, corner radius and shadow.
+- **Sizes take any unit.** Size, Width and Height are stepper fields showing their unit, so `2rem`, `80%` and `4ch` work as well as px - a bare number still means px. Before this they were number inputs, which made a fluid width impossible to enter at all.
 - **Colours show their hex.** Each swatch has an editable hex beside it, so you can read what colour something currently is and paste a brand value straight in - with or without the `#`.
 - **Margin and padding are per side.** Four boxes, one per side, so changing just the bottom padding means typing in the bottom box rather than rewriting a shorthand in your head. Each takes any unit - or `auto`, so centring is something you can set here. The link button writes all four at once when that is what you meant. Only the sides you touch are recorded, which is what stops a reconcile from flattening an `auto` you never asked it to.
 - **Pick a font from your own page.** The Font field's ▾ lists every font stack the page already uses, plus any family it declares as `@font-face`. Picking one writes the whole stack, so its fallbacks survive the edit; typing a stack by hand still works for a font you're introducing for the first time.
