@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-30
+
+### Security
+- **The breadcrumb no longer executes markup from the page you are editing.** It
+  was built with `innerHTML` from the element's own tag, id and class names, so
+  opening a page from a repo you did not write and clicking an element ran its id
+  as HTML - in the overlay's origin, which can POST patches that Claude later
+  reconciles into your real source. Now built with `textContent`. The session
+  change list added in this release was already safe; the breadcrumb beside it
+  never had been.
+- **The file watcher can no longer be walked out of the served directory.** Its
+  initial scan correctly refuses to follow symlinks, but an `fs.watch` event
+  carries only a name, so the child was `stat`ed - and a stat follows links. A
+  symlink created while webtweak was running therefore had it watching, and
+  reporting filenames from, directories outside the web root.
+
 ### Added
 - **The loop closes in the browser.** webtweak now watches the files it serves
   and pushes an event when the source under the page changes, so a reconcile
@@ -36,6 +52,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand-off for free.
 - The panel note no longer reads as though saving invokes Claude. Save writes a
   file; reconcile is a separate step you ask for.
+- `--help` documents `--root`; the opened URL is percent-encoded, so a folder
+  named `my blog` or `a#b` no longer produces a link that 404s.
+
+### Fixed
+All of the below are in the live-reload machinery added above, found by review
+before release rather than in use.
+- **A reload can never discard your session.** Every safety check now fails
+  closed. Deleting or reverting the edits file - `git checkout .` in your site
+  repo, which is an ordinary thing to do since the file is meant to be committed
+  there - used to read as "already reconciled" and trigger a reload that threw
+  the session away. It now says `edits file gone` and leaves your edits on screen
+  so you can re-save them.
+- A reload only happens on the *transition* to reconciled, and only for **your**
+  session's batch. Another session's batch being marked no longer yanks the page
+  out from under you mid-review.
+- A save no longer silently dismisses a `source changed - reload` warning. The
+  source is still stale and nothing else will raise it again, so the decision is
+  re-run instead of dropped.
+- The badge cannot get stuck. It used to latch on `reconciling...` for the rest
+  of the session whenever reconcile deliberately left a batch pending (which it
+  is instructed to do when a patch needs your answer), with no way out.
+- The green `reconciled` badge clears the moment you start editing again, instead
+  of reading as "already in source" over unsaved work.
+- No reload during an in-flight save, and the unsaved-changes prompt stays honest
+  for that window - previously both treated the page as saved before the write
+  had landed.
+- A page in a very deep directory, or a very large tree, now says that live
+  reload is partly off rather than silently never firing.
+- The change list keeps its scroll position: rows are rebuilt only when they
+  actually change, not on every click and keystroke.
 
 ## [0.2.0] - 2026-07-29
 
