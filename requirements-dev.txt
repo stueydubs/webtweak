@@ -1,0 +1,11 @@
+# Everything the full test suite needs.
+#
+#     python3 -m venv .venv
+#     .venv/bin/pip install -r requirements-dev.txt
+#     .venv/bin/playwright install chromium
+#
+# The stdlib suite needs only pytest - webtweak.js itself has no dependencies at
+# all. Playwright is what the browser suite adds, and `playwright install
+# chromium` is a separate step because pip fetches the library, not the browser.
+pytest
+playwright

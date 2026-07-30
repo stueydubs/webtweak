@@ -13,8 +13,8 @@ import pytest
 
 pytest.importorskip(
     "playwright.sync_api",
-    reason="install Playwright to run the browser e2e: "
-           "pip install playwright && playwright install chromium",
+    reason="install Playwright to run the browser e2e - see the README's Development "
+           "section: pip install -r requirements-dev.txt && playwright install chromium",
 )
 
 from playwright.sync_api import sync_playwright  # noqa: E402,F401

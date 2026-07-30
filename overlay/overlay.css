@@ -36,6 +36,12 @@ html { user-select: none; }
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 12px rgba(0, 0, 0, 0.4);
 }
 .wt-logo { font-weight: 700; letter-spacing: 0.02em; color: #ffd479; }
+/* The ONLY shrinkable thing in the bar. Every other control is flex: 0 0 auto below,
+   because the default `flex-shrink: 1` let all ten of them shrink together on a narrow
+   window - their boxes crushed past their content and painted over each other, so at
+   480px the band picker sat underneath the Undo button and could not be clicked at
+   all. Which matters more than it reads: 480px is exactly the width this feature
+   exists to be used at. */
 .wt-crumb {
   flex: 1;
   min-width: 0;
@@ -47,7 +53,77 @@ html { user-select: none; }
   font-size: 12px;
 }
 .wt-crumb b { color: #e8eaed; }
-.wt-status { color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right; }
+.wt-status { flex: 0 0 auto; color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right; }
+/* Scoped to `.wt-bar >` rather than written bare, and that is load-bearing: the band
+   picker also carries `.wt-suggest`, which is declared later in this file with the
+   same specificity and sets `flex: 1`. Bare selectors lost the cascade to it, so the
+   control was sized to 62px while its own children spilled to 99px - putting the
+   toggle underneath the Shape button, where it could not be clicked. */
+.wt-bar > .wt-logo,
+.wt-bar > .wt-badge,
+.wt-bar > .wt-shapes,
+.wt-bar > .wt-scope,
+.wt-bar .wt-btn { flex: 0 0 auto; }
+
+/* --- the band picker ------------------------------------------------------ */
+/* Which widths an edit applies at. Reads as a scope, never as the subject - the
+   crumb names the element, this names the condition. */
+.wt-scope { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.wt-scope-label { color: #717784; font-size: 11px; white-space: nowrap; }
+.wt-scope-short { display: none; }
+#wt-scope-input {
+  width: 92px;
+  background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
+  border-radius: 5px; padding: 4px 6px;
+  font: 12px ui-monospace, Menlo, monospace;
+}
+/* Three things per row: the readable form, the condition verbatim, and - when the
+   band cannot be chosen - the reason. Stacked, because a band's condition text is as
+   long as its author felt like making it.
+   Every rule here is scoped to `.wt-band-list` for the cascade reason above:
+   `.wt-suggest-item` is declared later with `display: block; white-space: nowrap`,
+   and a one-line row ran all three spans together into an ellipsised smear. */
+.wt-band-list { width: 258px; max-width: 258px; }
+.wt-band-list .wt-band {
+  display: flex; flex-direction: column; gap: 1px;
+  white-space: normal; padding: 6px 8px;
+}
+.wt-band-list .wt-band-label { color: #e8eaed; }
+.wt-band-list .wt-band-cond {
+  color: #8f96a3; font: 11px ui-monospace, Menlo, monospace;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.wt-band-list .wt-band-cond:empty { display: none; }
+.wt-band-list .wt-band-note { color: #717784; font-size: 10px; }
+.wt-band-list .wt-band[data-state="matching"] .wt-band-label { color: #ffd479; }
+/* Declined out loud: a row you cannot pick has to LOOK unpickable, or the note
+   explaining why reads as decoration. */
+.wt-band-list .wt-band:disabled { cursor: not-allowed; opacity: 0.55; }
+.wt-band-list .wt-band:disabled:hover { background: none; }
+
+/* The bar carries ten controls, and this feature asks you to work at 480px - so it
+   has to survive the widths it is for. Shed in order of how little is lost: the
+   scope label (the field's own title says the same thing), the status column's
+   reserved width, then the wordmark and some button padding. Nothing that is a
+   control gets removed - a narrow window is not a reduced editor. */
+@media (max-width: 820px) {
+  /* Shortened, never removed. The control has to keep reading as a scope at every
+     width, so "Applies at:" becomes "At:" rather than disappearing. */
+  .wt-scope-long { display: none; }
+  .wt-scope-short { display: inline; }
+  .wt-status { min-width: 0; }
+}
+@media (max-width: 700px) {
+  .wt-bar { gap: 7px; padding: 0 8px; }
+  .wt-logo { display: none; }
+  .wt-bar .wt-btn { padding: 6px 9px; }
+  .wt-scope { gap: 4px; }
+  #wt-scope-input { width: 66px; }
+}
+/* The hint is the one thing here that teaches rather than does, so it goes last. */
+@media (max-width: 640px) {
+  .wt-hint { display: none; }
+}
 /* Reconcile state: where this session's changes have got to in the loop. */
 .wt-badge {
   appearance: none;
@@ -193,6 +269,13 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+/* Element and scope in one line, so neither can be mistaken for the other. */
+.wt-scope-note {
+  margin: -6px 0 10px;
+  color: #8f96a3;
+  font: 11px ui-monospace, Menlo, monospace;
+}
+.wt-scope-note:empty { display: none; }
 .wt-group { margin-bottom: 14px; }
 /* A button, so a group you are not using can be folded away - the panel is ~780px of
    content and scrolls on a short window. The caret is ::after rather than a child

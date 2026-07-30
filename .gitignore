@@ -10,3 +10,6 @@ __pycache__/
 *.webtweak.json
 *.webtweak.json*.bak
 *.webtweak.json.tmp
+
+# local dev virtualenv (see README Development / requirements-dev.txt)
+.venv/

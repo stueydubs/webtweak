@@ -421,6 +421,275 @@
     return out;
   }
 
+  // ---- the page's own breakpoints -------------------------------------------
+  // Which band an edit applies at. Gathered from the page's own stylesheets the way
+  // @font-face families are - defensively, so an unreadable CDN sheet degrades the
+  // list rather than throwing - and offered as a scope the user picks, never inferred.
+  //
+  // The inference is impossible, not merely unwise: a browser prototype at a 480px
+  // window found `(max-width: 900px)` and `(max-width: 600px)` matching at the same
+  // time, so "the current breakpoint" is not a single thing.
+
+  var BASE_LABEL = "all widths";
+  var scope = null;        // null = base (every width); else a band object
+  var manualBands = [];    // conditions typed by hand, kept so they can be returned to
+
+  // Every grouping condition a stylesheet declares. Nested @media is legal, and an
+  // @import'ed sheet's rules are NOT in document.styleSheets, so both are walked -
+  // bounded, so a pathologically nested sheet cannot spin.
+  function collectConditions(node, out, depth, outer) {
+    depth = depth || 0;
+    var rules;
+    try { rules = node.cssRules; } catch (e) { return; }   // cross-origin: unreadable, not fatal
+    if (!rules) return;
+    Array.prototype.forEach.call(rules, function (r) {
+      // `media` discriminates a media rule from an @supports block (which also has a
+      // conditionText) and from an @import (which has a MediaList but no condition).
+      var mine = r.media && typeof r.conditionText === "string" ? r.conditionText : "";
+      // A nested condition only applies WITHIN its parent's, so the two are joined
+      // rather than reported separately: `@media screen { @media (max-width: 600px) }`
+      // declares one narrower band, and offering the inner half alone would hand 0015
+      // a condition to write that is broader than anything the page actually has.
+      // A join that produces nonsense is dropped by makeBand's validity check.
+      var here = mine && outer ? outer + " and " + mine : (mine || outer || "");
+      if (mine && here) out.push(here);
+      if (depth >= 3) return;
+      if (r.styleSheet) collectConditions(r.styleSheet, out, depth + 1, here);  // @import
+      else if (r.cssRules) collectConditions(r, out, depth + 1, here);
+    });
+  }
+  function pageConditions() {
+    var out = [];
+    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
+      // webtweak's own sheet has breakpoints (the bar collapses on a narrow window);
+      // offering them would be the editor describing itself as the page.
+      if ((sheet.href || "").indexOf(RESERVED) >= 0) return;
+      collectConditions(sheet, out);
+    });
+    return out;
+  }
+
+  // Range syntax says the same thing in a different spelling, so it is rewritten into
+  // min/max before parsing rather than parsed twice. Only the LABEL and the ordering
+  // are derived from this - the condition itself is always kept verbatim, so a `<`
+  // read as `<=` costs a pixel in a caption and nothing in what gets recorded.
+  function normaliseRanges(condition) {
+    var LEN = "([\\d.]+(?:px|em|rem)?)";
+    return condition
+      .replace(new RegExp("\\(\\s*" + LEN + "\\s*<=?\\s*width\\s*<=?\\s*" + LEN + "\\s*\\)", "gi"),
+        "(min-width: $1) and (max-width: $2)")
+      .replace(new RegExp("\\(\\s*width\\s*<=?\\s*" + LEN + "\\s*\\)", "gi"), "(max-width: $1)")
+      .replace(new RegExp("\\(\\s*width\\s*>=?\\s*" + LEN + "\\s*\\)", "gi"), "(min-width: $1)");
+  }
+  // A media-query length in em/rem is relative to the INITIAL font size, never to the
+  // root element's - so 16 is exact here rather than the usual guess.
+  var EM_PX = 16;
+  function condLength(condition, feature) {
+    var m = new RegExp("\\(\\s*" + feature + "\\s*:\\s*(-?[\\d.]+)(px|em|rem)?\\s*\\)", "i")
+      .exec(condition);
+    if (!m) return null;
+    var unit = (m[2] || "px").toLowerCase();
+    return { text: m[1] + (m[2] || "px"), px: parseFloat(m[1]) * (unit === "px" ? 1 : EM_PX) };
+  }
+
+  // Chromium parses an UNKNOWN MEDIA TYPE as a perfectly legal query that simply
+  // never matches - `matchMedia("banana").media` is "banana", not "not all" - so
+  // matchMedia alone cannot tell a typo from a condition webtweak declines. Without
+  // this, "banana" was answered with "banana cannot be previewed by resizing", which
+  // is true and useless. Anything with a feature test in it is a query; a bare word
+  // has to be one of the media types.
+  var MEDIA_WORDS = { all: 1, screen: 1, print: 1, speech: 1, and: 1, not: 1, only: 1 };
+  function looksLikeQuery(text) {
+    if (text.indexOf("(") >= 0) return true;
+    return text.trim().split(/\s+/).every(function (word) { return MEDIA_WORDS[word.toLowerCase()]; });
+  }
+
+  function makeBand(condition) {
+    var norm = normaliseRanges(condition);
+    var min = condLength(norm, "min-width"), max = condLength(norm, "max-width");
+    // matchMedia is the authority on both questions the Overlay cannot answer by
+    // parsing: whether the condition is even a condition (a malformed one serialises
+    // to "not all"), and whether it applies right now.
+    var mq = window.matchMedia(condition);
+    var b = {
+      condition: condition,
+      valid: mq.media !== "not all",
+      min: min,
+      max: max,
+      // Named for what it decides, not for what it parsed: a band is offerable only
+      // if resizing the window can show it. `width` read as a length beside min/max.
+      previewable: !!(min || max),
+    };
+    b.label = min && max ? min.text + "–" + max.text
+      : max ? "≤" + max.text
+      : min ? "≥" + min.text
+      : condition;
+    // How wide a range the band covers - the measure of "narrowest", and so of which
+    // band a user who has just dragged their window narrow is thinking about.
+    b.span = (max ? max.px : Infinity) - (min ? min.px : 0);
+    return b;
+  }
+  // Re-asked rather than cached: a band object is a snapshot, and the window it was
+  // taken at is exactly the thing that changes underneath it.
+  function bandMatches(b) { return !!b && window.matchMedia(b.condition).matches; }
+  function resizeHint(b) {
+    if (b.min && b.max) return "resize to " + b.min.text + "–" + b.max.text;
+    if (b.max) return "resize under " + b.max.text;
+    return "resize over " + b.min.text;
+  }
+
+  // The page's bands plus any typed by hand, deduped, narrowest first - so the list
+  // reads in the order the default is chosen from. Non-width conditions sort last:
+  // they are listed only to say why they are unavailable.
+  function pageBands() {
+    var seen = {}, out = [];
+    pageConditions().concat(manualBands).forEach(function (c) {
+      var key = c.replace(/\s+/g, " ").trim().toLowerCase();
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      var b = makeBand(c);
+      if (b.valid) out.push(b);   // a condition the browser cannot parse offers nothing
+    });
+    out.sort(function (a, b) {
+      if (a.previewable !== b.previewable) return a.previewable ? -1 : 1;
+      return a.span - b.span;
+    });
+    return out;
+  }
+  function narrowestMatch() {
+    var m = pageBands().filter(function (b) { return b.previewable && bandMatches(b); });
+    return m.length ? m[0] : null;   // already narrowest-first
+  }
+
+  function scopeLabel() { return scope ? scope.label : BASE_LABEL; }
+  function setScope(b) {
+    scope = b || null;
+    watchScope();
+    refreshScope();
+  }
+  // Watch the SCOPE'S OWN condition, not the window. The browser fires this exactly
+  // when the condition stops (or starts) being true, with the new state already
+  // settled - whereas a resize listener has to re-derive that, and a resize event can
+  // arrive before matchMedia agrees the width changed. That ordering is not
+  // theoretical: it left the scope one band behind across a fast double resize.
+  var scopeWatch = null;
+  function watchScope() {
+    if (scopeWatch && scopeWatch.removeEventListener) {
+      scopeWatch.removeEventListener("change", syncScope);
+    }
+    scopeWatch = scope ? window.matchMedia(scope.condition) : null;
+    if (scopeWatch && scopeWatch.addEventListener) {
+      scopeWatch.addEventListener("change", syncScope);
+    }
+  }
+  // The bar states the scope at all times, and the panel states it beside the element,
+  // so a scope change is never something the user has to go and check.
+  function refreshScope() {
+    var input = document.getElementById("wt-scope-input");
+    if (input) input.value = scopeLabel();
+    var note = document.getElementById("wt-scope-note");
+    if (note) note.textContent = selectedEl ? describe(selectedEl) + " at " + scopeLabel() : "";
+  }
+  // Dragging out of the band being authored moves the scope to the narrowest band
+  // that still matches, ending at base. Authoring into a band you have left would mean
+  // typing values the panel cannot show - `getComputedStyle` at 700px does not contain
+  // a 600px-only declaration - and recording a change that was never previewed.
+  //
+  // Deliberately ONE-DIRECTIONAL. Narrowing the window does not pull a base scope into
+  // a band: base is a choice ("this is wrong everywhere and I noticed it on mobile"),
+  // and re-aiming every later edit because the window moved is exactly the silent
+  // inference the picker exists to replace. Only a scope that can no longer be
+  // previewed is changed, because that one has stopped being honest.
+  function syncScope() {
+    if (scope && !bandMatches(scope)) {
+      setScope(narrowestMatch());
+      status("scope moved to " + scopeLabel());
+    }
+    refreshScope();
+    if (bandList && !bandList.hidden) openBands();   // marks and hints are width-dependent
+  }
+
+  // ---- the band picker ------------------------------------------------------
+  // Shares the suggestion widget's chrome and behaviour - placement, Esc, close on an
+  // outside click, follow-the-toggle on scroll - by carrying its classes, but builds
+  // its own rows: a band needs a readable form, the real condition, and a reason when
+  // it cannot be chosen, which a one-string row cannot carry.
+  var BASE_BAND = { condition: "", label: BASE_LABEL, base: true, previewable: true };
+  var NOT_A_WIDTH = "cannot be previewed by resizing";
+
+  function bandState(b) {
+    if (b.base) return "matching";
+    if (!b.previewable) return "unavailable";
+    return bandMatches(b) ? "matching" : "elsewhere";
+  }
+  function bandNote(b, state) {
+    if (b.base) return "the base styles, at every width";
+    if (state === "unavailable") return NOT_A_WIDTH;
+    return state === "matching" ? "matches this window" : resizeHint(b);
+  }
+  function bandRow(b) {
+    var state = bandState(b);
+    var li = document.createElement("li");
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "wt-suggest-item wt-band";
+    btn.dataset.condition = b.condition;
+    btn.dataset.state = state;
+    // A band the window is not inside is listed but not selectable - the same rule as
+    // a non-width condition, reached from the other side. Both refuse rather than
+    // invite an edit the page could not show.
+    btn.disabled = state !== "matching";
+    // The condition is shown beside the readable form, except where they are the same
+    // string - a non-width band has no readable form, so `print / print` said it twice.
+    [["wt-band-label", b.label], ["wt-band-cond", b.base || b.label === b.condition ? "" : b.condition],
+     ["wt-band-note", bandNote(b, state)]].forEach(function (pair) {
+      var span = document.createElement("span");
+      span.className = pair[0];
+      // textContent, never innerHTML: a condition is harvested from the page and is
+      // no more trustworthy than a font family name.
+      span.textContent = pair[1];
+      btn.appendChild(span);
+    });
+    btn.title = b.base ? BASE_LABEL : b.condition + " - " + bandNote(b, state);
+    li.appendChild(btn);
+    return li;
+  }
+  var bandList = null, bandToggle = null;   // assigned once the bar is mounted
+  function openBands() {
+    bandList.textContent = "";
+    [BASE_BAND].concat(pageBands()).forEach(function (b) {
+      bandList.appendChild(bandRow(b));
+    });
+    bandList.hidden = false;
+    placeSuggest(bandList, bandToggle);   // measured, so only once it is visible
+    bandToggle.setAttribute("aria-expanded", "true");
+  }
+  function pickBand(condition) {
+    if (!condition) return setScope(null);
+    var b = pageBands().filter(function (x) { return x.condition === condition; })[0];
+    if (b && b.previewable && bandMatches(b)) setScope(b);
+  }
+  // Typing a condition is the way out for a page whose stylesheets are unreadable, or
+  // which declares no queries at all. It goes through the same three refusals the list
+  // applies, or manual entry would be a hole straight through them.
+  function setManualScope(raw) {
+    var text = String(raw).trim();
+    if (!text || text === BASE_LABEL) return setScope(null);
+    if (scope && (text === scope.label || text === scope.condition)) return refreshScope();
+    var known = pageBands().filter(function (x) {
+      return x.condition === text || x.label === text;
+    })[0];
+    var b = known || makeBand(text);
+    if (!b.valid || !looksLikeQuery(text)) {
+      status("not a media condition: " + text, false);
+      return refreshScope();
+    }
+    if (!b.previewable) { status(b.label + " " + NOT_A_WIDTH, false); return refreshScope(); }
+    if (!bandMatches(b)) { status(resizeHint(b), false); return refreshScope(); }
+    if (!known && manualBands.indexOf(b.condition) < 0) manualBands.push(b.condition);
+    setScope(b);
+  }
+
   // ---- shapes ---------------------------------------------------------------
   // Every shape is one inline <svg> wrapper containing a single child primitive,
   // drawn into a fixed 0..100 viewBox. `preserveAspectRatio="none"` lets it stretch
@@ -526,6 +795,26 @@
     '<div class="wt-bar wt-ui">',
     '  <span class="wt-logo">webtweak</span>',
     '  <span class="wt-crumb" id="wt-crumb">click an element to select</span>',
+    // Deliberately "Applies at", never "Editing": the element is the subject and the
+    // band is only the condition. A mock labelled `Editing: (max-width: 480px)` read
+    // as though the media query itself were being edited.
+    // A text input rather than a button, so the page's declared bands are a
+    // convenience and not a gate - a condition can always be typed (see setManualScope).
+    '  <span class="wt-scope wt-suggest wt-ui" id="wt-scope">',
+    // Two spellings of the same label rather than one that disappears: hiding it on a
+    // narrow window removed the word "scope" at exactly the width this feature exists
+    // to be used at, leaving a bare `≤600px` beside a caret to be read as anything.
+    '    <span class="wt-scope-label">' +
+    '<span class="wt-scope-long">Applies at:</span>' +
+    '<span class="wt-scope-short">At:</span></span>',
+    '    <input type="text" id="wt-scope-input" spellcheck="false"' +
+    '     title="The widths an edit applies at. Pick one of this page\'s breakpoints,' +
+    ' or type a media condition." placeholder="(max-width: 600px)">',
+    '    <button class="wt-suggest-toggle" id="wt-scope-toggle" type="button"' +
+    '     aria-expanded="false" aria-controls="wt-scope-list"' +
+    '     title="This page\'s breakpoints">&#9662;</button>',
+    '    <ul class="wt-suggest-list wt-band-list" id="wt-scope-list" hidden></ul>',
+    "  </span>",
     '  <span class="wt-status" id="wt-status"></span>',
     '  <button class="wt-badge" id="wt-badge" hidden></button>',
     '  <div class="wt-shapes" id="wt-shapes">',
@@ -572,6 +861,27 @@
   var panel = document.getElementById("wt-panel");
   var palette = document.getElementById("wt-palette");
   var placeHint = document.getElementById("wt-place-hint");
+
+  // ---- band picker wiring ---------------------------------------------------
+  bandList = document.getElementById("wt-scope-list");
+  bandToggle = document.getElementById("wt-scope-toggle");
+  bandToggle.addEventListener("click", function () {
+    if (bandList.hidden) openBands();
+    else closeSuggest(bandList, bandToggle);
+  });
+  bandList.addEventListener("click", function (ev) {
+    var btn = ev.target.closest && ev.target.closest(".wt-band");
+    // A disabled button dispatches no click at all, so this guard is structural
+    // rather than presentational - the same reasoning as the declined panel controls.
+    if (!btn || btn.disabled) return;
+    pickBand(btn.dataset.condition);
+    closeSuggest(bandList, bandToggle);
+  });
+  // `change`, not `input`: every keystroke of "(max-width: 6" is an invalid condition
+  // on the way to a valid one, and warning about each would nag through a value the
+  // user is still typing - the same restraint the hex field shows.
+  document.getElementById("wt-scope-input")
+    .addEventListener("change", function () { setManualScope(this.value); });
 
   // ---- shape palette + place mode -------------------------------------------
   SHAPE_LIST.forEach(function (kind) {
@@ -645,7 +955,11 @@
   }
 
   function panelHTML() {
-    var parts = ['<div class="wt-panel wt-ui" id="wt-panel" hidden>', "  <h3>Properties</h3>"];
+    // The subject and the condition stated together, so neither can be mistaken for
+    // the other: the crumb names the element, the bar names the scope, and this line
+    // is the one place that says which element is being edited at which widths.
+    var parts = ['<div class="wt-panel wt-ui" id="wt-panel" hidden>', "  <h3>Properties</h3>",
+      '  <p class="wt-scope-note" id="wt-scope-note"></p>'];
     GROUPS.forEach(function (g) {
       // The legend is a button: the panel is ~780px of content and scrolls on any
       // window shorter than about 800px, so a group you are not using costs you the
@@ -900,6 +1214,7 @@
     selTag.textContent = describe(el);
     setCrumb(el);
     populate(el);
+    refreshScope();     // the panel names the element AND the scope it is edited at
     panel.hidden = false;
     attachInteract(el);
     refreshChanges();      // keep the list's current-selection highlight honest
@@ -913,6 +1228,7 @@
     selBox.hidden = true;
     closeAllSuggests();   // else it reopens with the panel on the next selection
     panel.hidden = true;
+    refreshScope();              // drops the panel's element-and-scope line
     crumbEl.textContent = "click an element to select";
     refreshChanges();            // drop the list's stale current-selection highlight
   }
@@ -1611,8 +1927,10 @@
   // Close any open list on Esc, on a click outside it, and whenever the selection
   // changes - an open dropdown left hanging over the panel swallows clicks meant
   // for the fields beneath it.
+  // Scoped to the whole Overlay, not just the panel: the band picker lives in the bar
+  // and needs the same Esc, outside-click and follow-the-toggle behaviour.
   function eachOpenSuggest(fn) {
-    Array.prototype.forEach.call(panel.querySelectorAll(".wt-suggest"), function (wrap) {
+    Array.prototype.forEach.call(root.querySelectorAll(".wt-suggest"), function (wrap) {
       var list = wrap.querySelector(".wt-suggest-list");
       var toggle = wrap.querySelector(".wt-suggest-toggle");
       if (list && !list.hidden) fn(list, toggle, wrap);
@@ -1888,6 +2206,10 @@
 
   window.addEventListener("scroll", reposition, true);
   window.addEventListener("resize", reposition);
+  // The scope's own media query (see watchScope) is what moves the scope; this is here
+  // because an OPEN picker's marks and resize hints depend on the width even when the
+  // scope itself is still valid.
+  window.addEventListener("resize", syncScope);
   function reposition() {
     if (selectedEl) positionBox(selBox, selectedEl);
     hoverBox.hidden = true;
@@ -1906,7 +2228,7 @@
       if (pendingShape) { exitPlaceMode(); status("placement cancelled"); return; }
       // An open suggestion list is what Esc dismisses first; the selection behind
       // it is not what the user was trying to leave.
-      if (panel.querySelector(".wt-suggest-list:not([hidden])")) { closeAllSuggests(); return; }
+      if (root.querySelector(".wt-suggest-list:not([hidden])")) { closeAllSuggests(); return; }
       deselect();
       return;
     }
@@ -2383,6 +2705,9 @@
     window.addEventListener("pagehide", function () { if (es) es.close(); });
   }
 
+  // The narrowest band the window is already inside, so opening webtweak at a phone
+  // width and typing a value does the obviously-right thing. `base` when none match.
+  setScope(narrowestMatch());
   restore();
   refreshChanges();
   refreshStatus();

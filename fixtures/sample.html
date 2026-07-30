@@ -39,6 +39,25 @@
     /* Several sides differing - a deliberate design the overlay declines to edit. */
     .mixed-rule { border-left: 3px solid var(--accent); border-bottom: 1px dotted #c9c1b4;
                   padding: 12px; margin: 24px 0 0; }
+
+    /* The page's own breakpoints, for the band picker to discover. Deliberately two
+       overlapping width bands: at a 480px window BOTH match, which is why the editing
+       scope cannot be inferred from the window alone and has to be chosen. The
+       headline is restyled in the narrower one, so the panel visibly reads a
+       different value per band with no extra machinery (44px wide, 32px narrow). */
+    @media (max-width: 900px) {
+      .wrap { padding: 60px 20px; }
+      .section-title { font-size: 24px; }
+    }
+    @media (max-width: 600px) {
+      h1.title { font-size: 32px; }
+      .lede { font-size: 18px; }
+    }
+    /* A condition that cannot be previewed by resizing a window, so the picker must
+       list it as unavailable rather than offer an edit the user was never shown. */
+    @media print {
+      .cta { display: none; }
+    }
   </style>
 </head>
 <body>

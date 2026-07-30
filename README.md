@@ -134,18 +134,22 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 
 ## Development
 
+There are two suites. The stdlib one needs nothing but pytest:
+
 ```bash
 python3 -m pytest -m "not browser"      # unit + HTTP integration, no browser needed
 ```
 
-The browser tests skip unless Playwright is installed, and a module skips as a *single* line - so check for the skip rather than assuming green:
+**A `not browser` run is not full coverage** — it excludes every test that drives the overlay in a real page, which is most of what webtweak does. The browser suite needs two more steps:
 
 ```bash
-pip install playwright && playwright install chromium
-python3 -m pytest                        # everything, nothing skipped
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/playwright install chromium    # pip fetches the library, not the browser
+.venv/bin/python -m pytest               # everything, nothing skipped
 ```
 
-Browser tests carry the `browser` marker and CI selects on it, never on a filename: a new browser module that CI does not know about would otherwise read green while never executing.
+Browser tests skip as a *single* line per module when Playwright is absent, so a suite missing them still reads green — check the skip count rather than the colour. They carry the `browser` marker and CI selects on it, never on a filename: a new browser module that CI does not know about would otherwise read green while never executing.
 
 The unit tests drive `webtweak.js` itself (via `tests/_wtjs.py`), so they guard the code the package actually ships. CI runs the stdlib suite across Node 18/20/22/24 and the browser suite in a job where Playwright is always present.
 
