@@ -58,7 +58,8 @@ In the browser:
 - **Click** any element to select it (a breadcrumb shows where it sits).
 - **Drag the interior** to nudge its position (snaps to a 4px grid).
 - **Drag the right, bottom, or corner grip** (the gold handles on the selection box) to resize it.
-- **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding.
+- **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding, border and corner radius.
+- **Give an element a border.** Width, Style and Colour compose one `border` declaration. On an element with no border, touching any one of them fills in the other two so a border appears immediately - otherwise a colour on its own would render nothing at all. Style `none` removes a border; clearing a field abandons the change.
 - **Pick a font from your own page.** The Font field's ▾ lists every font stack the page already uses, plus any family it declares as `@font-face`. Picking one writes the whole stack, so its fallbacks survive the edit; typing a stack by hand still works for a font you're introducing for the first time.
 - **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
 - **Cmd/Ctrl+Z** undoes your last change, of any kind.

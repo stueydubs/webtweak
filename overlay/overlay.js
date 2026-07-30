@@ -204,6 +204,22 @@
       read: function (cs) { return cs.margin; } },
     { group: "Box", id: "wt-padding", prop: "padding", label: "Padding", kind: "text",
       read: function (cs) { return cs.padding; } },
+    // Width/Style/Colour are three controls over ONE `border` declaration - the
+    // first entry in this table to break one-control-one-property. `part` marks
+    // them, and writeBorder() composes all three (see ADR-0003); each still reads
+    // its own part from computed style. The top side is read because this group
+    // only ever populates from a uniform border - an asymmetric one is Issue 0010.
+    { group: "Border", id: "wt-bw", prop: "border", part: "width", label: "Width", kind: "number", unit: "px",
+      read: function (cs) { return px(cs.borderTopWidth); } },
+    { group: "Border", id: "wt-bs", prop: "border", part: "style", label: "Style", kind: "select",
+      opts: ["none", "solid", "dashed", "dotted", "double"],
+      read: function (cs) { return cs.borderTopStyle; } },
+    { group: "Border", id: "wt-bc", prop: "border", part: "color", label: "Colour", kind: "color",
+      read: function (cs) { return rgbToHex(cs.borderTopColor); } },
+    // An ordinary single-property control; `min: 0` because 0 is meaningful (sharp
+    // corners), as it is for a shape's rx.
+    { group: "Border", id: "wt-brad", prop: "border-radius", label: "Radius", kind: "number", unit: "px", min: 0,
+      read: function (cs) { return px(cs.borderRadius); } },
     // Shape-only: fill/stroke/stroke-width are inherited SVG presentation properties,
     // so writing them on the <svg> cascades to its child shape (one place to edit
     // colour for every shape kind). `rx` is NOT inherited - it's a <rect> geometry
@@ -212,15 +228,20 @@
     // is always valid, and CSS.supports can report SVG presentation props unevenly.
     { group: "Shape", id: "wt-fill", prop: "fill", label: "Fill", kind: "color", shapeOnly: true,
       read: function (cs) { return rgbToHex(cs.fill); } },
-    { group: "Shape", id: "wt-stroke", prop: "stroke", label: "Border", kind: "color", shapeOnly: true,
+    // Labelled Stroke, not Border: a shape's line is an SVG stroke and an element's
+    // is a CSS border, and since 0.4.0 the panel offers both. Label-only - the props
+    // were always the SVG ones. Radius keeps its name (rx and border-radius are the
+    // same concept in the same units, so renaming adds noise without removing any
+    // ambiguity). See ADR-0003.
+    { group: "Shape", id: "wt-stroke", prop: "stroke", label: "Stroke", kind: "color", shapeOnly: true,
       read: function (cs) { return rgbToHex(cs.stroke); } },
-    { group: "Shape", id: "wt-sw", prop: "stroke-width", label: "Border width", kind: "number", unit: "px", shapeOnly: true,
+    { group: "Shape", id: "wt-sw", prop: "stroke-width", label: "Stroke width", kind: "number", unit: "px", shapeOnly: true,
       read: function (cs) { return px(cs.strokeWidth); } },
     { group: "Shape", id: "wt-rx", prop: "rx", label: "Radius", kind: "number", unit: "px",
       shapeOnly: true, rectOnly: true, host: function (el) { return el.firstElementChild; },
       read: function (cs) { return px(cs.rx); } },
   ];
-  var GROUPS = ["Type", "Colour", "Box", "Shape"];
+  var GROUPS = ["Type", "Colour", "Box", "Border", "Shape"];
 
   // ---- the page's own fonts -------------------------------------------------
   // What the Font control offers as suggestions. Computed style is the primary
@@ -529,8 +550,13 @@
   }
   function controlMarkup(c) {
     // 0 is meaningful for box sizes and shape props (stroke-width 0 = no border, rx 0 =
-    // sharp corners); other numbers (font-size) floor at 1.
-    if (c.kind === "number") return '<input type="number" id="' + c.id + '" min="' + (c.box || c.shapeOnly ? 0 : 1) + '"> px';
+    // sharp corners); other numbers (font-size) floor at 1. `min` on the control
+    // itself overrides, for a property that is neither but still means something at
+    // 0 (corner radius).
+    if (c.kind === "number") {
+      var min = c.min === undefined ? (c.box || c.shapeOnly ? 0 : 1) : c.min;
+      return '<input type="number" id="' + c.id + '" min="' + min + '"> px';
+    }
     if (c.kind === "color") return '<input type="color" id="' + c.id + '">';
     if (c.kind === "select") return select(c.id, c.opts);
     if (c.kind === "align") return alignButtons(c.id);
@@ -894,6 +920,7 @@
 
   function writeControl(c, raw) {
     if (!selectedEl) return;
+    if (c.part) return writeBorder(c, raw);   // three controls, one declaration
     // Clearing a field means "I don't want this change after all", so it must
     // drop any recorded change - not return early and leave the abandoned value
     // sitting in the edits file for Claude to reconcile into real source.
@@ -916,6 +943,11 @@
     if (!noRevert && revertTarget !== "" && revertTarget === baselines[c.id]) return revertControl(c);
     var v = c.unit ? raw + c.unit : raw;
     if (c.prop === "font-family") v = quoteFamily(raw);
+    commit(c, v, raw);
+  }
+  // The shared tail of every write - the plain path above and the composed border
+  // path below both end here, so there is one place a Patch can be created.
+  function commit(c, v, raw) {
     // Don't bake a phantom patch the page never showed: if the browser would
     // reject this value (a typo like "banana" in a free-text field), the live
     // preview wouldn't change either, so leave any prior valid edit untouched.
@@ -924,6 +956,58 @@
     applyChange(selectedEl, c.prop, v);  // routes rx to the child node; plain setProperty otherwise
     record(selectedEl, c.prop, v);
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
+  }
+
+  // ---- the composed border --------------------------------------------------
+  // Width, Style and Colour are one `border` declaration, so a write reads all
+  // three fields instead of just its own - three independent writes would each
+  // overwrite the others' contribution, and the result would still look like a
+  // valid Patch. See ADR-0003.
+  var BORDER = { width: "wt-bw", style: "wt-bs", color: "wt-bc" };
+  var SEEDED_WIDTH = "1", SEEDED_STYLE = "solid";
+
+  // `none` is the canonical way to say "no border"; a width and colour beside a
+  // style that hides them is noise reconcile would have to see through.
+  function borderDecl(w, s, col) {
+    if (s === "none" || s === "") return "none";
+    return w + "px " + s + " " + col;
+  }
+  function fieldValue(id) { var n = document.getElementById(id); return n ? n.value : ""; }
+  // What the three fields describe once the parts the user did NOT touch are seeded
+  // to something visible. Without the seeding, a colour alone and a width alone both
+  // render nothing (the initial border style is `none`) while CSS.supports still
+  // passes them - a Patch for a change the page never showed.
+  function composeBorder(part, raw) {
+    var w = part === "width" ? String(raw) : fieldValue(BORDER.width);
+    var s = part === "style" ? String(raw) : fieldValue(BORDER.style);
+    var col = part === "color" ? String(raw) : fieldValue(BORDER.color);
+    if (part !== "style" && (s === "none" || s === "")) s = SEEDED_STYLE;
+    if (!(parseFloat(w) > 0)) w = SEEDED_WIDTH;
+    return { decl: borderDecl(w, s, col), width: w, style: s, color: col };
+  }
+  // The declaration the element was populated with, composed the same way, so
+  // setting a colour back to the border's own colour reverts the whole change.
+  function baselineBorder() {
+    return borderDecl(baselines[BORDER.width], baselines[BORDER.style], baselines[BORDER.color]);
+  }
+  function writeBorder(c, raw) {
+    // Clearing one field abandons the declaration: the three controls share one
+    // property, so there is no partial border left to keep.
+    if (raw === "") return revertBorder(c);
+    var made = composeBorder(c.part, raw);
+    // Show the seeded parts, or the panel would claim a `none` style over a page
+    // that is rendering a solid border.
+    set(BORDER.width, made.width);
+    set(BORDER.style, made.style);
+    set(BORDER.color, made.color);
+    if (made.decl === baselineBorder()) return revertBorder(c);
+    commit(c, made.decl, raw);
+  }
+  function revertBorder(c) {
+    revertControl(c);   // c.prop is `border` for all three, so this drops the lot
+    // revertControl restored the authored border on the page; put the fields back to
+    // match it, including any sibling this session had seeded.
+    Object.keys(BORDER).forEach(function (part) { set(BORDER[part], baselines[BORDER[part]]); });
   }
   CONTROLS.forEach(function (c) {
     var node = document.getElementById(c.id);

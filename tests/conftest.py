@@ -43,6 +43,23 @@ def edit(page, selector, field, value):
     page.dispatch_event(field, "input")
 
 
+def set_field(page, field, value):
+    """Set one panel field on the current selection, whatever kind of input it is.
+
+    `page.fill` cannot drive a colour swatch or a select, and the panel now mixes
+    all four kinds in one group, so every module needs this - assigning `.value`
+    and dispatching `input` is exactly what the browser does for a real edit.
+    """
+    page.evaluate(
+        """([id, v]) => {
+            const el = document.getElementById(id);
+            el.value = v;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+        }""",
+        [field.lstrip("#"), value],
+    )
+
+
 def select_card(page):
     """Select div.card itself, not one of its children.
 

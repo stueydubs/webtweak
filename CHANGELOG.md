@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Existing elements can have a border.** A decorative shape could have one and
+  the card beside it could not, which read as a bug rather than a scope boundary.
+  A Border group joins the panel with Width, Style, Colour and corner Radius,
+  hidden for shapes the way typography and colour already are.
+
+  The three border controls compose **one** `border` declaration, and touching any
+  one of them on a border-less element seeds the other two so a border renders
+  immediately. Without that, two of the three controls would do nothing visible on
+  first use - a colour alone and a width alone both render nothing while the style
+  is `none` - and the overlay would still record the value, putting a Patch for an
+  invisible change into your source. The seeded colour is your element's own text
+  colour, so the swatch was already showing it. Style `none` removes a border and
+  records as `border: none`; clearing any field abandons the whole change. See
+  [ADR-0003](./docs/adr/0003-compose-shorthands-from-discrete-controls.md).
 - **The Font control offers the page's own fonts.** It was the one field that
   demanded you already knew an exact string: to set a heading in the site's
   display face you had to type `Fraunces, Georgia, serif` from memory, fallbacks
@@ -25,6 +39,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case. `@font-face` families are gathered from readable sheets as a supplement, so
   a self-hosted face you have set up but not yet applied anywhere is still one
   click away - and an unreadable sheet degrades the list instead of throwing.
+
+### Changed
+- A shape's controls read **Stroke** and **Stroke width** rather than Border and
+  Border width, now that "Border" means a CSS border elsewhere in the same panel.
+  Labels only - the properties were always the SVG ones, so nothing changes in a
+  Patch or in reconcile. The shape's Radius keeps its name: `rx` and
+  `border-radius` are the same concept in the same units.
 
 ## [0.3.0] - 2026-07-30
 
