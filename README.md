@@ -59,6 +59,8 @@ In the browser:
 - **Drag the interior** to nudge its position (snaps to a 4px grid).
 - **Drag the right, bottom, or corner grip** (the gold handles on the selection box) to resize it.
 - **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding, border, corner radius and shadow.
+- **Fold away what you're not using.** Every group heading collapses, and stays collapsed as you click between elements - the panel is tall enough to scroll on a short window, so a group you aren't using costs you the one you are.
+- **Undo one property.** An edited row shows a small × beside its label; click it to put just that property back. Previously you had to know that clearing the field did this.
 - **Sizes take any unit.** Size, Width and Height are stepper fields showing their unit, so `2rem`, `80%` and `4ch` work as well as px - a bare number still means px. Before this they were number inputs, which made a fluid width impossible to enter at all.
 - **Colours show their hex.** Each swatch has an editable hex beside it, so you can read what colour something currently is and paste a brand value straight in - with or without the `#`.
 - **Margin and padding are per side.** Four boxes, one per side, so changing just the bottom padding means typing in the bottom box rather than rewriting a shorthand in your head. Each takes any unit - or `auto`, so centring is something you can set here. The link button writes all four at once when that is what you meant. Only the sides you touch are recorded, which is what stops a reconcile from flattening an `auto` you never asked it to.

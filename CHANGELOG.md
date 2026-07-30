@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Groups fold, and a single property can be undone.** Two navigation problems rather
+  than styling ones. The panel is around 780px of content, so it scrolls on any window
+  shorter than about 800px and a group you are not using costs you the one you are -
+  every heading now collapses, and stays collapsed as you click between elements,
+  because that is panel state and not something to redo on every selection. And an
+  edited row now shows a small × beside its label that puts just that property back:
+  before this, undoing one property meant knowing that clearing its field did that,
+  which nothing on screen suggested. It goes through the undo stack like any other
+  change, so the revert is itself undoable.
 - **Size, Width and Height take any unit.** They were number inputs, so `2rem`, `80%`
   and `4ch` were not awkward to enter - they were impossible, and the panel quietly
   forced px onto layouts that were authored fluid. They are stepper fields now, showing

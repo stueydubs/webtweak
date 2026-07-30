@@ -194,13 +194,35 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   letter-spacing: 0.06em;
 }
 .wt-group { margin-bottom: 14px; }
+/* A button, so a group you are not using can be folded away - the panel is ~780px of
+   content and scrolls on a short window. The caret is ::after rather than a child
+   element, because populate() writes the Border legend's textContent. */
 .wt-group > .wt-legend {
+  display: flex; align-items: center; gap: 5px; width: 100%;
+  background: none; border: 0; padding: 0;
+  font-family: inherit;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: #717784;
   margin-bottom: 6px;
+  cursor: pointer;
+  text-align: left;
 }
+.wt-group > .wt-legend:hover { color: #aab0bb; }
+.wt-group > .wt-legend::after { content: "▾"; font-size: 8px; letter-spacing: 0; }
+.wt-group > .wt-legend[aria-expanded="false"]::after { content: "▸"; }
+.wt-group-body[hidden] { display: none; }
+
+/* Undo one property. Lives in the label column, which has slack: at the row's right
+   edge it would shift every field's width the moment you edited something. */
+.wt-revert {
+  flex: 0 0 auto;
+  background: none; border: 0; padding: 0 3px 0 0;
+  color: #ffd479; font-size: 13px; line-height: 1; cursor: pointer;
+}
+.wt-revert[hidden] { display: none; }
+.wt-revert:hover { color: #fff; }
 .wt-field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
 .wt-field label { color: #aab0bb; flex: 0 0 78px; }
 .wt-field input[type="text"],

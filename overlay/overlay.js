@@ -232,7 +232,7 @@
     { group: "Type", id: "wt-fs", prop: "font-size", label: "Size", kind: "text", unit: "px", step: 1, min: 1,
       // Shows its unit and takes one, so `2rem` is expressible - as a number input it
       // was not merely awkward but impossible, and the panel quietly forced px.
-      read: function (cs) { return cs.fontSize; } },
+      read: function (cs) { return lengthPx(cs.fontSize); } },
     { group: "Type", id: "wt-fw", prop: "font-weight", label: "Weight", kind: "select",
       opts: ["100", "200", "300", "400", "500", "600", "700", "800", "900"],
       read: function (cs) { return String(parseInt(cs.fontWeight, 10) || 400); } },
@@ -265,9 +265,9 @@
     // Unit-aware for the same reason, and this is where it bites hardest: a fluid
     // width was unreachable, so every width edit was a px width.
     { group: "Box", id: "wt-w", prop: "width", label: "Width", kind: "text", unit: "px", box: true, step: 1, min: 1,
-      read: function (cs) { return cs.width; } },
+      read: function (cs) { return lengthPx(cs.width); } },
     { group: "Box", id: "wt-h", prop: "height", label: "Height", kind: "text", unit: "px", box: true, step: 1, min: 1,
-      read: function (cs) { return cs.height; } },
+      read: function (cs) { return lengthPx(cs.height); } },
     // Four boxes on one row, not a shorthand in one box. Editing a single side used
     // to mean reading `30px 168px 0px 168px`, doing the arithmetic and retyping it -
     // and the Patch then carried all four sides whatever you touched, which is why
@@ -647,13 +647,19 @@
   function panelHTML() {
     var parts = ['<div class="wt-panel wt-ui" id="wt-panel" hidden>', "  <h3>Properties</h3>"];
     GROUPS.forEach(function (g) {
-      parts.push('  <div class="wt-group" data-group="' + g + '"><div class="wt-legend">' + g + "</div>");
+      // The legend is a button: the panel is ~780px of content and scrolls on any
+      // window shorter than about 800px, so a group you are not using costs you the
+      // one you are. The caret is a CSS ::after, because populate() writes the Border
+      // legend's textContent and would eat a child element.
+      parts.push('  <div class="wt-group" data-group="' + g + '">' +
+        '<button class="wt-legend" type="button" aria-expanded="true">' + g + "</button>" +
+        '<div class="wt-group-body">');
       CONTROLS.filter(function (c) { return c.group === g; }).forEach(function (c) {
         // A sides row needs its label column narrowed to fit four boxes, so it is
         // marked rather than special-cased in CSS by descendant guesswork.
-        parts.push(field(c.label, controlMarkup(c), c.kind === "sides" ? " wt-field-wide" : ""));
+        parts.push(field(c, controlMarkup(c), c.kind === "sides" ? " wt-field-wide" : ""));
       });
-      parts.push("  </div>");
+      parts.push("  </div></div>");
     });
     parts.push('  <button class="wt-btn wt-block" id="wt-reset">Reset this element</button>');
     // Save writes a file; reconcile is a separate step the user asks for.
@@ -729,9 +735,14 @@
       '<ul class="wt-suggest-list" id="' + c.id + '-list" hidden></ul>' +
       "</span>";
   }
-  function field(label, control, extra) {
-    return '  <div class="wt-field' + (extra || "") + '"><label>' + label + "</label>" +
-      control + "</div>";
+  // The revert mark sits in the label column, which has slack, rather than at the row's
+  // right edge, where appearing would shift the field widths every time you edited
+  // something. Hidden until the row's property is actually recorded.
+  function field(c, control, extra) {
+    return '  <div class="wt-field' + (extra || "") + '">' +
+      '<button class="wt-revert" id="' + c.id + '-revert" type="button" hidden' +
+      ' title="Undo this property">&times;</button>' +
+      "<label>" + c.label + "</label>" + control + "</div>";
   }
   function select(id, opts) {
     return '<select id="' + id + '">' +
@@ -762,6 +773,10 @@
   }
 
   function px(v) { var n = parseInt(v, 10); return isNaN(n) ? "" : n; }
+  // A computed length is always px, and often fractional (a card measures 231.188px).
+  // Rounded for display, as the number input it replaced did - the field is there to
+  // be read and retyped, and two decimals of layout noise serve neither.
+  function lengthPx(v) { var n = parseFloat(v); return isNaN(n) ? v : Math.round(n) + "px"; }
 
   function positionBox(box, el) {
     var r = el.getBoundingClientRect();
@@ -1000,6 +1015,7 @@
       var node = document.getElementById(c.id), wrap = node && node.closest(".wt-field");
       if (wrap) wrap.hidden = !(isShape && (ent.shape.kind === "square" || ent.shape.kind === "rectangle"));
     });
+    applyCollapse();   // panel state, so it outlives the selection that set it
     // Name the side being edited, or say why the controls are off. A border edit on
     // an element carrying a single rule must not be a surprise, and an element whose
     // sides differ is declined out loud rather than silently given a box.
@@ -1194,6 +1210,64 @@
     applyChange(selectedEl, prop, v);    // routes rx to the child node; plain setProperty otherwise
     record(selectedEl, prop, v);
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
+  }
+
+  // ---- collapsing, and reverting one property -------------------------------
+  var collapsed = {};   // group -> folded. Panel state, not element state: collapsing
+                        // Type once should not have to be redone on every selection.
+
+  function toggleGroup(g) {
+    collapsed[g] = !collapsed[g];
+    applyCollapse();
+  }
+  function applyCollapse() {
+    GROUPS.forEach(function (g) {
+      var node = document.querySelector('#wt-panel .wt-group[data-group="' + g + '"]');
+      if (!node) return;
+      var body = node.querySelector(".wt-group-body");
+      var legend = node.querySelector(".wt-legend");
+      if (body) body.hidden = !!collapsed[g];
+      if (legend) legend.setAttribute("aria-expanded", collapsed[g] ? "false" : "true");
+    });
+  }
+
+  // Every property one row can record. A sides row owns five keys (four longhands plus
+  // the shorthand a linked write emits); the three border controls all own `border`.
+  function rowProps(c) {
+    if (c.kind === "sides") {
+      return [c.prop].concat(SIDES.map(function (s) { return sideProp(c, s); }));
+    }
+    return [propOf(c)];
+  }
+  function refreshRevertMarks() {
+    var ch = (selectedEl && (edited.get(selectedEl) || {}).changes) || {};
+    CONTROLS.forEach(function (c) {
+      var mark = document.getElementById(c.id + "-revert");
+      if (!mark) return;
+      mark.hidden = !rowProps(c).some(function (p) {
+        return Object.prototype.hasOwnProperty.call(ch, p);
+      });
+    });
+  }
+  // Undo one property without knowing to clear its field - which is what you had to
+  // do before, and nothing on screen suggested it. Goes through the undo stack like
+  // any other change, so it is itself undoable.
+  function revertRow(c) {
+    if (!selectedEl) return;
+    var ent = edited.get(selectedEl);
+    if (!ent) return;
+    var props = rowProps(c).filter(function (p) {
+      return Object.prototype.hasOwnProperty.call(ent.changes, p);
+    });
+    if (!props.length) return;
+    pushUndo(props.map(function (p) { return { el: selectedEl, prop: p, prev: ent.changes[p] }; }));
+    props.forEach(function (p) { delete ent.changes[p]; });
+    rebuildInline(selectedEl, ent);
+    dirty = hasRealEdits();
+    status("");
+    populate(selectedEl);          // every field back to what the element now renders
+    refreshChanges();
+    positionBox(selBox, selectedEl);
   }
 
   // ---- per-side spacing -----------------------------------------------------
@@ -1560,6 +1634,14 @@
 
   document.getElementById("wt-reset").addEventListener("click", function () {
     if (selectedEl) resetEl(selectedEl);
+  });
+  Array.prototype.forEach.call(panel.querySelectorAll(".wt-group"), function (node) {
+    var legend = node.querySelector(".wt-legend");
+    if (legend) legend.addEventListener("click", function () { toggleGroup(node.dataset.group); });
+  });
+  CONTROLS.forEach(function (c) {
+    var mark = document.getElementById(c.id + "-revert");
+    if (mark) mark.addEventListener("click", function () { revertRow(c); });
   });
 
   // ---- interact.js: nudge (drag interior) + resize (right/bottom grips) ------
@@ -2012,6 +2094,7 @@
     if (!changesBox) return;          // called before the overlay finished mounting
     if (interacting) return;
     repaintBadge();                   // the badge depends on hasRealEdits() too
+    refreshRevertMarks();             // ...and so does each row's undo affordance
     var rows = [];
     edited.forEach(function (e, el) {
       if (Object.keys(e.changes).length) rows.push({ el: el, e: e });
