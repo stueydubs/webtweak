@@ -207,15 +207,15 @@
     // Width/Style/Colour are three controls over ONE `border` declaration - the
     // first entry in this table to break one-control-one-property. `part` marks
     // them, and writeBorder() composes all three (see ADR-0003); each still reads
-    // its own part from computed style. The top side is read because this group
-    // only ever populates from a uniform border - an asymmetric one is Issue 0010.
+    // its own part from computed style - from the edited side, which is the top
+    // unless the element carries a single-sided rule (see borderMode).
     { group: "Border", id: "wt-bw", prop: "border", part: "width", label: "Width", kind: "number", unit: "px",
-      read: function (cs) { return px(cs.borderTopWidth); } },
+      read: function (cs) { return px(cs[sideKey("Width")]); } },
     { group: "Border", id: "wt-bs", prop: "border", part: "style", label: "Style", kind: "select",
       opts: ["none", "solid", "dashed", "dotted", "double"],
-      read: function (cs) { return cs.borderTopStyle; } },
+      read: function (cs) { return cs[sideKey("Style")]; } },
     { group: "Border", id: "wt-bc", prop: "border", part: "color", label: "Colour", kind: "color",
-      read: function (cs) { return rgbToHex(cs.borderTopColor); } },
+      read: function (cs) { return rgbToHex(cs[sideKey("Color")]); } },
     // An ordinary single-property control; `min: 0` because 0 is meaningful (sharp
     // corners), as it is for a shape's rx.
     { group: "Border", id: "wt-brad", prop: "border-radius", label: "Radius", kind: "number", unit: "px", min: 0,
@@ -802,6 +802,11 @@
     var ent = edited.get(el);
     baselines = {};
     closeAllSuggests();   // a list left open would hang over the repopulated fields
+    // Before the reads: the border controls read (and write) whichever side they are
+    // editing, so the mode has to be settled first.
+    var mode = borderMode(cs);
+    borderSide = mode.side;
+    borderMixed = mode.mixed;
     CONTROLS.forEach(function (c) {
       // Most controls read/write the element itself; `host` (rx only) targets the
       // child shape node, since rx is a non-inherited <rect> geometry property. Only
@@ -815,9 +820,10 @@
       // edited value. Recover the true authored baseline by reading computed with
       // just this property's override peeled off, so "revert to original" is still
       // detected (and doesn't record a no-op patch setting a prop to its own origin).
-      if (ent && ent.changes && c.prop && Object.prototype.hasOwnProperty.call(ent.changes, c.prop)) {
+      var prop = propOf(c);   // `border-bottom` for a one-sided rule, else c.prop
+      if (ent && ent.changes && prop && Object.prototype.hasOwnProperty.call(ent.changes, prop)) {
         base = withTempStyle(host,
-          function (s) { s.removeProperty(c.prop); },
+          function (s) { s.removeProperty(prop); },
           function () { return c.read(getComputedStyle(host)); });
       }
       baselines[c.id] = String(base);
@@ -841,6 +847,20 @@
       if (!c.rectOnly) return;
       var node = document.getElementById(c.id), wrap = node && node.closest(".wt-field");
       if (wrap) wrap.hidden = !(isShape && (ent.shape.kind === "square" || ent.shape.kind === "rectangle"));
+    });
+    // Name the side being edited, or say why the controls are off. A border edit on
+    // an element carrying a single rule must not be a surprise, and an element whose
+    // sides differ is declined out loud rather than silently given a box.
+    var legend = document.querySelector('#wt-panel .wt-group[data-group="Border"] .wt-legend');
+    if (legend) {
+      legend.textContent = borderMixed ? "Border (sides differ)"
+        : (borderSide ? "Border (" + borderSide + ")" : "Border");
+    }
+    // Radius stays editable throughout - it is not a per-side property, so differing
+    // sides say nothing about whether a corner radius can be set.
+    Object.keys(BORDER).forEach(function (part) {
+      var n = document.getElementById(BORDER[part]);
+      if (n) { n.disabled = borderMixed; n.title = borderMixed ? MIXED_TIP : ""; }
     });
     // width/height + nudge are inert on NON-REPLACED inline elements - disable them
     // so a user can't record a dead patch the element never honours. Replaced inline
@@ -910,8 +930,9 @@
   // authored inline style plus whatever other edits remain on the element.
   function revertControl(c) {
     var ent = edited.get(selectedEl);
-    if (ent && ent.changes[c.prop] !== undefined) pushUndoWrite(selectedEl, c.prop);
-    if (ent) delete ent.changes[c.prop];
+    var prop = propOf(c);
+    if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
+    if (ent) delete ent.changes[prop];
     rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
     dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
     refreshChanges();
@@ -948,13 +969,14 @@
   // The shared tail of every write - the plain path above and the composed border
   // path below both end here, so there is one place a Patch can be created.
   function commit(c, v, raw) {
+    var prop = propOf(c);
     // Don't bake a phantom patch the page never showed: if the browser would
     // reject this value (a typo like "banana" in a free-text field), the live
     // preview wouldn't change either, so leave any prior valid edit untouched.
-    if (!c.box && !c.shapeOnly && !CSS.supports(c.prop, v)) { status("ignored invalid " + c.prop + ": " + raw, false); return; }
-    pushUndoWrite(selectedEl, c.prop);
-    applyChange(selectedEl, c.prop, v);  // routes rx to the child node; plain setProperty otherwise
-    record(selectedEl, c.prop, v);
+    if (!c.box && !c.shapeOnly && !CSS.supports(prop, v)) { status("ignored invalid " + prop + ": " + raw, false); return; }
+    pushUndoWrite(selectedEl, prop);
+    applyChange(selectedEl, prop, v);    // routes rx to the child node; plain setProperty otherwise
+    record(selectedEl, prop, v);
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
   }
 
@@ -965,6 +987,47 @@
   // valid Patch. See ADR-0003.
   var BORDER = { width: "wt-bw", style: "wt-bs", color: "wt-bc" };
   var SEEDED_WIDTH = "1", SEEDED_STYLE = "solid";
+  var MIXED_TIP = "this element's sides have different borders - editing them here " +
+    "would replace them with one box";
+
+  // Which single side the controls edit, and whether they are declined outright.
+  // Recomputed per selection in populate(), so it always describes the element in
+  // front of the user.
+  var borderSide = null;    // "bottom" etc. in per-side mode, else null
+  var borderMixed = false;  // several sides differ: decline rather than wreck a design
+
+  var SIDES = ["top", "right", "bottom", "left"];
+  function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  // The computed-style key for one border component on the edited side.
+  function sideKey(component) { return "border" + capitalise(borderSide || "top") + component; }
+  function visibleSides(cs) {
+    return SIDES.filter(function (s) {
+      return parseFloat(cs["border" + capitalise(s) + "Width"]) > 0 &&
+        cs["border" + capitalise(s) + "Style"] !== "none";
+    });
+  }
+  // A bottom rule under a heading is everywhere on the editorial pages webtweak is
+  // for, and composing a four-sided `border` onto one turns a divider into a box -
+  // so when exactly one side is visible, that side is what the controls edit.
+  //
+  // Chromium serialises the computed `border` shorthand to "" the moment the four
+  // sides differ in any component, which is an exact, browser-provided test needing
+  // no parsing of a multi-value width. But "differ" is not "one side", and two cases
+  // prove it: `border-style: solid; border-width: 1px 2px` serialises empty with all
+  // four sides visible, and `border-color: red blue` serialises empty with none
+  // visible at all. So the empty shorthand only means "look closer" - the count of
+  // visible sides is what decides.
+  function borderMode(cs) {
+    if (cs.border !== "") return { side: null, mixed: false };   // uniform, or no border
+    var vis = visibleSides(cs);
+    if (vis.length === 1) return { side: vis[0], mixed: false }; // a single rule: edit it
+    if (vis.length === 0) return { side: null, mixed: false };   // nothing renders
+    return { side: null, mixed: true };                          // a deliberate design
+  }
+  // The property a control writes right now. Only the composed border controls are
+  // dynamic: in per-side mode the Patch must say `border-bottom`, because the side
+  // IS the intent - reconcile is told never to normalise it back to all sides.
+  function propOf(c) { return (c.part && borderSide) ? "border-" + borderSide : c.prop; }
 
   // `none` is the canonical way to say "no border"; a width and colour beside a
   // style that hides them is noise reconcile would have to see through.

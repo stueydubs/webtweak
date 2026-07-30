@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, so the swatch was already showing it. Style `none` removes a border and
   records as `border: none`; clearing any field abandons the whole change. See
   [ADR-0003](./docs/adr/0003-compose-shorthands-from-discrete-controls.md).
+- **A rule on one side stays a rule.** Bottom borders under headings are everywhere
+  on the editorial pages webtweak is for, and composing a four-sided border onto one
+  would turn a divider into a box. When exactly one side carries a visible border the
+  controls edit *that side*, the group legend names it, and the Patch says
+  `border-bottom` - which reconcile is now told never to normalise back to all sides,
+  because the side is the intent. When several sides differ the controls switch off
+  with an explanation, the same way width and height already switch off on an inline
+  element: the overlay declines rather than quietly wrecking a deliberate design.
 - **The Font control offers the page's own fonts.** It was the one field that
   demanded you already knew an exact string: to set a heading in the site's
   display face you had to type `Fraunces, Georgia, serif` from memory, fallbacks

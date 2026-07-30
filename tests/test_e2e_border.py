@@ -248,6 +248,119 @@ def test_radius_of_zero_records(served):
     assert changes(tmp) == {"border-radius": "0px"}
 
 
+# --- per-side borders and the mixed-side guard (Issue 0010) -------------------
+# A heading with a bottom rule must still be a heading with a bottom rule after you
+# recolour it. Composing a four-sided border onto one would turn a divider into a
+# box - a silent, destructive edit - so the controls target the single visible side,
+# and decline entirely when several sides differ.
+
+
+def all_sides(page, selector):
+    return page.eval_on_selector(selector, """el => {
+        const cs = getComputedStyle(el);
+        return ['Top', 'Right', 'Bottom', 'Left'].map(
+            s => cs['border' + s + 'Width'] + ' ' + cs['border' + s + 'Style']);
+    }""")
+
+
+def legend(page):
+    return page.eval_on_selector(
+        '#wt-panel .wt-group[data-group="Border"] .wt-legend', "el => el.textContent")
+
+
+def disabled(page):
+    return page.evaluate(
+        """() => ['wt-bw', 'wt-bs', 'wt-bc', 'wt-brad']
+            .map(id => document.getElementById(id).disabled)"""
+    )
+
+
+def test_a_one_sided_border_is_edited_on_that_side(served):
+    """The controls populate from the bordered side and emit a per-side declaration,
+    leaving the other three sides alone in the page AND in the Patch."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#ruled")             # .ruled { border-bottom: 2px solid var(--accent) }
+        shown = fields(page)
+        said = legend(page)
+        set_field(page, COLOUR, "#0000ff")
+        sides = all_sides(page, "#ruled")
+        save(page)
+        browser.close()
+    assert shown[:3] == ["2", "solid", "#7a5c3e"]     # read off the bottom, not the top
+    assert said == "Border (bottom)"                   # the side is named in the panel
+    assert sides == ["0px none", "0px none", "2px solid", "0px none"]
+    assert changes(tmp) == {"border-bottom": "2px solid #0000ff"}
+
+
+def test_a_one_sided_border_keeps_its_width_when_only_the_style_changes(served):
+    """Composition still holds per-side: the declaration carries all three parts."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#ruled")
+        set_field(page, STYLE, "dashed")
+        sides = all_sides(page, "#ruled")
+        save(page)
+        browser.close()
+    assert sides == ["0px none", "0px none", "2px dashed", "0px none"]
+    assert changes(tmp) == {"border-bottom": "2px dashed #7a5c3e"}
+
+
+def test_mixed_sides_disable_the_border_controls(served):
+    """Four sets of per-side controls would triple the densest part of the panel for
+    an uncommon case, so the overlay declines and says why - rather than quietly
+    replacing a deliberate design with a box."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#mixed-rule")
+        state = disabled(page)
+        said = legend(page)
+        tip = page.eval_on_selector("#wt-bw", "el => el.title")
+        browser.close()
+    assert state == [True, True, True, False]   # the trio is off; radius still works
+    assert said == "Border (sides differ)"
+    assert "differ" in tip and tip != ""
+
+
+def test_a_uniform_border_is_unaffected_by_the_side_logic(served):
+    """The card and the headline keep the all-sides behaviour they had before."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        card_legend, card_state = legend(page), disabled(page)
+        page.click("#headline")
+        bare_legend, bare_state = legend(page), disabled(page)
+        set_field(page, COLOUR, "#ff0000")
+        sides = all_sides(page, "#headline")
+        save(page)
+        browser.close()
+    assert card_legend == "Border" and card_state == [False] * 4
+    assert bare_legend == "Border" and bare_state == [False] * 4
+    assert sides == ["1px solid"] * 4                       # all four, as before
+    assert changes(tmp) == {"border": "1px solid #ff0000"}
+
+
+def test_undo_of_a_per_side_border_restores_the_rule(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#ruled")
+        set_field(page, WIDTH, "8")
+        widened = all_sides(page, "#ruled")
+        page.keyboard.press("Control+z")
+        restored = all_sides(page, "#ruled")
+        page.click("#wt-save")
+        status = page.eval_on_selector("#wt-status", "el => el.textContent")
+        browser.close()
+    assert widened == ["0px none", "0px none", "8px solid", "0px none"]
+    assert restored == ["0px none", "0px none", "2px solid", "0px none"]
+    assert status == "nothing changed yet"
+
+
 def test_shape_controls_read_stroke(served):
     """A shape's line is an SVG stroke, an element's is a CSS border - so the labels
     say so. The shape's Radius keeps its name: rx and border-radius are the same

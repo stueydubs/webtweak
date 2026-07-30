@@ -210,6 +210,13 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   width: 34px; height: 24px; padding: 0;
   background: none; border: 1px solid #2c303a; border-radius: 5px; cursor: pointer;
 }
+/* A control the overlay has declined has to LOOK declined. The panel styles its own
+   background and text colour, so the browser's default disabled rendering barely
+   shows through - leaving a field that reads as editable while it ignores every
+   keystroke. Applies to both guards: border controls on an element whose sides
+   differ, and width/height on a non-replaced inline element. */
+.wt-field input:disabled,
+.wt-field select:disabled { opacity: 0.4; cursor: not-allowed; }
 /* --- suggestion list (Font; shadow presets reuse it) ---------------------- */
 /* A text input plus a dropdown, so free text still works. */
 .wt-suggest { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }

@@ -30,6 +30,12 @@
     .card h3 { margin: 0 0 8px; font-size: 20px; }
     .cta { display: inline-block; margin-top: 16px; padding: 12px 22px;
            background: var(--ink); color: #fff; text-decoration: none; border-radius: 8px; }
+    /* One visible side - a rule under a heading, the case the per-side border
+       controls exist for: composing a full border here turns a rule into a box. */
+    .ruled { border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin: 48px 0 0; }
+    /* Several sides differing - a deliberate design the overlay declines to edit. */
+    .mixed-rule { border-left: 3px solid var(--accent); border-bottom: 1px dotted #c9c1b4;
+                  padding: 12px; margin: 24px 0 0; }
   </style>
 </head>
 <body>
@@ -56,6 +62,13 @@
     <h2 class="section-title">Second section</h2>
     <p>One more heading sharing the <code>.section-title</code> class, so a change here
       can demonstrate the single-element-vs-shared-rule reconcile question.</p>
+
+    <!-- Deliberately an <aside> and an <h3>, not a second <div>/<p>: a fingerprint's
+         positional selector gains an :nth-of-type the moment an element has a
+         same-tag sibling, so a new <div> here would silently rewrite .card's
+         selector and every test that matches on it. -->
+    <h3 class="ruled" id="ruled">A heading with a bottom rule</h3>
+    <aside class="mixed-rule" id="mixed-rule">An element whose sides differ.</aside>
   </main>
 </body>
 </html>

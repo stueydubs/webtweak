@@ -60,6 +60,7 @@ In the browser:
 - **Drag the right, bottom, or corner grip** (the gold handles on the selection box) to resize it.
 - **Edit properties** in the right-hand panel - font, size, weight, line-height, letter-spacing, alignment, colours, width/height, margin, padding, border and corner radius.
 - **Give an element a border.** Width, Style and Colour compose one `border` declaration. On an element with no border, touching any one of them fills in the other two so a border appears immediately - otherwise a colour on its own would render nothing at all. Style `none` removes a border; clearing a field abandons the change.
+  - If the element already has a rule on **one side only** (a line under a heading), the controls edit *that side* and the group says which - so recolouring a divider leaves it a divider instead of boxing the element in. If several sides differ, the controls switch off with an explanation rather than replacing a deliberate design with a box.
 - **Pick a font from your own page.** The Font field's ▾ lists every font stack the page already uses, plus any family it declares as `@font-face`. Picking one writes the whole stack, so its fallbacks survive the edit; typing a stack by hand still works for a font you're introducing for the first time.
 - **Draw a shape** from the shape button - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon. Drag one onto the page or click to place it. Each is one inline `<svg>` with editable fill, stroke and corner radius.
 - **Cmd/Ctrl+Z** undoes your last change, of any kind.
