@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>webtweak sample page</title>
   <style>
+    /* Declared and applied nowhere, so the font picker has a face to offer that
+       no element's computed style could reveal. src: local() keeps the fixture
+       request-free - the family only has to be declared, not resolvable. */
+    @font-face { font-family: "Fixture Display"; src: local("Fixture Display"); }
     :root { --ink: #1a1a1a; --paper: #faf8f4; --accent: #7a5c3e; }
     * { box-sizing: border-box; }
     body {

@@ -174,6 +174,7 @@
   // set) is appended on write; `box` re-fits the selection box after the change.
   var CONTROLS = [
     { group: "Type", id: "wt-ff", prop: "font-family", label: "Font", kind: "text",
+      suggest: pageFonts, suggestTitle: "Fonts on this page", suggestPreview: true,
       read: function (cs) { return cs.fontFamily; } },  // full stack, so editing keeps fallbacks
     { group: "Type", id: "wt-fs", prop: "font-size", label: "Size", kind: "number", unit: "px",
       read: function (cs) { return px(cs.fontSize); } },
@@ -220,6 +221,77 @@
       read: function (cs) { return px(cs.rx); } },
   ];
   var GROUPS = ["Type", "Colour", "Box", "Shape"];
+
+  // ---- the page's own fonts -------------------------------------------------
+  // What the Font control offers as suggestions. Computed style is the primary
+  // source because it is the only origin-proof one: reading rules from a
+  // CDN-hosted sheet raises SecurityError, so a page whose display face comes
+  // from a hosted webfont yields nothing from its font-face declarations - while
+  // computed style returns the whole stack exactly as authored, fallbacks and all,
+  // which is precisely what the control wants to write.
+
+  // Collapse whitespace only for the dedupe key: the entry itself is kept verbatim
+  // so picking it writes the stack the page's author actually wrote.
+  function fontKey(stack) { return stack.replace(/\s+/g, " ").trim().toLowerCase(); }
+
+  function inUseFontStacks() {
+    // Deliberately body-scoped: the rule is "what something on the page renders
+    // in". That does include a UA default an element genuinely uses (Chromium
+    // gives <code> monospace and a <button> Arial) - those are real answers to
+    // "what font is that?". <html> is skipped because its font renders nothing of
+    // its own: a page that authors one there has <body> inherit it anyway, and a
+    // page that doesn't hands back the browser's default ("Times New Roman"),
+    // which would otherwise be offered as one of the page's own fonts on every
+    // page ever opened.
+    if (!document.body) return [];
+    var nodes = [document.body].concat(
+      Array.prototype.slice.call(document.body.querySelectorAll("*")));
+    var out = [];
+    nodes.forEach(function (el) {
+      // Skip the Overlay's own nodes, or the editor's interface fonts would be
+      // offered as suggestions for the page.
+      if (!el || isOverlay(el)) return;
+      var stack = (getComputedStyle(el).fontFamily || "").trim();
+      if (stack) out.push(stack);
+    });
+    return out;
+  }
+
+  // Families declared as @font-face - a supplement, so a self-hosted face that is
+  // set up but not yet applied anywhere is still offered. Gathered defensively:
+  // an unreadable sheet is skipped, degrading the list rather than throwing.
+  function fontFaceFamilies() {
+    var out = [];
+    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
+      if ((sheet.href || "").indexOf(RESERVED) >= 0) return;   // webtweak's own sheet
+      collectFaces(sheet, out);
+    });
+    return out;
+  }
+  function collectFaces(node, out, depth) {
+    depth = depth || 0;
+    var rules;
+    try { rules = node.cssRules; } catch (e) { return; }  // cross-origin: unreadable, not fatal
+    if (!rules) return;
+    Array.prototype.forEach.call(rules, function (r) {
+      var fam = r.style && (r.style.fontFamily || "").trim();
+      if (r.type === 5 /* CSSRule.FONT_FACE_RULE */ && fam) out.push(fam);
+      // @font-face is legal inside @media/@supports, so recurse into grouping
+      // rules. Bounded, so a pathologically nested sheet can't spin.
+      else if (r.cssRules && depth < 3) collectFaces(r, out, depth + 1);
+    });
+  }
+
+  function pageFonts() {
+    var seen = {}, out = [];
+    // In-use stacks first (document order, so the body's own font leads), then any
+    // declared family the sweep couldn't see.
+    inUseFontStacks().concat(fontFaceFamilies()).forEach(function (stack) {
+      var k = fontKey(stack);
+      if (k && !seen[k]) { seen[k] = true; out.push(stack); }
+    });
+    return out;
+  }
 
   // ---- shapes ---------------------------------------------------------------
   // Every shape is one inline <svg> wrapper containing a single child primitive,
@@ -462,7 +534,27 @@
     if (c.kind === "color") return '<input type="color" id="' + c.id + '">';
     if (c.kind === "select") return select(c.id, c.opts);
     if (c.kind === "align") return alignButtons(c.id);
+    if (c.suggest) return suggestField(c);
     return '<input type="text" id="' + c.id + '">';
+  }
+  // A text input plus a dropdown of suggestions - deliberately not a closed
+  // dropdown, so free text still works and nothing that was possible before this
+  // control existed becomes impossible. The list itself is filled at open time by
+  // c.suggest(), never from markup.
+  //
+  // Known constraint for the next control that wants one: the list is positioned
+  // inside the panel, which is a scroll box (`overflow-y: auto`), so it can only
+  // drop as far as the panel's own bottom edge. Font is the panel's first field,
+  // so it always has the room; a suggest control placed lower down would need the
+  // list to escape the panel (fixed positioning off the toggle's rect) instead.
+  function suggestField(c) {
+    return '<span class="wt-suggest">' +
+      '<input type="text" id="' + c.id + '">' +
+      '<button class="wt-suggest-toggle" id="' + c.id + '-toggle" type="button"' +
+      ' aria-expanded="false" aria-controls="' + c.id + '-list"' +
+      ' title="' + (c.suggestTitle || "Suggestions") + '">&#9662;</button>' +
+      '<ul class="wt-suggest-list" id="' + c.id + '-list" hidden></ul>' +
+      "</span>";
   }
   function field(label, control) {
     return '  <div class="wt-field"><label>' + label + "</label>" + control + "</div>";
@@ -630,6 +722,7 @@
     interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
     selectedEl = null;
     selBox.hidden = true;
+    closeAllSuggests();   // else it reopens with the panel on the next selection
     panel.hidden = true;
     crumbEl.textContent = "click an element to select";
     refreshChanges();            // drop the list's stale current-selection highlight
@@ -682,6 +775,7 @@
     var cs = getComputedStyle(el);
     var ent = edited.get(el);
     baselines = {};
+    closeAllSuggests();   // a list left open would hang over the repopulated fields
     CONTROLS.forEach(function (c) {
       // Most controls read/write the element itself; `host` (rx only) targets the
       // child shape node, since rx is a non-inherited <rect> geometry property. Only
@@ -844,8 +938,77 @@
       });
     } else {
       node.addEventListener("input", function () { writeControl(c, this.value); });
+      if (c.suggest) attachSuggest(c);
     }
   });
+
+  // ---- suggestion lists -----------------------------------------------------
+  // Entries are rebuilt every time a list opens rather than cached: the page's own
+  // fonts are the source, and an edit (or a reconcile reload) can change them
+  // mid-session.
+  function attachSuggest(c) {
+    var input = document.getElementById(c.id);
+    var toggle = document.getElementById(c.id + "-toggle");
+    var list = document.getElementById(c.id + "-list");
+    if (!input || !toggle || !list) return;
+    toggle.addEventListener("click", function () {
+      if (list.hidden) openSuggest(c, list, toggle);
+      else closeSuggest(list, toggle);
+    });
+    list.addEventListener("click", function (ev) {
+      var item = ev.target.closest && ev.target.closest(".wt-suggest-item");
+      if (!item) return;
+      // Write the entry verbatim - the whole point of the list is that the
+      // fallbacks the page's author intended survive the edit.
+      var value = item.dataset.value;
+      input.value = value;
+      writeControl(c, value);
+      closeSuggest(list, toggle);
+    });
+  }
+  function openSuggest(c, list, toggle) {
+    var entries = c.suggest();
+    // An empty bordered box reads as broken, so say it in the status line instead.
+    if (!entries.length) { status("nothing to suggest for " + c.label.toLowerCase()); return; }
+    list.textContent = "";
+    entries.forEach(function (value) {
+      var li = document.createElement("li");
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "wt-suggest-item";
+      btn.dataset.value = value;
+      // textContent, never innerHTML: an entry harvested from the page is untrusted
+      // input (a font family can be named anything the page's author likes).
+      btn.textContent = value;
+      btn.title = value;                    // the full stack, when the row ellipsises
+      // Each row rendered in its own value, so a font is picked by how it looks.
+      // Opt-in per control: a shadow preset row wants no such treatment.
+      if (c.suggestPreview) btn.style.setProperty(c.prop, value);
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+    list.hidden = false;
+    toggle.setAttribute("aria-expanded", "true");
+  }
+  function closeSuggest(list, toggle) {
+    list.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+  }
+  // Close any open list on Esc, on a click outside it, and whenever the selection
+  // changes - an open dropdown left hanging over the panel swallows clicks meant
+  // for the fields beneath it.
+  function closeAllSuggests(exceptWrap) {
+    Array.prototype.forEach.call(panel.querySelectorAll(".wt-suggest"), function (wrap) {
+      if (wrap === exceptWrap) return;
+      var list = wrap.querySelector(".wt-suggest-list");
+      var toggle = wrap.querySelector(".wt-suggest-toggle");
+      if (list && !list.hidden) closeSuggest(list, toggle);
+    });
+  }
+  document.addEventListener("click", function (ev) {
+    var wrap = ev.target.closest && ev.target.closest(".wt-suggest");
+    closeAllSuggests(wrap);
+  }, true);
 
   document.getElementById("wt-reset").addEventListener("click", function () {
     if (selectedEl) resetEl(selectedEl);
@@ -1106,6 +1269,9 @@
   document.addEventListener("keydown", function (ev) {
     if (ev.key === "Escape") {
       if (pendingShape) { exitPlaceMode(); status("placement cancelled"); return; }
+      // An open suggestion list is what Esc dismisses first; the selection behind
+      // it is not what the user was trying to leave.
+      if (panel.querySelector(".wt-suggest-list:not([hidden])")) { closeAllSuggests(); return; }
       deselect();
       return;
     }

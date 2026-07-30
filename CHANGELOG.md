@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The Font control offers the page's own fonts.** It was the one field that
+  demanded you already knew an exact string: to set a heading in the site's
+  display face you had to type `Fraunces, Georgia, serif` from memory, fallbacks
+  and all, and a typo silently recorded nothing at all. The field now carries a ▾
+  listing every distinct font stack in use on the page plus any family it declares
+  as `@font-face`, each row previewed in its own face. Picking one writes the whole
+  stack, so the fallbacks the page's author intended survive by construction rather
+  than by your care. It stays a text input - typing an arbitrary stack still works,
+  so a font you are introducing for the first time is not blocked by a list that
+  cannot know about it.
+
+  The list is built from computed style, which is the only origin-proof source: a
+  page whose display face comes from a CDN-hosted webfont yields nothing readable
+  from its stylesheets (`SecurityError`), and that is the common case, not the edge
+  case. `@font-face` families are gathered from readable sheets as a supplement, so
+  a self-hosted face you have set up but not yet applied anywhere is still one
+  click away - and an unreadable sheet degrades the list instead of throwing.
+
 ## [0.3.0] - 2026-07-30
 
 ### Security

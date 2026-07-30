@@ -210,6 +210,46 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   width: 34px; height: 24px; padding: 0;
   background: none; border: 1px solid #2c303a; border-radius: 5px; cursor: pointer;
 }
+/* --- suggestion list (Font; shadow presets reuse it) ---------------------- */
+/* A text input plus a dropdown, so free text still works. */
+.wt-suggest { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.wt-suggest-toggle {
+  flex: 0 0 auto;
+  background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
+  border-radius: 5px; padding: 3px 5px; font-size: 10px; line-height: 1; cursor: pointer;
+}
+.wt-suggest-toggle[aria-expanded="true"] { border-color: #ffd479; color: #ffd479; }
+/* Anchored to the field's right edge and given its own width rather than the
+   input's, so a full stack reads without wrapping. Kept just inside the panel's
+   content width (270px less 2x14px padding): the panel scrolls on the y axis, so
+   anything wider than that would clip instead of overflowing. */
+.wt-suggest-list {
+  position: absolute;
+  top: calc(100% + 4px); right: 0;
+  width: 236px; max-width: 236px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 0; padding: 4px;
+  list-style: none;
+  background: #0f1115;
+  border: 1px solid #2c303a;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1;
+}
+.wt-suggest-list[hidden] { display: none; }
+.wt-suggest-item {
+  display: block; width: 100%;
+  background: none; border: 0; border-radius: 4px;
+  color: #e8eaed;
+  padding: 5px 7px;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wt-suggest-item:hover, .wt-suggest-item:focus { background: #2c303a; }
+
 .wt-align { display: flex; gap: 4px; }
 .wt-align button {
   flex: 1; background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
