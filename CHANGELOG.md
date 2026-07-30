@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colour, so the swatch was already showing it. Style `none` removes a border and
   records as `border: none`; clearing any field abandons the whole change. See
   [ADR-0003](./docs/adr/0003-compose-shorthands-from-discrete-controls.md).
+- **A Shadow field, with presets.** `box-shadow` is the one property here that
+  resists discrete controls: building it from parts would need four lengths, a colour
+  and an inset flag, and a shadow's colour is almost always translucent while the
+  panel's swatch is opaque hex. So it is a text field backed by the same suggestion
+  list the Font control uses - a hairline, a card lift, a modal lift, a dramatic drop,
+  an inset press, and `none` to remove one. Typing a custom shadow still works.
 - **A rule on one side stays a rule.** Bottom borders under headings are everywhere
   on the editorial pages webtweak is for, and composing a four-sided border onto one
   would turn a divider into a box. When exactly one side carries a visible border the
@@ -47,6 +53,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case. `@font-face` families are gathered from readable sheets as a supplement, so
   a self-hosted face you have set up but not yet applied anywhere is still one
   click away - and an unreadable sheet degrades the list instead of throwing.
+
+### Fixed
+- **A typo no longer deletes the edit you had just made.** An invalid value resolves
+  to the element's *current* computed value, which is indistinguishable from setting
+  the field back to its original - so mistyping over a margin (or, now, a shadow) you
+  had just set silently discarded it instead of being ignored. Values are rejected
+  before that comparison, so a typo leaves your work alone and says so.
+- **The right-hand shape palette items are clickable again while something is
+  selected.** The palette drops out of the top bar into the properties panel's
+  column, and the panel painted over it, so three of the nine shapes could not be
+  picked at all except with nothing selected.
 
 ### Changed
 - A shape's controls read **Stroke** and **Stroke width** rather than Border and

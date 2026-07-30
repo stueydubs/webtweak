@@ -82,6 +82,12 @@ html { user-select: none; }
 
 /* --- shape palette ------------------------------------------------------- */
 .wt-shapes { position: relative; }
+/* Above the properties panel. The palette drops out of the bar into the panel's
+   column, and the panel is a later sibling in #wt-root, so without this the
+   right-hand palette items paint under it and cannot be clicked at all while an
+   element is selected. Raised on the bar rather than the palette so the whole
+   top-bar group wins as a unit. */
+.wt-bar { z-index: 1; }
 .wt-palette {
   position: absolute;
   top: calc(100% + 8px);
@@ -226,13 +232,13 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   border-radius: 5px; padding: 3px 5px; font-size: 10px; line-height: 1; cursor: pointer;
 }
 .wt-suggest-toggle[aria-expanded="true"] { border-color: #ffd479; color: #ffd479; }
-/* Anchored to the field's right edge and given its own width rather than the
-   input's, so a full stack reads without wrapping. Kept just inside the panel's
-   content width (270px less 2x14px padding): the panel scrolls on the y axis, so
-   anything wider than that would clip instead of overflowing. */
+/* Positioned in VIEWPORT coordinates (placeSuggest sets top/left on open), not
+   inside the panel. The panel is a scroll box, so an absolutely-positioned list
+   would be clipped for any field below its fold - and Shadow is the last field of
+   the last group. Given its own width rather than the input's, so a full font stack
+   or shadow reads without wrapping. */
 .wt-suggest-list {
-  position: absolute;
-  top: calc(100% + 4px); right: 0;
+  position: fixed;
   width: 236px; max-width: 236px;
   max-height: 200px;
   overflow-y: auto;

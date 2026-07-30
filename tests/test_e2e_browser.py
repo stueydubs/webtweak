@@ -281,6 +281,29 @@ def test_shape_drag_and_drop_from_palette(served):
     assert placed["placeModeCleared"] is True
 
 
+def test_palette_items_are_clickable_with_an_element_selected(served):
+    """The palette drops out of the bar into the properties panel's column. The panel
+    is a later sibling in the overlay root, so without the bar winning on z-index the
+    right-hand palette items paint *under* it and cannot be clicked at all - and only
+    while something is selected, which is most of the time.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.goto(f"http://127.0.0.1:{port}/sample.html")
+        page.wait_for_selector("#wt-root")
+        page.click("#headline")                  # panel open, over the palette's column
+        page.click("#wt-shape-btn")
+        # the 3rd item of a 3-column grid: the far right of the palette, deepest
+        # under the panel. A real click, so Playwright's hit-testing does the checking.
+        page.click('.wt-shape-item[data-shape="circle"]')
+        page.mouse.click(420, 420)
+        kind = page.eval_on_selector("svg.wt-shape", "el => el.dataset.wtShape")
+        browser.close()
+    assert kind == "circle"
+
+
 def test_shape_stroke_width_one_and_black_border_record(served):
     """Regression: a shape has no authored baseline, so a 1px border width or a
     #000000 stroke must be recorded - not mistaken for a 'revert' against the SVG UA

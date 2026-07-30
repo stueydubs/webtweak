@@ -220,6 +220,14 @@
     // corners), as it is for a shape's rx.
     { group: "Border", id: "wt-brad", prop: "border-radius", label: "Radius", kind: "number", unit: "px", min: 0,
       read: function (cs) { return px(cs.borderRadius); } },
+    // A text field with presets rather than discrete controls: building a shadow out
+    // of parts needs four lengths, a colour and an inset flag - six controls for one
+    // declaration - and a shadow's colour is almost always translucent while the
+    // panel's swatch is opaque hex. So it reuses the Font control's suggestion list.
+    // No per-row preview: a 24px row cannot show a 45px shadow, only smudge it.
+    { group: "Border", id: "wt-shadow", prop: "box-shadow", label: "Shadow", kind: "text",
+      suggest: function () { return SHADOW_PRESETS; }, suggestTitle: "Shadow presets",
+      read: function (cs) { return cs.boxShadow; } },
     // Shape-only: fill/stroke/stroke-width are inherited SVG presentation properties,
     // so writing them on the <svg> cascades to its child shape (one place to edit
     // colour for every shape kind). `rx` is NOT inherited - it's a <rect> geometry
@@ -242,6 +250,18 @@
       read: function (cs) { return px(cs.rx); } },
   ];
   var GROUPS = ["Type", "Colour", "Box", "Border", "Shape"];
+
+  // Enough to cover the range an editorial page actually wants - a hairline, a card
+  // lift, a modal lift, a dramatic drop, an inset press - plus `none` to take a
+  // shadow off. Typing a custom value still works, so this is a shortcut not a cage.
+  var SHADOW_PRESETS = [
+    "none",
+    "0 1px 2px rgba(0, 0, 0, 0.08)",
+    "0 2px 8px rgba(0, 0, 0, 0.12)",
+    "0 8px 24px rgba(0, 0, 0, 0.18)",
+    "0 18px 45px rgba(0, 0, 0, 0.22)",
+    "inset 0 1px 3px rgba(0, 0, 0, 0.15)",
+  ];
 
   // ---- the page's own fonts -------------------------------------------------
   // What the Font control offers as suggestions. Computed style is the primary
@@ -567,12 +587,9 @@
   // dropdown, so free text still works and nothing that was possible before this
   // control existed becomes impossible. The list itself is filled at open time by
   // c.suggest(), never from markup.
-  //
-  // Known constraint for the next control that wants one: the list is positioned
-  // inside the panel, which is a scroll box (`overflow-y: auto`), so it can only
-  // drop as far as the panel's own bottom edge. Font is the panel's first field,
-  // so it always has the room; a suggest control placed lower down would need the
-  // list to escape the panel (fixed positioning off the toggle's rect) instead.
+  // The list escapes the panel's scroll box by being positioned in viewport
+  // coordinates on open (see placeSuggest), so a field anywhere in the panel can
+  // have one - Font sits at the top and Shadow at the very bottom.
   function suggestField(c) {
     return '<span class="wt-suggest">' +
       '<input type="text" id="' + c.id + '">' +
@@ -892,12 +909,17 @@
     el.style.cssText = savedCss;
     return result;
   }
-  // Resolve a typed value to its computed form via the element, so a shorthand like
-  // margin "10px 20px" can be compared to the computed 4-value baseline.
+  // Properties whose authored form never matches their computed form, so a typed
+  // value has to be resolved through the element before it can be compared to the
+  // baseline: margin "10px 20px" against a computed 4-value, and a box-shadow
+  // against a computed one, which Chromium reorders colour-first
+  // ("0 1px 2px rgba(0,0,0,.08)" -> "rgba(0, 0, 0, 0.08) 0px 1px 2px 0px").
+  var RESOLVE_TO_COMPARE = { margin: 1, padding: 1, "box-shadow": 1 };
   function resolveValue(prop, value) {
     return withTempStyle(selectedEl,
       function (s) { s.setProperty(prop, value); },
-      function () { return getComputedStyle(selectedEl)[prop]; });
+      // getPropertyValue, not [prop]: the property names here are kebab-case.
+      function () { return getComputedStyle(selectedEl).getPropertyValue(prop); });
   }
   // Re-apply one recorded change (a nudge transform or a plain property) to an element.
   // Shape fill/stroke/stroke-width are inherited SVG props, so they're set on the
@@ -947,12 +969,16 @@
     // sitting in the edits file for Claude to reconcile into real source.
     if (raw === "" && c.kind !== "align") return revertControl(c);
     if (c.box) raw = Math.max(1, parseInt(raw, 10) || 1);   // width/height floor of 1, matching resize
+    var v = c.unit ? raw + c.unit : raw;
+    if (c.prop === "font-family") v = quoteFamily(raw);
+    // Rejected first, before anything can interpret the value (see accepts).
+    if (!accepts(c, v, raw)) return;
     // Setting a control back to the value it was populated with means "revert this
     // property" - drop the override + the recorded change rather than baking a no-op
     // (also stops an accidental opaque #000000 from a transparent-shown colour swatch).
-    // Shorthand props (margin/padding) carry a computed 4-value baseline, so resolve
-    // the typed value through the element before comparing.
-    var revertTarget = (c.prop === "margin" || c.prop === "padding") ? resolveValue(c.prop, raw) : String(raw);
+    // Some props (margin/padding/box-shadow) have a baseline in computed form that a
+    // typed value never matches literally, so resolve it through the element first.
+    var revertTarget = RESOLVE_TO_COMPARE[c.prop] ? resolveValue(c.prop, raw) : String(raw);
     // A shape's seeded properties (fill/stroke/stroke-width/rx and width/height) have
     // no authored baseline and must stay in the self-contained create patch, so those
     // writes are always recorded - a 1px border or a #000000 fill can't be mistaken for
@@ -962,18 +988,27 @@
     // Guard the "" === "" trap: an engine that serialises an asymmetric computed
     // shorthand as "" must not make every typed value look like a revert.
     if (!noRevert && revertTarget !== "" && revertTarget === baselines[c.id]) return revertControl(c);
-    var v = c.unit ? raw + c.unit : raw;
-    if (c.prop === "font-family") v = quoteFamily(raw);
-    commit(c, v, raw);
+    commit(c, v);
+  }
+  // Would the browser accept this value? If not, the live preview never changed, so
+  // recording it would be a phantom patch the page never showed.
+  //
+  // Checked BEFORE the revert comparison, in both write paths. After it, a typo in a
+  // resolve-to-compare property would be destructive: an invalid value resolves to
+  // the element's CURRENT computed value, which is indistinguishable from the user
+  // setting the field back to its baseline - so mistyping over a shadow you had just
+  // set would silently delete it instead of being ignored.
+  function accepts(c, v, raw) {
+    var prop = propOf(c);
+    if (c.box || c.shapeOnly) return true;   // a px number or a swatch is always valid
+    if (CSS.supports(prop, v)) return true;
+    status("ignored invalid " + prop + ": " + raw, false);
+    return false;
   }
   // The shared tail of every write - the plain path above and the composed border
   // path below both end here, so there is one place a Patch can be created.
-  function commit(c, v, raw) {
+  function commit(c, v) {
     var prop = propOf(c);
-    // Don't bake a phantom patch the page never showed: if the browser would
-    // reject this value (a typo like "banana" in a free-text field), the live
-    // preview wouldn't change either, so leave any prior valid edit untouched.
-    if (!c.box && !c.shapeOnly && !CSS.supports(prop, v)) { status("ignored invalid " + prop + ": " + raw, false); return; }
     pushUndoWrite(selectedEl, prop);
     applyChange(selectedEl, prop, v);    // routes rx to the child node; plain setProperty otherwise
     record(selectedEl, prop, v);
@@ -1063,8 +1098,12 @@
     set(BORDER.width, made.width);
     set(BORDER.style, made.style);
     set(BORDER.color, made.color);
+    // Composed from a number input, a select and a colour swatch, so it is valid by
+    // construction - checked anyway, because "valid by construction" is exactly the
+    // claim that stops being true when a fourth part is added.
+    if (!accepts(c, made.decl, raw)) return;
     if (made.decl === baselineBorder()) return revertBorder(c);
-    commit(c, made.decl, raw);
+    commit(c, made.decl);
   }
   function revertBorder(c) {
     revertControl(c);   // c.prop is `border` for all three, so this drops the lot
@@ -1135,7 +1174,20 @@
       list.appendChild(li);
     });
     list.hidden = false;
+    placeSuggest(list, toggle);   // measured, so only once it is visible
     toggle.setAttribute("aria-expanded", "true");
+  }
+  // The list is positioned in viewport coordinates because the panel is a scroll box
+  // and would otherwise clip it (Shadow is the last field of the last group). Drops
+  // below its toggle, flipping above when the space below is too short - and its
+  // right edge lines up with the toggle's, so it reads as belonging to that field.
+  function placeSuggest(list, toggle) {
+    var r = toggle.getBoundingClientRect();
+    var h = list.offsetHeight, w = list.offsetWidth;
+    var roomBelow = window.innerHeight - r.bottom - 8;
+    var top = (roomBelow >= h || r.top < h + 8) ? r.bottom + 4 : r.top - h - 4;
+    list.style.top = Math.max(4, Math.min(top, window.innerHeight - h - 4)) + "px";
+    list.style.left = Math.max(4, r.right - w) + "px";
   }
   function closeSuggest(list, toggle) {
     list.hidden = true;
@@ -1144,14 +1196,22 @@
   // Close any open list on Esc, on a click outside it, and whenever the selection
   // changes - an open dropdown left hanging over the panel swallows clicks meant
   // for the fields beneath it.
-  function closeAllSuggests(exceptWrap) {
+  function eachOpenSuggest(fn) {
     Array.prototype.forEach.call(panel.querySelectorAll(".wt-suggest"), function (wrap) {
-      if (wrap === exceptWrap) return;
       var list = wrap.querySelector(".wt-suggest-list");
       var toggle = wrap.querySelector(".wt-suggest-toggle");
-      if (list && !list.hidden) closeSuggest(list, toggle);
+      if (list && !list.hidden) fn(list, toggle, wrap);
     });
   }
+  function closeAllSuggests(exceptWrap) {
+    eachOpenSuggest(function (list, toggle, wrap) {
+      if (wrap !== exceptWrap) closeSuggest(list, toggle);
+    });
+  }
+  // An open list is placed in viewport coordinates, so it has to follow its toggle
+  // when the page or the panel scrolls - otherwise it strands itself beside a
+  // different field, or over one.
+  function repositionSuggests() { eachOpenSuggest(placeSuggest); }
   document.addEventListener("click", function (ev) {
     var wrap = ev.target.closest && ev.target.closest(".wt-suggest");
     closeAllSuggests(wrap);
@@ -1408,6 +1468,9 @@
   function reposition() {
     if (selectedEl) positionBox(selBox, selectedEl);
     hoverBox.hidden = true;
+    // Also fires for the panel's own scroll: the listener is capture-phase on window,
+    // and a scroll event does not bubble but is still seen on the way down.
+    repositionSuggests();
   }
 
   document.getElementById("wt-deselect").addEventListener("click", deselect);
