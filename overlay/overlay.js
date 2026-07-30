@@ -71,6 +71,12 @@
   function record(el, prop, value) {
     entry(el).changes[prop] = value;
     dirty = true;
+    // The status line reports the most recent notable thing, and a successful edit
+    // supersedes whatever it said - an "ignored invalid" warning has no timer, so
+    // without this it sits there through every later edit, reading as current. Safe
+    // to clear here: restore() writes `changes` directly and never comes through
+    // record(), so its own "restored N of M" notice survives.
+    status("");
     refreshChanges();
   }
   // True iff any edited element still holds real changes - the single source of
@@ -1050,12 +1056,19 @@
     if (ent) delete ent.changes[prop];
     rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
     dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
+    status("");                      // abandoning an edit supersedes a stale notice too
     refreshChanges();
     positionBox(selBox, selectedEl);
   }
 
   function writeControl(c, raw) {
     if (!selectedEl) return;
+    // A control the Overlay has declined is not writable by ANY path. The disabled
+    // attribute stops a mouse and a keyboard, which is all a user has - but the guard
+    // exists to stop a Patch the element will not honour from being recorded at all,
+    // so refusing here makes that structural rather than presentational.
+    var node = document.getElementById(c.id);
+    if (node && node.disabled) return;
     if (c.part) return writeBorder(c, raw);   // three controls, one declaration
     // Clearing a field means "I don't want this change after all", so it must
     // drop any recorded change - not return early and leave the abandoned value
@@ -1836,6 +1849,7 @@
     if (!rows.length) {
       changesBox.hidden = true;
       changesList.textContent = "";   // drop element refs held by stale rows
+      changesHead.textContent = "";   // ...and don't leave it claiming a change that is gone
       changesSig = null;
       return;
     }

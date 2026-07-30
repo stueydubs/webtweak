@@ -305,6 +305,27 @@ def test_mixed_sides_disable_the_border_controls(served):
     assert "differ" in tip and tip != ""
 
 
+def test_a_declined_control_cannot_be_written_by_any_path(served):
+    """Disabling an input stops a mouse and a keyboard, which is all a user has. But
+    the guard exists to stop a Patch the element will not honour from being recorded
+    at all, so the write path refuses too rather than trusting the attribute - the
+    difference between a structural guarantee and a presentational one.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#mixed-rule")          # sides differ: the trio is declined
+        for field, value in ((WIDTH, "9"), (STYLE, "double"), (COLOUR, "#ff0000")):
+            set_field(page, field, value)  # dispatched directly, past the attribute
+        sides = all_sides(page, "#mixed-rule")
+        page.click("#wt-save")
+        status = page.eval_on_selector("#wt-status", "el => el.textContent")
+        browser.close()
+    # untouched: left 3px solid, bottom 1px dotted, the other two bare
+    assert sides == ["0px none", "0px none", "1px dotted", "3px solid"]
+    assert status == "nothing changed yet"
+
+
 def test_a_uniform_border_is_unaffected_by_the_side_logic(served):
     """The card and the headline keep the all-sides behaviour they had before."""
     tmp, port = served

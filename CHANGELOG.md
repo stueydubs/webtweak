@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A rejected value no longer warns forever.** The status line has no timer, so
+  `ignored invalid margin: banana` sat there through every later successful edit,
+  reading as current long after it stopped being true. Any recorded edit - or
+  abandoning one - now supersedes it.
+- **A declined control refuses a write from any direction.** Disabling an input stops
+  a mouse and a keyboard, which is all you have, but the guard exists to stop a Patch
+  your element will not honour from being recorded at all - so the write path refuses
+  too, rather than trusting the attribute.
+- The session change list no longer leaves its header reading "1 element changed"
+  after the last change is reverted. The list itself was correctly hidden, so this was
+  never visible - but it is the panel's own account of your session, and it was wrong.
+
 ### Added
 - **Line and Spacing stopped being bare text boxes.** Both were fields you typed a
   value into from memory, which is the same complaint that produced the font picker.

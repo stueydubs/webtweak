@@ -598,6 +598,84 @@ def test_invalid_freetext_value_is_not_recorded(served):
     assert patch["changes"]["font-size"] == "52px"  # the genuine edit did
 
 
+def test_a_rejected_value_warning_clears_on_the_next_edit(served):
+    """The status line reports the most recent notable thing that happened. An
+    'ignored invalid' warning has no timer, so it used to sit there through every
+    later successful edit - reading as current long after it stopped being true."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#headline")
+        page.fill("#wt-margin", "banana")            # rejected
+        page.dispatch_event("#wt-margin", "input")
+        warned = page.eval_on_selector("#wt-status", "el => el.textContent")
+        page.fill("#wt-fs", "52")                    # a real edit supersedes it
+        page.dispatch_event("#wt-fs", "input")
+        after_edit = page.eval_on_selector("#wt-status", "el => el.textContent")
+        page.fill("#wt-fs", "")                      # so does abandoning one
+        page.dispatch_event("#wt-fs", "input")
+        page.fill("#wt-margin", "banana")
+        page.dispatch_event("#wt-margin", "input")
+        page.fill("#wt-ls", "0.05em")
+        page.dispatch_event("#wt-ls", "input")
+        page.fill("#wt-ls", "")
+        page.dispatch_event("#wt-ls", "input")
+        after_revert = page.eval_on_selector("#wt-status", "el => el.textContent")
+        browser.close()
+    assert warned.startswith("ignored invalid margin")
+    assert after_edit == ""
+    assert after_revert == ""
+
+
+def test_probing_a_value_leaves_no_mark_on_the_page(served):
+    """The revert-comparison for margin/padding/box-shadow resolves a typed value by
+    writing it to the element, reading computed style, and putting the inline style
+    back. Restoring via `cssText = ""` CREATES an empty style attribute on an element
+    that never had one - so merely typing in a field left a mark on the page, which is
+    the one thing ADR-0001 promises the Overlay never does.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#headline")
+        page.fill("#wt-margin", "banana")            # rejected, but still probed
+        page.dispatch_event("#wt-margin", "input")
+        after_probe = page.eval_on_selector("#headline", "el => el.hasAttribute('style')")
+        page.fill("#wt-fs", "52")                    # a real edit does earn one
+        page.dispatch_event("#wt-fs", "input")
+        during_edit = page.eval_on_selector("#headline", "el => el.getAttribute('style')")
+        page.fill("#wt-fs", "")                      # and abandoning it takes it away again
+        page.dispatch_event("#wt-fs", "input")
+        after_revert = page.eval_on_selector("#headline", "el => el.hasAttribute('style')")
+        browser.close()
+    assert after_probe is False
+    assert "font-size: 52px" in during_edit
+    assert after_revert is False
+
+
+def test_the_change_list_header_does_not_outlive_its_rows(served):
+    """Reverting the last change hides the list but used to leave its header reading
+    '1 element changed'. Invisible to the user, but it is the panel's own account of
+    the session, and it was wrong."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#headline")
+        page.fill("#wt-fs", "52")
+        page.dispatch_event("#wt-fs", "input")
+        with_one = page.eval_on_selector("#wt-changes-head", "el => el.textContent")
+        page.fill("#wt-fs", "")
+        page.dispatch_event("#wt-fs", "input")
+        after = page.evaluate("""() => ({
+            head: document.getElementById('wt-changes-head').textContent,
+            hidden: document.getElementById('wt-changes').hidden,
+        })""")
+        browser.close()
+    assert "1 element changed" in with_one
+    assert after["hidden"] is True
+    assert "element changed" not in after["head"]
+
+
 def test_revert_to_original_after_reload_clears_the_batch(served):
     """Edit + save, reload, then set the value back to its true original: the saved
     batch must be cleared, not left on disk with a no-op patch (baseline-drift)."""
