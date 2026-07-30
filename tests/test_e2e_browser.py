@@ -455,9 +455,9 @@ def test_shape_margin_reverts_but_seeded_props_persist(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
         place_shape(page, "square", 400, 350)
-        orig = page.eval_on_selector("#wt-margin", "el => el.value")
+        orig = page.eval_on_selector("#wt-margin-top", "el => el.value")
         page.evaluate("""(orig) => {
-            const mg = document.getElementById('wt-margin');
+            const mg = document.getElementById('wt-margin-top');
             mg.value = '20px'; mg.dispatchEvent(new Event('input', { bubbles: true }));
             mg.value = orig; mg.dispatchEvent(new Event('input', { bubbles: true }));  // revert
             const sw = document.getElementById('wt-sw');           // a seeded prop still records
@@ -583,8 +583,8 @@ def test_invalid_freetext_value_is_not_recorded(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
         page.click("#headline")
-        page.fill("#wt-margin", "banana")          # invalid - browser drops it
-        page.dispatch_event("#wt-margin", "input")
+        page.fill("#wt-margin-top", "banana")      # invalid - browser drops it
+        page.dispatch_event("#wt-margin-top", "input")
         page.fill("#wt-fs", "52")                  # a real edit so there is something to save
         page.dispatch_event("#wt-fs", "input")
         page.click("#wt-save")
@@ -594,7 +594,7 @@ def test_invalid_freetext_value_is_not_recorded(served):
         browser.close()
 
     patch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]["patches"][0]
-    assert "margin" not in patch["changes"]        # the phantom value never made it in
+    assert not [k for k in patch["changes"] if k.startswith("margin")]        # the phantom value never made it in
     assert patch["changes"]["font-size"] == "52px"  # the genuine edit did
 
 
@@ -606,23 +606,23 @@ def test_a_rejected_value_warning_clears_on_the_next_edit(served):
     with sync_playwright() as p:
         browser, page = open_page(p, port)
         page.click("#headline")
-        page.fill("#wt-margin", "banana")            # rejected
-        page.dispatch_event("#wt-margin", "input")
+        page.fill("#wt-margin-top", "banana")        # rejected
+        page.dispatch_event("#wt-margin-top", "input")
         warned = page.eval_on_selector("#wt-status", "el => el.textContent")
         page.fill("#wt-fs", "52")                    # a real edit supersedes it
         page.dispatch_event("#wt-fs", "input")
         after_edit = page.eval_on_selector("#wt-status", "el => el.textContent")
         page.fill("#wt-fs", "")                      # so does abandoning one
         page.dispatch_event("#wt-fs", "input")
-        page.fill("#wt-margin", "banana")
-        page.dispatch_event("#wt-margin", "input")
+        page.fill("#wt-margin-top", "banana")
+        page.dispatch_event("#wt-margin-top", "input")
         page.fill("#wt-ls", "0.05em")
         page.dispatch_event("#wt-ls", "input")
         page.fill("#wt-ls", "")
         page.dispatch_event("#wt-ls", "input")
         after_revert = page.eval_on_selector("#wt-status", "el => el.textContent")
         browser.close()
-    assert warned.startswith("ignored invalid margin")
+    assert warned.startswith("ignored invalid margin-top")
     assert after_edit == ""
     assert after_revert == ""
 
@@ -638,8 +638,8 @@ def test_probing_a_value_leaves_no_mark_on_the_page(served):
     with sync_playwright() as p:
         browser, page = open_page(p, port)
         page.click("#headline")
-        page.fill("#wt-margin", "banana")            # rejected, but still probed
-        page.dispatch_event("#wt-margin", "input")
+        page.fill("#wt-margin-top", "banana")        # rejected, but still probed
+        page.dispatch_event("#wt-margin-top", "input")
         after_probe = page.eval_on_selector("#headline", "el => el.hasAttribute('style')")
         page.fill("#wt-fs", "52")                    # a real edit does earn one
         page.dispatch_event("#wt-fs", "input")
@@ -834,10 +834,10 @@ def test_revert_preserves_authored_inline_longhand(served):
             document.querySelector('main').appendChild(box);
         }""")
         page.click("#lh-box")
-        page.fill("#wt-margin", "12px")            # edit margin (overrides all sides)
-        page.dispatch_event("#wt-margin", "input")
-        page.fill("#wt-margin", "50px 30px 30px 30px")  # revert to the computed baseline
-        page.dispatch_event("#wt-margin", "input")
+        page.fill("#wt-margin-bottom", "12px")     # edit one side
+        page.dispatch_event("#wt-margin-bottom", "input")
+        page.fill("#wt-margin-bottom", "30px")     # back to the computed baseline
+        page.dispatch_event("#wt-margin-bottom", "input")
         style = page.eval_on_selector("#lh-box", "el => el.getAttribute('style')")
         mt = page.eval_on_selector("#lh-box", "el => getComputedStyle(el).marginTop")
         browser.close()
@@ -1011,19 +1011,21 @@ def test_cleared_field_records_no_patch(served):
     assert status == "nothing changed yet"   # both fields ended empty; nothing recorded
 
 
-def test_shorthand_margin_revert_records_nothing(served):
-    """Typing a shorthand margin equal to the authored value (e.g. '32px 0' on the
-    card) is recognised as a revert against the computed baseline, recording no patch."""
+def test_shorthand_spacing_revert_records_nothing(served):
+    """A linked write emits the shorthand, so it needs the same revert detection the
+    single margin box used to need: typing the value the element already has, resolved
+    through the element, records no patch."""
     tmp, port = served
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        select_card(page)                # .card { margin: 32px 0; }
-        page.fill("#wt-margin", "32px 0")  # author shorthand == computed baseline
-        page.dispatch_event("#wt-margin", "input")
+        select_card(page)                     # .card { padding: 24px } - equal all round
+        page.click("#wt-padding-link")        # link: one value, all four sides
+        page.fill("#wt-padding-top", "24px")  # == the computed baseline
+        page.dispatch_event("#wt-padding-top", "input")
         page.click("#wt-save")
         status = page.eval_on_selector("#wt-status", "el => el.textContent")
         browser.close()
-    assert status == "nothing changed yet"   # shorthand resolved to baseline -> no record
+    assert status == "nothing changed yet"

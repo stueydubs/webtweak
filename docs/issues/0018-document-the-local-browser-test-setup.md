@@ -4,7 +4,7 @@
 
 ## Parent
 
-[PRD: webtweak 0.6.0](../PRD-0.6.0.md)
+[PRD: per-breakpoint authoring](../PRD-per-breakpoint-authoring.md)
 
 ## What to build
 

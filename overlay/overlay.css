@@ -227,6 +227,26 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
    differ, and width/height on a non-replaced inline element. */
 .wt-field input:disabled,
 .wt-field select:disabled { opacity: 0.4; cursor: not-allowed; }
+/* --- per-side spacing ----------------------------------------------------- */
+/* Four boxes and a link toggle on ONE row, because vertical space is the panel's
+   scarce dimension - it already scrolls on a short window. The boxes share the row
+   evenly and stay legible at three digits plus a unit. */
+/* Four boxes need the room a full-width label was taking, so a sides row gets a
+   narrower label column - enough that "32px" reads without clipping. */
+.wt-field-wide label { flex: 0 0 54px; }
+.wt-sides { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; }
+.wt-sides input[type="text"] {
+  flex: 1 1 0; min-width: 0; width: auto;
+  background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
+  border-radius: 4px; padding: 4px 2px;
+  font: 11px ui-monospace, Menlo, monospace; text-align: center;
+}
+.wt-link {
+  flex: 0 0 auto; background: #0f1115; border: 1px solid #2c303a; color: #6b7280;
+  border-radius: 4px; padding: 3px 4px; font-size: 10px; line-height: 1; cursor: pointer;
+}
+.wt-link.on { border-color: #ffd479; color: #ffd479; background: #23200f; }
+
 /* --- stepper (a text field you can also nudge with arrows) ---------------- */
 .wt-stepper { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .wt-step-btns { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }

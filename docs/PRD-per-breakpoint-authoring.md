@@ -1,4 +1,4 @@
-# PRD: webtweak 0.6.0 - per-breakpoint authoring
+# PRD: per-breakpoint authoring
 
 > The release that makes webtweak a responsive tool. You author at a width, webtweak knows which of *your page's own* breakpoints you are inside, and the Patch says so - Claude writes the media query. Changes the Patch contract for the first time; ADR-0001 still holds. See [CONTEXT.md](../CONTEXT.md), [ADR-0001](./adr/0001-capture-intent-not-rewrite-source.md), [ADR-0003](./adr/0003-compose-shorthands-from-discrete-controls.md) and [ADR-0004](./adr/0004-breakpoint-scoped-patches.md).
 

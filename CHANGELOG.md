@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Margin and padding are edited per side.** They were single text boxes holding a
+  four-value shorthand, so changing one side meant reading `30px 168px 0px 168px`,
+  doing the arithmetic and retyping the lot. Now there are four boxes on one row - no
+  taller than before, because vertical space is the panel's scarce dimension - plus a
+  link button for "the same all round", which is the one thing the old box did well.
+
+  Each box takes any unit, and `auto`, so centring is now something you can *set*
+  rather than only lose. And only the side you touch is recorded: a Patch says
+  `padding-bottom: 40px` instead of all four sides. That removes a real hazard rather
+  than just some typing - on a centred block, the old shorthand carried the computed
+  px where the source said `auto`, and reconciling it literally killed the centring.
+  The reconcile skill is told the sides absent from a Patch must stay untouched.
+
 ## [0.5.0] - 2026-07-30
 
 A small release from using the tool: the last two bare text boxes in the Type group

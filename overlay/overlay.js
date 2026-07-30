@@ -262,10 +262,15 @@
       read: function (cs) { return px(cs.width); } },
     { group: "Box", id: "wt-h", prop: "height", label: "Height", kind: "number", unit: "px", box: true,
       read: function (cs) { return px(cs.height); } },
-    { group: "Box", id: "wt-margin", prop: "margin", label: "Margin", kind: "text",
-      read: function (cs) { return cs.margin; } },
-    { group: "Box", id: "wt-padding", prop: "padding", label: "Padding", kind: "text",
-      read: function (cs) { return cs.padding; } },
+    // Four boxes on one row, not a shorthand in one box. Editing a single side used
+    // to mean reading `30px 168px 0px 168px`, doing the arithmetic and retyping it -
+    // and the Patch then carried all four sides whatever you touched, which is why
+    // reconcile has to guess whether a computed `168px` was an authored `auto`.
+    // Recording per-side removes that guess at the source. See sideProp/writeSides.
+    { group: "Box", id: "wt-margin", prop: "margin", label: "Margin", kind: "sides",
+      read: function (cs, side) { return cs["margin" + capitalise(side)]; } },
+    { group: "Box", id: "wt-padding", prop: "padding", label: "Padding", kind: "sides",
+      read: function (cs, side) { return cs["padding" + capitalise(side)]; } },
     // Width/Style/Colour are three controls over ONE `border` declaration - the
     // first entry in this table to break one-control-one-property. `part` marks
     // them, and writeBorder() composes all three (see ADR-0003); each still reads
@@ -312,6 +317,7 @@
       read: function (cs) { return px(cs.rx); } },
   ];
   var GROUPS = ["Type", "Colour", "Box", "Border", "Shape"];
+  var SIDES = ["top", "right", "bottom", "left"];
 
   // Tracking, in the em steps editorial type is actually set in: tightened for a big
   // display line, opened up for small caps and uppercase labels, plus `normal` to take
@@ -637,7 +643,9 @@
     GROUPS.forEach(function (g) {
       parts.push('  <div class="wt-group" data-group="' + g + '"><div class="wt-legend">' + g + "</div>");
       CONTROLS.filter(function (c) { return c.group === g; }).forEach(function (c) {
-        parts.push(field(c.label, controlMarkup(c)));
+        // A sides row needs its label column narrowed to fit four boxes, so it is
+        // marked rather than special-cased in CSS by descendant guesswork.
+        parts.push(field(c.label, controlMarkup(c), c.kind === "sides" ? " wt-field-wide" : ""));
       });
       parts.push("  </div>");
     });
@@ -661,7 +669,22 @@
     if (c.kind === "align") return alignButtons(c.id);
     if (c.suggest) return suggestField(c);
     if (c.step) return stepperField(c);
+    if (c.kind === "sides") return sidesField(c);
     return '<input type="text" id="' + c.id + '">';
+  }
+  // Top/right/bottom/left on one row, plus a link toggle for "the same on all sides",
+  // which is the one thing the old single box did well. Four boxes on the SAME row
+  // cost no vertical space, which matters: the panel already scrolls on a short
+  // window. Text inputs rather than numbers, so a unit - or `auto` - still works.
+  function sidesField(c) {
+    return '<span class="wt-sides">' +
+      SIDES.map(function (s) {
+        return '<input type="text" id="' + c.id + "-" + s + '" title="' +
+          capitalise(s) + '" aria-label="' + c.label + " " + s + '">';
+      }).join("") +
+      '<button class="wt-link" id="' + c.id + '-link" type="button" aria-pressed="false"' +
+      ' title="Link all four sides">&#128279;</button>' +
+      "</span>";
   }
   // A text input with up/down buttons. The input stays free text, so a keyword or a
   // unit the stepper cannot compute on is still typeable - the buttons are an
@@ -690,8 +713,9 @@
       '<ul class="wt-suggest-list" id="' + c.id + '-list" hidden></ul>' +
       "</span>";
   }
-  function field(label, control) {
-    return '  <div class="wt-field"><label>' + label + "</label>" + control + "</div>";
+  function field(label, control, extra) {
+    return '  <div class="wt-field' + (extra || "") + '"><label>' + label + "</label>" +
+      control + "</div>";
   }
   function select(id, opts) {
     return '<select id="' + id + '">' +
@@ -922,6 +946,9 @@
       // a style recalc on) a child node for a control it will never show.
       var host = (c.host && ent && ent.shape && c.host(el)) || el;
       var hcs = host === el ? cs : getComputedStyle(host);
+      // A sides control is four fields with four baselines, each read from its own
+      // computed longhand - so no shorthand ever has to be parsed to fill them.
+      if (c.kind === "sides") return populateSides(c, host, hcs, ent);
       var shown = c.read(hcs);            // current (possibly already-edited) value -> the panel
       var base = shown;
       // After a reload+restore the override is applied inline, so computed == the
@@ -991,6 +1018,28 @@
   }
   function set(id, v) { var el = document.getElementById(id); if (el) el.value = v; }
 
+  // Fill the four side fields, peeling this session's own override off each one so a
+  // revert is still recognised after a reload - the same trick the single-value
+  // controls use, applied per side. The shorthand is peeled too, since a linked write
+  // records `padding` rather than four longhands.
+  function populateSides(c, host, hcs, ent) {
+    SIDES.forEach(function (side) {
+      var prop = sideProp(c, side);
+      var shown = c.read(hcs, side);
+      var base = shown;
+      var edits = (ent && ent.changes) || {};
+      if (Object.prototype.hasOwnProperty.call(edits, prop) ||
+          Object.prototype.hasOwnProperty.call(edits, c.prop)) {
+        base = withTempStyle(host, function (s) {
+          s.removeProperty(prop);
+          s.removeProperty(c.prop);
+        }, function () { return c.read(getComputedStyle(host), side); });
+      }
+      baselines[c.id + "-" + side] = String(base);
+      set(c.id + "-" + side, shown);
+    });
+  }
+
   // ---- property wiring (all from the CONTROLS table) ------------------------
   // Wrap a single multi-word font family in quotes so the live preview applies
   // (a stack with commas, an already-quoted value, or a single word is left alone).
@@ -1008,12 +1057,14 @@
     el.style.cssText = savedCss;
     return result;
   }
-  // Properties whose authored form never matches their computed form, so a typed
-  // value has to be resolved through the element before it can be compared to the
-  // baseline: margin "10px 20px" against a computed 4-value, and a box-shadow
-  // against a computed one, which Chromium reorders colour-first
-  // ("0 1px 2px rgba(0,0,0,.08)" -> "rgba(0, 0, 0, 0.08) 0px 1px 2px 0px").
-  var RESOLVE_TO_COMPARE = { margin: 1, padding: 1, "box-shadow": 1 };
+  // Properties whose authored form never matches their computed form, so a typed value
+  // has to be resolved through the element before it can be compared to the baseline.
+  // Chromium reorders a computed box-shadow colour-first ("0 1px 2px rgba(0,0,0,.08)"
+  // -> "rgba(0, 0, 0, 0.08) 0px 1px 2px 0px"), so a literal comparison never matches.
+  // Margin and padding used to be here too; they now have their own comparison in
+  // isRevert(), which also has to keep `auto` distinguishable from the `0px` it
+  // resolves to.
+  var RESOLVE_TO_COMPARE = { "box-shadow": 1 };
   function resolveValue(prop, value) {
     return withTempStyle(selectedEl,
       function (s) { s.setProperty(prop, value); },
@@ -1121,6 +1172,63 @@
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
   }
 
+  // ---- per-side spacing -----------------------------------------------------
+  // The mirror image of the composed border: instead of three controls composing one
+  // declaration, four controls each emit their own longhand. Safe from the
+  // phantom-Patch rule that forced border to compose, because a single side IS
+  // individually visible - setting one padding renders on its own, so nothing has to
+  // be seeded to make the change show.
+  var linked = {};   // control id -> "same on all sides" state, per control
+
+  function sideProp(c, side) { return c.prop + "-" + side; }
+  function writeSides(c, side, raw) {
+    var ids = SIDES.map(function (s) { return c.id + "-" + s; });
+    // Linked writes express one intent - "this much all round" - so they record the
+    // shorthand the user actually meant rather than four identical longhands.
+    if (linked[c.id]) {
+      SIDES.forEach(function (s, i) { if (SIDES[i] !== side) set(ids[i], raw); });
+      return writeOne(c, c.prop, ids, raw);
+    }
+    return writeOne(c, sideProp(c, side), c.id + "-" + side, raw);
+  }
+  // One side (or the whole shorthand) through the shared write tail, so revert
+  // detection, the invalid gate, undo and the change list all behave as everywhere
+  // else. `baseId` is whichever field(s) hold this property's baseline.
+  function writeOne(c, prop, baseId, raw) {
+    var probe = { prop: prop, box: false, shapeOnly: false, label: c.label };
+    if (raw === "") return revertSide(c, prop, baseId);
+    if (!accepts(probe, raw, raw)) return;
+    var baseline = String(typeof baseId === "string" ? baselines[baseId] : baselines[baseId[0]]);
+    if (isRevert(prop, raw, baseline)) return revertSide(c, prop, baseId);
+    pushUndoWrite(selectedEl, prop);
+    applyChange(selectedEl, prop, raw);
+    record(selectedEl, prop, raw);
+    positionBox(selBox, selectedEl);
+  }
+  // Is this write just putting the side back to what it already renders? Two lengths
+  // are compared RESOLVED, so `2rem` is recognised as the computed `32px` it equals.
+  // A keyword is compared literally, because resolving it destroys the distinction:
+  // `auto` computes to `0px` on a block that is not centred, so a resolved comparison
+  // would read "auto" as a revert against a `0px` baseline and record nothing - which
+  // is exactly how you would try to centre something and watch nothing happen.
+  function isRevert(prop, raw, baseline) {
+    var lengths = /\d/.test(raw) && /\d/.test(baseline);
+    return lengths ? resolveValue(prop, raw) === resolveValue(prop, baseline)
+                   : raw.trim() === baseline.trim();
+  }
+  function revertSide(c, prop, baseId) {
+    var ent = edited.get(selectedEl);
+    if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
+    if (ent) delete ent.changes[prop];
+    rebuildInline(selectedEl, ent);
+    dirty = hasRealEdits();
+    status("");
+    refreshChanges();
+    // Put the field(s) back to the value the element is rendering again.
+    [].concat(baseId).forEach(function (id) { set(id, baselines[id]); });
+    positionBox(selBox, selectedEl);
+  }
+
   // ---- the composed border --------------------------------------------------
   // Width, Style and Colour are one `border` declaration, so a write reads all
   // three fields instead of just its own - three independent writes would each
@@ -1139,7 +1247,6 @@
   var borderSide = null;    // "bottom" etc. in per-side mode, else null
   var borderMixed = false;  // several sides differ: decline rather than wreck a design
 
-  var SIDES = ["top", "right", "bottom", "left"];
   function capitalise(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
   // The computed-style key for one border component on the edited side.
   function sideKey(component) { return "border" + capitalise(borderSide || "top") + component; }
@@ -1221,6 +1328,19 @@
   }
   CONTROLS.forEach(function (c) {
     var node = document.getElementById(c.id);
+    if (c.kind === "sides") {
+      SIDES.forEach(function (side) {
+        var input = document.getElementById(c.id + "-" + side);
+        if (input) input.addEventListener("input", function () { writeSides(c, side, this.value); });
+      });
+      var link = document.getElementById(c.id + "-link");
+      if (link) link.addEventListener("click", function () {
+        linked[c.id] = !linked[c.id];
+        link.setAttribute("aria-pressed", linked[c.id] ? "true" : "false");
+        link.classList.toggle("on", !!linked[c.id]);
+      });
+      return;
+    }
     if (c.kind === "align") {
       node.addEventListener("click", function (ev) {
         var btn = ev.target.closest("button");
