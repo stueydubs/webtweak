@@ -49,9 +49,8 @@ jobs:
       # hardcoded path silently excluded three new browser modules once already.
       - name: Run browser e2e
         run: python -m pytest -q -m browser
-      # pytest exits 5 when nothing was collected - a stable contract, unlike
-      # grepping its prose for "skipped".
-      - name: Fail if no browser test was collected
-        run: |
-          python -m pytest -q -m browser --collect-only
-          test $? -ne 5
+      # No separate guard step: pytest exits 5 when nothing is collected, and
+      # `run:` blocks execute under `bash -e`, so the step above already fails the
+      # job on zero collection. A trailing `test $?` could never run.
+      # Marker coverage itself is asserted by tests/test_markers.py, which runs in
+      # the stdlib job where a mis-marked module would actually do damage.

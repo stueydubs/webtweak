@@ -35,6 +35,7 @@
   var edited = new Map();
   var selectedEl = null;
   var dirty = false;       // unsaved changes since the last successful save
+  var saving = false;      // a save POST is in flight (see save(), localSafe())
   var persisted = false;   // this session has a saved/restored batch on disk to clear
   var missed = [];         // restored patches we couldn't re-locate - preserved across saves
   var interacting = false; // a drag/resize gesture is in progress
@@ -1119,7 +1120,9 @@
   });
 
   window.addEventListener("beforeunload", function (ev) {
-    if (dirty) { ev.preventDefault(); ev.returnValue = ""; }
+    // `saving` too: `dirty` is cleared before the POST resolves, so without it
+    // the guard goes quiet exactly while the work is still only in the browser.
+    if (dirty || saving) { ev.preventDefault(); ev.returnValue = ""; }
   });
 
   // ---- save -----------------------------------------------------------------
@@ -1162,6 +1165,7 @@
     // record() sets `dirty` back to true. Clearing afterwards would mark that
     // work as saved, and the live-reload guard would then reload over it.
     dirty = false;
+    saving = true;
     fetch(RESERVED + "save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1169,8 +1173,9 @@
     })
       .then(function (r) { return r.json(); })
       .then(function (j) {
+        saving = false;
         if (j.ok) {
-          offered = false;           // a save resolves the "source changed" warning
+          if (patches.length) wasPending = true;
           persisted = patches.length > 0;  // empty save just cleared the batch
           status(patches.length
             // Name the artefact: it teaches the hand-off for free, and it is the
@@ -1178,13 +1183,18 @@
             ? "saved " + j.patches + " change" + (j.patches === 1 ? "" : "s") +
               (j.file ? " -> " + j.file : "")
             : "reverted - cleared saved edits", true);
-          refreshStatus();
+          // A save clears the unsaved-work blocker, but the source that changed
+          // is still stale and no further event will fire for it. Re-run the
+          // decision rather than silently dropping the warning.
+          if (offeredReason) { offeredReason = null; onSourceChange(); }
+          else refreshStatus();
         } else {
           dirty = hasRealEdits();    // the save did not land; it is still unsaved
           status("save failed: " + (j.error || "unknown"), false);
         }
       })
       .catch(function () {
+        saving = false;
         dirty = hasRealEdits();
         status("save failed", false);
       });
@@ -1258,6 +1268,7 @@
   var changesHead = document.getElementById("wt-changes-head");
   var changesList = document.getElementById("wt-changes-list");
   var changesOpen = false;
+  var changesSig = null;    // row signature, so an unchanged list is not rebuilt
 
   function changeSummary(e) {
     return Object.keys(e.changes).map(function (p) {
@@ -1271,6 +1282,7 @@
   function refreshChanges() {
     if (!changesBox) return;          // called before the overlay finished mounting
     if (interacting) return;
+    repaintBadge();                   // the badge depends on hasRealEdits() too
     var rows = [];
     edited.forEach(function (e, el) {
       if (Object.keys(e.changes).length) rows.push({ el: el, e: e });
@@ -1278,6 +1290,7 @@
     if (!rows.length) {
       changesBox.hidden = true;
       changesList.textContent = "";   // drop element refs held by stale rows
+      changesSig = null;
       return;
     }
     changesBox.hidden = false;
@@ -1287,11 +1300,21 @@
     changesList.hidden = !changesOpen;
     if (!changesOpen) return;
 
+    // Rebuild only when the rows themselves changed. Selecting an element, and
+    // typing in a panel field, both call in here - tearing down every row for
+    // those made the list flicker and reset its scroll position mid-review.
+    var sig = rows.map(function (r) {
+      return (r.e.shape ? "shape:" + r.e.shape.kind : describe(r.el)) + "|" + changeSummary(r.e);
+    }).join("\n");
+    if (sig === changesSig) return paintSelection(rows);
+    changesSig = sig;
+
     changesList.textContent = "";
     rows.forEach(function (row) {
       var li  = document.createElement("li");
       var btn = document.createElement("button");
-      btn.className = "wt-change" + (row.el === selectedEl ? " on" : "");
+      btn.className = "wt-change";
+      btn.__wtEl = row.el;             // so paintSelection can find its row
       // textContent, never innerHTML: these strings come from the page's own
       // markup (tag, id, class names) and must never be parsed as HTML.
       var name = document.createElement("span");
@@ -1314,10 +1337,20 @@
       li.appendChild(btn);
       changesList.appendChild(li);
     });
+    paintSelection(rows);
+  }
+
+  // The `.on` highlight is the only thing a selection change affects, so move it
+  // in place rather than rebuilding the list around it.
+  function paintSelection() {
+    Array.prototype.forEach.call(changesList.querySelectorAll(".wt-change"), function (btn) {
+      btn.classList.toggle("on", btn.__wtEl === selectedEl);
+    });
   }
 
   changesHead.addEventListener("click", function () {
     changesOpen = !changesOpen;
+    changesSig = null;      // rows are discarded when collapsed; force a rebuild
     refreshChanges();
   });
 
@@ -1328,7 +1361,9 @@
   // when the source under the page changes, so a reconcile lands visibly here.
 
   var badge = document.getElementById("wt-badge");
-  var offered = false;    // a reload has been offered rather than taken
+  var offeredReason = null;  // 'unsaved' | 'pending' | 'vanished' while an offer stands
+  var lastDoc = null;        // last edits doc we read, so the badge can repaint free
+  var wasPending = false;    // our batch has been seen pending -> a later reconcile is news
   var es = null;
 
   function setBadge(text, kind, title) {
@@ -1336,7 +1371,7 @@
     // would otherwise stay live on a later chip that styles itself
     // cursor:default and does not look clickable.
     badge.onclick = null;
-    if (!text) { badge.hidden = true; return; }
+    if (!text) { badge.hidden = true; badge.textContent = ""; badge.title = ""; return; }
     badge.hidden = false;
     badge.textContent = text;
     badge.className = "wt-badge" + (kind ? " wt-badge-" + kind : "");
@@ -1349,57 +1384,99 @@
       .catch(function () { return null; });
   }
 
-  function myPending(doc) {
+  function myBatches(doc) {
     return ((doc && doc.batches) || []).filter(function (b) {
-      return b && b.sessionId === SESSION && b.status === "pending";
+      return b && b.sessionId === SESSION;
     });
   }
 
+  function myPending(doc) {
+    return myBatches(doc).filter(function (b) { return b.status === "pending"; });
+  }
+
+  function noteDoc(doc) {
+    if (!doc) return;
+    lastDoc = doc;
+    if (myPending(doc).length) wasPending = true;
+  }
+
   // --- "is it safe to reload right now?" -------------------------------------
-  // One question, two halves, asked in exactly one place. Re-deriving it per
-  // call site is how one path ends up checking only half of it.
+  // One question, asked in exactly one place. Re-deriving it per call site is
+  // how one path ends up checking only half of it. Every half FAILS CLOSED: a
+  // reload we decline costs a click, a reload we should not have taken costs
+  // the user's session.
 
-  // Unsaved work would be lost. Note this is `dirty`, not hasRealEdits(): after
-  // a Save the batch is on disk and restore() brings it back, and reloading
-  // after a save is the whole point - that is when Claude reconciles.
-  // `interacting` matters too, because `dirty` genuinely flickers false mid-drag
-  // when a nudge passes back through its origin.
-  function localSafe() { return !dirty && !interacting; }
+  // Unsaved work would be lost. `dirty`, not hasRealEdits(): after a Save the
+  // batch is on disk and restore() brings it back, and reloading after a save is
+  // the whole point - that is when Claude reconciles. `interacting` matters
+  // because `dirty` flickers false mid-drag when a nudge passes back through its
+  // origin; `saving` because `dirty` is cleared before the POST resolves, so
+  // during the round trip the page looks clean while nothing is on disk yet.
+  function localSafe() { return !dirty && !interacting && !saving; }
 
-  // Reconcile writes source FIRST and marks the batch second (SKILL.md steps 7
-  // then 8). Reloading in that window has restore() re-apply a still-pending
-  // batch on top of source Claude already rewrote - doubling a nudge, and
-  // re-emitting the same patches on the next Save.
-  function diskSafe(doc) { return !myPending(doc).length; }
+  // Reasons the on-disk state makes a reload unsafe:
+  //  - we could not read the edits file at all, so we know nothing (fail closed);
+  //  - our batch is still `pending`, because reconcile writes source FIRST and
+  //    marks second (SKILL.md steps 7 then 8), so restore() would re-apply it on
+  //    top of source Claude already rewrote - doubling a nudge;
+  //  - we saved a batch but the file no longer carries it. That is a deleted or
+  //    reverted edits file, NOT a reconcile, and `serveEdits` reports a missing
+  //    file as `{"batches": []}` - indistinguishable from "reconciled" unless we
+  //    check for our batch rather than for the absence of a pending one.
+  function diskSafe(doc) {
+    if (!doc) return false;
+    if (myPending(doc).length) return false;
+    if (persisted && !myBatches(doc).length) return false;
+    return true;
+  }
+
+  // Our batch is present AND every part of it is reconciled. Deliberately not
+  // "no pending batch": that is also true when the file has vanished, and when
+  // the only pending batch belongs to another session.
+  function myReconciled(doc) {
+    var mine = myBatches(doc);
+    return mine.length > 0 && mine.every(function (b) { return b.status === "reconciled"; });
+  }
 
   // The only path to location.reload(). `onBlocked(reason)` decides what the
   // user sees when it refuses.
   function tryReload(onBlocked) {
     if (!localSafe()) return onBlocked("unsaved");
     return fetchEdits().then(function (doc) {
+      noteDoc(doc);
       if (!localSafe()) return onBlocked("unsaved");   // changed while we asked
-      if (!diskSafe(doc)) return onBlocked("pending");
+      if (!diskSafe(doc)) {
+        return onBlocked(myPending(doc).length ? "pending" : "vanished");
+      }
       location.reload();
     });
   }
 
+  var OFFERS = {
+    unsaved: ["source changed - reload",
+      "Your source changed on disk. You have unsaved edits; click to reload and lose them."],
+    pending: ["reconciling...",
+      "Your source changed while this session's edits are still pending. " +
+      "Waiting for Claude to mark them reconciled - reloading now would apply them twice."],
+    vanished: ["edits file gone",
+      "This session's saved edits are no longer in the edits file. Reloading would " +
+      "discard the changes still shown on the page; click only if you meant to lose them."],
+  };
+
   function offerReload(reason) {
-    offered = true;
-    if (reason === "pending") {
-      setBadge("reconciling...", "warn",
-        "Your source changed while this session's edits are still pending. " +
-        "Waiting for Claude to mark them reconciled - reloading now would apply them twice.");
-    } else {
-      setBadge("source changed - reload", "warn",
-        "Your source changed on disk. You have unsaved edits; click to reload and lose them.");
-    }
+    offeredReason = reason;
+    var copy = OFFERS[reason] || OFFERS.unsaved;
+    setBadge(copy[0], "warn", copy[1]);
     // The click re-asks rather than reloading blind: the user may have started
     // editing since the offer went up, or the batch may still be pending.
     badge.onclick = function () {
       tryReload(function (why) {
         status(why === "pending"
           ? "still reconciling - your saved edits would be applied twice"
-          : "unsaved edits - save or reset first", false);
+          : why === "vanished"
+            ? "the edits file no longer has this session's batch"
+            : "unsaved edits - save or reset first", false);
+        offerReload(why);        // re-state the current reason; never latch a stale one
       });
     };
   }
@@ -1408,8 +1485,10 @@
   // pending until Claude flips it to reconciled. Takes an already-fetched doc
   // when the caller has one, so an event does not read the same file twice.
   function refreshStatus(doc) {
-    if (doc === undefined) return fetchEdits().then(refreshStatus);
-    if (!doc || offered) return;   // an outstanding offer is the louder message
+    if (doc === undefined) {
+      return fetchEdits().then(function (d) { lastDoc = d || lastDoc; refreshStatus(d); });
+    }
+    if (!doc || offeredReason) return;   // an outstanding offer is the louder message
     var pending = myPending(doc);
     if (pending.length) {
       var n = pending.reduce(function (t, b) { return t + ((b.patches || []).length); }, 0);
@@ -1424,8 +1503,15 @@
     setBadge("");
   }
 
+  // Repaint from the last doc we read - no fetch, so it is cheap enough to call
+  // on every local mutation. Without this the green "reconciled" chip stayed up
+  // over fresh unsaved work, reading as "already in source" when it was not.
+  function repaintBadge() {
+    if (lastDoc) refreshStatus(lastDoc);
+  }
+
   function onSourceChange() {
-    tryReload(function (reason) { if (!offered) offerReload(reason); });
+    tryReload(offerReload);
   }
 
   // The edits file is watched separately from source, because `mark` touches
@@ -1433,10 +1519,29 @@
   function onEditsChange() {
     fetchEdits().then(function (doc) {
       if (!doc) return;
-      if (localSafe() && diskSafe(doc)) {
-        offered = false;
-        location.reload();       // batch marked and source final: safe, and the real result
+      var pendingBefore = wasPending;
+      noteDoc(doc);
+      wasPending = pendingBefore || wasPending;
+      // Reload only on the pending -> reconciled TRANSITION, never on the state
+      // alone: after the reload our batch is still reconciled, so reloading on
+      // state would loop forever (es.onopen fires on every reconnect). "No
+      // pending batch" is also true when the file was deleted and when the only
+      // pending batch belongs to another session - neither is a reason to reload.
+      if (localSafe() && wasPending && myReconciled(doc)) {
+        offeredReason = null;
+        location.reload();       // batch marked and source final: the real result
         return;
+      }
+      // An outstanding offer is re-evaluated, not preserved: reconcile can leave
+      // a batch pending on purpose (SKILL.md step 8), and the old latch left the
+      // badge stuck on "reconciling..." for the rest of the session.
+      // Our saved batch is no longer in the file (deleted, or reverted by a VCS
+      // checkout). Say so: the edits are still on screen and can be re-saved,
+      // but nothing else would tell the user the on-disk copy is gone.
+      if (persisted && !myBatches(doc).length) return offerReload("vanished");
+      if (offeredReason) {
+        offeredReason = null;
+        return void tryReload(offerReload);
       }
       refreshStatus(doc);
     });
@@ -1452,14 +1557,14 @@
       // EventSource reconnects on its own, so a transient error is not worth
       // reporting. A CLOSED stream is terminal though, and silently losing live
       // reload is exactly the kind of thing the user should be told about.
-      if (es && es.readyState === 2 && !offered) {
+      if (es && es.readyState === 2 && !offeredReason) {
         setBadge("live reload offline", null,
           "Lost the connection to webtweak; source changes will not reload the page.");
       }
     };
     // ...and take the notice back down once it reconnects, or the page keeps
     // claiming to be offline after the server returns.
-    es.onopen = function () { if (!offered) refreshStatus(); };
+    es.onopen = function () { refreshStatus(); };   // clear an offline notice; never reload
     // Release the socket promptly: an open SSE stream occupies one of the
     // browser's six per-origin connections.
     window.addEventListener("pagehide", function () { if (es) es.close(); });

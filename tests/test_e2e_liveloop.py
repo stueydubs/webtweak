@@ -165,3 +165,104 @@ def test_saving_does_not_trigger_a_reload(served):
         page.wait_for_timeout(1200)                       # well past the 120ms debounce
         assert page.evaluate("window.__reload_probe") is True
         browser.close()
+
+
+def test_deleted_edits_file_never_triggers_a_reload(served):
+    """The safety predicates must fail CLOSED. `serveEdits` reports a missing file
+    as `{"batches": []}`, which reads identically to "reconciled" unless the check
+    looks for OUR batch rather than for the absence of a pending one. CONTEXT.md
+    tells users to commit the edits file in their site repo, so `git checkout .`
+    deleting it is an ordinary thing to happen mid-session."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')")
+        page.evaluate("window.__reload_probe = true")
+
+        (tmp / "sample.webtweak.json").unlink()        # git checkout . / rm
+
+        page.wait_for_function(
+            "document.getElementById('wt-badge').textContent.includes('gone')",
+            timeout=8000)
+        assert page.evaluate("window.__reload_probe") is True, \
+            "reloaded after the edits file vanished; the session's edits are gone"
+        # the edits are still on screen, so the user can re-save them
+        assert page.eval_on_selector("#headline",
+                                     "el => getComputedStyle(el).fontSize") == "52px"
+        browser.close()
+
+
+def test_another_sessions_batch_does_not_reload_us(served):
+    """diskSafe/myReconciled filter on our own sessionId, so an edits-file write
+    about a different session must not yank the page out from under the user."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.evaluate("window.__reload_probe = true")
+        edits = tmp / "sample.webtweak.json"
+        edits.write_text(json.dumps({
+            "target": "sample.html",
+            "batches": [{"sessionId": "someone-else", "status": "reconciled",
+                         "reconciledAt": "2026-07-29T12:00:00",
+                         "patches": [{"fingerprint": {"tag": "h1"}, "changes": {"color": "#111"}}]}],
+        }, indent=2))
+        page.wait_for_timeout(1200)                    # well past the 120ms debounce
+        assert page.evaluate("window.__reload_probe") is True
+        browser.close()
+
+
+def test_save_retries_a_pending_source_change_instead_of_dropping_it(served):
+    """A save clears the unsaved-work blocker but the source is still stale, and
+    no further file event will fire for it. Dropping the warning left the user
+    editing superseded markup behind a reassuring badge."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
+
+        src = tmp / "sample.html"
+        src.write_text(src.read_text().replace("</body>", "<!-- moved --></body>"))
+        page.wait_for_function(
+            "document.getElementById('wt-badge').textContent.includes('reload')",
+            timeout=8000)
+
+        # Saving must re-run the decision: now clean, but the batch is pending,
+        # so it should land on the 'reconciling...' offer - never on a bare
+        # "1 pending" that implies nothing is wrong.
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-badge').textContent.includes('reconciling')",
+            timeout=8000)
+        browser.close()
+
+
+def test_reconciled_badge_clears_when_editing_resumes(served):
+    """A green "reconciled" chip over fresh unsaved work reads as "already in
+    source", so the user never saves and the edit is lost on the next reload."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')")
+
+        edits = tmp / "sample.webtweak.json"
+        doc = json.loads(edits.read_text())
+        for b in doc["batches"]:
+            b["status"] = "reconciled"
+            b["reconciledAt"] = "2026-07-29T12:00:00"
+        edits.write_text(json.dumps(doc, indent=2))
+        page.wait_for_selector("#wt-root")
+
+        page.wait_for_function(
+            "document.getElementById('wt-badge').textContent.includes('reconciled')",
+            timeout=8000)
+        edit(page, ".lede", "#wt-fs", "19")            # fresh unsaved work
+        page.wait_for_function(
+            "!document.getElementById('wt-badge').textContent.includes('reconciled')",
+            timeout=5000)
+        browser.close()

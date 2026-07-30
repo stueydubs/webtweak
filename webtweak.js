@@ -184,6 +184,7 @@ function pruneBackups(editsPath) {
 // --- source watching -------------------------------------------------------
 
 const MAX_WATCHED_DIRS = 2000;   // inotify has a per-user ceiling; degrade before hitting it
+const MAX_WATCH_DEPTH  = 12;     // and don't chase an unbounded tree (or a symlink cycle)
 
 // Classify a changed file. `null` means "webtweak's own churn - ignore": the
 // atomic temp (`x.webtweak.json.<pid>.tmp`) and the corrupt-file backup
@@ -245,7 +246,8 @@ function createWatcher(root, opts) {
   }
 
   function watchDir(dir, depth) {
-    if (watchers.has(dir) || depth > 12) return;
+    if (watchers.has(dir)) return;
+    if (depth > MAX_WATCH_DEPTH) { capped = true; return; }
     if (watchers.size >= MAX_WATCHED_DIRS) { capped = true; return; }
     let w;
     try {
@@ -649,10 +651,12 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     state.port   = actual;          // --port 0 means the real port is only known now
     // With --root the page may sit in a subfolder of the web root, so its URL
     // is its path relative to that root, not just its basename.
-    // Encode each segment: --root means intermediate directories now appear in
-    // the URL, and a name containing a space or '#' produced a link that opened
-    // the wrong path (or 404'd on the fragment).
-    const rel    = path.relative(serveRoot, targetPath)
+    // Derived from the SAME realpaths the containment check used. Mixing raw and
+    // resolved paths meant a symlinked --root produced a URL full of `../`
+    // segments that 404'd, while containment happily passed.
+    // Each segment is encoded because --root puts intermediate directories in the
+    // URL, and a name with a space or '#' otherwise opened the wrong path.
+    const rel    = path.relative(state.realRoot, state.realTarget)
       .split(path.sep).map(encodeURIComponent).join('/');
     const url    = `http://127.0.0.1:${actual}/${rel}`;
     process.stdout.write(`webtweak editing: ${targetPath}\n`);
@@ -667,7 +671,8 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
       if (watcher.count === 0) {
         process.stdout.write(`  note    could not watch ${serveRoot} - live reload is off\n`);
       } else if (watcher.capped) {
-        process.stdout.write(`  note    watching the first ${watcher.count} directories only; deep changes may not reload\n`);
+        process.stdout.write(`  note    watching ${watcher.count} directories; some were skipped ` +
+          `(over ${MAX_WATCHED_DIRS} dirs or deeper than ${MAX_WATCH_DEPTH}), so changes there won't reload\n`);
       }
       process.stdout.write(`  Ctrl-C to stop.\n\n`);
     });
