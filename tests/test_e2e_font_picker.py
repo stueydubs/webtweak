@@ -6,9 +6,7 @@ depending on the user retyping them. Driven the way a user drives it - open the
 list, click an entry, save - and asserted on the rendered page and the Patches.
 """
 
-import json
-
-from conftest import open_page
+from conftest import changes, open_page, save
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -26,17 +24,9 @@ def suggestions(page, selector="#headline"):
     )
 
 
-def save(page):
-    page.click("#wt-save")
-    page.wait_for_function(
-        "document.getElementById('wt-status').textContent.startsWith('saved')"
-    )
-
-
 def font_patch(tmp):
     """The one saved patch's font-family value (None if it recorded none)."""
-    batch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]
-    return batch["patches"][0]["changes"].get("font-family")
+    return changes(tmp).get("font-family")
 
 
 def test_suggestions_offer_the_pages_own_stacks(served):

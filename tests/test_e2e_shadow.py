@@ -10,25 +10,11 @@ It is also the first suggestion list to sit at the bottom of the panel, which is
 scroll box - so the last test here is about the list being reachable at all.
 """
 
-import json
-
-from conftest import open_page, select_card, set_field
+from conftest import changes, open_page, save, select_card, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
 FIELD, TOGGLE, LIST = "#wt-shadow", "#wt-shadow-toggle", "#wt-shadow-list"
-
-
-def save(page):
-    page.click("#wt-save")
-    page.wait_for_function(
-        "document.getElementById('wt-status').textContent.startsWith('saved')"
-    )
-
-
-def changes(tmp, index=0):
-    batch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]
-    return batch["patches"][index]["changes"]
 
 
 def presets(page):

@@ -7,9 +7,7 @@ applier runs in both directions - which is why these tests care as much about th
 state left behind (the change list, the unsaved-changes flag) as about the page.
 """
 
-import json
-
-from conftest import open_page, set_field
+from conftest import open_page, patches, place_shape, save, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -19,23 +17,6 @@ def history(page):
         undo: document.getElementById('wt-undo').disabled,
         redo: document.getElementById('wt-redo').disabled,
     })""")
-
-
-def save(page):
-    page.click("#wt-save")
-    page.wait_for_function(
-        "document.getElementById('wt-status').textContent.startsWith('saved')"
-    )
-
-
-def batch(tmp):
-    return json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]
-
-
-def place_square(page, x=420, y=420):
-    page.click("#wt-shape-btn")
-    page.click('.wt-shape-item[data-shape="square"]')
-    page.mouse.click(x, y)
 
 
 def shapes(page):
@@ -79,7 +60,7 @@ def test_redo_restores_an_undone_property_change(served):
     assert undone == "44px"                                    # the authored size
     assert redone == "52px"
     assert field == "52"                                       # the panel came back too
-    assert batch(tmp)["patches"][0]["changes"]["font-size"] == "52px"
+    assert patches(tmp)[0]["changes"]["font-size"] == "52px"
 
 
 def test_both_keyboard_bindings_redo(served):
@@ -106,7 +87,7 @@ def test_redo_restores_an_undone_shape_creation(served):
     tmp, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        place_square(page)
+        place_shape(page)
         set_field(page, "#wt-fill", "#00ff00")     # an edit that must survive the round trip
         page.click("#wt-undo")                     # undoes the fill
         page.click("#wt-undo")                     # undoes the creation
@@ -122,15 +103,42 @@ def test_redo_restores_an_undone_shape_creation(served):
     assert gone == 0 and back == 1
     assert where == "body"                          # reinserted into its own parent
     assert fill == "rgb(0, 255, 0)"
-    create = next(p for p in batch(tmp)["patches"] if p.get("op") == "create")
+    create = next(p for p in patches(tmp) if p.get("op") == "create")
     assert create["changes"]["fill"] == "#00ff00"
+
+
+def test_a_redone_shape_returns_to_its_place_not_the_end(served):
+    """"In the right place in the document" needs a following sibling to mean
+    anything: a shape is appended to <body>, so with nothing after it a reinsertion
+    and a plain append look identical. Two shapes, and the first must come back
+    BEFORE the second.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        place_shape(page, "square", 380, 380)
+        place_shape(page, "circle", 520, 380)
+        order = "() => [...document.querySelectorAll('svg.wt-shape')].map(e => e.dataset.wtShape)"
+        page.click("#wt-undo")                 # undo the circle's creation
+        page.click("#wt-undo")                 # undo the square's creation
+        page.click("#wt-redo")                 # square back first
+        page.click("#wt-redo")                 # then the circle
+        both = page.evaluate(order)
+        # and now the interesting direction: remove the FIRST of the two, put it back
+        page.click("svg.wt-shape")             # select the square
+        page.click("#wt-reset")                # remove it
+        page.click("#wt-undo")                 # reinsert it - before the circle, not after
+        restored = page.evaluate(order)
+        browser.close()
+    assert both == ["square", "circle"]
+    assert restored == ["square", "circle"]
 
 
 def test_redo_after_an_undone_shape_removal_removes_it_again(served):
     tmp, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        place_square(page)
+        place_shape(page)
         page.click("#wt-reset")            # removing a shape is itself undoable
         removed = shapes(page)
         page.click("#wt-undo")             # brought back
@@ -151,7 +159,7 @@ def test_a_redone_gesture_stays_its_own_undo_step(served):
     tmp, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        place_square(page)
+        place_shape(page)
         out = page.evaluate("""() => {
             const svg = document.querySelector('svg.wt-shape');
             const grip = document.querySelector('#wt-selected .wt-grip-r');   // width only
@@ -198,7 +206,7 @@ def test_a_new_edit_clears_the_redo_stack(served):
     assert before["redo"] is False          # there was something to redo
     assert after["redo"] is True            # and the new edit dropped it
     assert size == "44px"                    # the abandoned branch did not come back
-    assert batch(tmp)["patches"][0]["changes"] == {"letter-spacing": "2px"}
+    assert patches(tmp)[0]["changes"] == {"letter-spacing": "2px"}
 
 
 def test_the_change_list_and_unsaved_state_survive_a_round_trip(served):
@@ -226,7 +234,7 @@ def test_the_change_list_and_unsaved_state_survive_a_round_trip(served):
     assert empty_save == "nothing changed yet"
     assert "1 element changed" in after_redo
     assert badge == "1 pending"
-    assert len(batch(tmp)["patches"]) == 1
+    assert len(patches(tmp)) == 1
 
 
 def test_the_hint_mentions_redo(served):

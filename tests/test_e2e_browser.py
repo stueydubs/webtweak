@@ -11,7 +11,7 @@ import shutil
 
 import pytest
 
-from conftest import edit, open_page, select_card
+from conftest import edit, open_page, place_shape, select_card
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -115,14 +115,6 @@ def test_select_edit_nudge_resize_save_loop(served):
     assert "width" in card["changes"] and "height" in card["changes"]
 
 
-def _place_shape(page, kind, x, y):
-    """Open the palette, pick `kind`, and click the canvas at (x, y) to drop it."""
-    page.click("#wt-shape-btn")
-    page.click('.wt-shape-item[data-shape="' + kind + '"]')
-    page.mouse.click(x, y)                     # place mode: next canvas click drops it
-    page.wait_for_selector("svg.wt-shape")
-
-
 def test_create_shape_change_fill_save(served):
     """Draw a shape from the palette, set its fill, save: a op:'create' patch lands
     carrying the shape kind, geometry, anchor, and a self-contained changes snapshot."""
@@ -133,7 +125,7 @@ def test_create_shape_change_fill_save(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
 
-        _place_shape(page, "triangle", 400, 350)
+        place_shape(page, "triangle", 400, 350)
         # the dropped <svg> is selected, and the panel shows Shape / hides Type
         assert page.eval_on_selector("#wt-seltag", "el => el.textContent").startswith("svg#wt-shape-")
         vis = page.evaluate("""() => ({
@@ -182,7 +174,7 @@ def test_created_shape_restored_after_reload(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
 
-        _place_shape(page, "star", 500, 300)
+        place_shape(page, "star", 500, 300)
         page.evaluate("""() => {
             const f = document.getElementById('wt-fill');
             f.value = '#11aa55';
@@ -221,7 +213,7 @@ def test_shape_resizes_via_grip(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
 
-        _place_shape(page, "circle", 400, 350)   # circle: transparent corners, worst case
+        place_shape(page, "circle", 400, 350)   # circle: transparent corners, worst case
         before = page.eval_on_selector("svg.wt-shape",
             "el => ({ w: el.style.width, h: el.style.height })")
         # grab the bottom-right grip at its real on-screen centre and drag outward
@@ -314,7 +306,7 @@ def test_shape_stroke_width_one_and_black_border_record(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _place_shape(page, "square", 400, 350)
+        place_shape(page, "square", 400, 350)
         page.evaluate("""() => {
             const sw = document.getElementById('wt-sw');
             sw.value = '1'; sw.dispatchEvent(new Event('input', { bubbles: true }));
@@ -341,7 +333,7 @@ def test_shape_rx_radius_routes_to_child_and_patch(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _place_shape(page, "square", 400, 350)
+        place_shape(page, "square", 400, 350)
         radius_shown = page.eval_on_selector("#wt-rx", "el => !el.closest('.wt-field').hidden")
         page.evaluate("""() => {
             const r = document.getElementById('wt-rx');
@@ -387,7 +379,7 @@ def test_grip_resize_and_panel_edit_are_separate_undo_steps(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _place_shape(page, "square", 400, 350)
+        place_shape(page, "square", 400, 350)
         out = page.evaluate("""() => {
             const svg = document.querySelector('svg.wt-shape');
             const grip = document.querySelector('#wt-selected .wt-grip-r');  // width-only
@@ -440,7 +432,7 @@ def test_undo_removes_a_created_shape(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _place_shape(page, "triangle", 400, 350)
+        place_shape(page, "triangle", 400, 350)
         assert page.eval_on_selector_all("svg.wt-shape", "els => els.length") == 1
         page.evaluate(
             "() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }))"
@@ -462,7 +454,7 @@ def test_shape_margin_reverts_but_seeded_props_persist(served):
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
-        _place_shape(page, "square", 400, 350)
+        place_shape(page, "square", 400, 350)
         orig = page.eval_on_selector("#wt-margin", "el => el.value")
         page.evaluate("""(orig) => {
             const mg = document.getElementById('wt-margin');

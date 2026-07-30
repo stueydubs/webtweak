@@ -6,6 +6,7 @@ different - and `_server.start()` gained a `root=` parameter recently, which
 would have meant chasing three call sites.
 """
 
+import json
 import shutil
 
 import pytest
@@ -58,6 +59,34 @@ def set_field(page, field, value):
         }""",
         [field.lstrip("#"), value],
     )
+
+
+def save(page):
+    """Click Save and wait for the write to land."""
+    page.click("#wt-save")
+    page.wait_for_function(
+        "document.getElementById('wt-status').textContent.startsWith('saved')"
+    )
+
+
+def patches(tmp, page="sample"):
+    """The patches of the first batch in the edits file beside `page`."""
+    doc = json.loads((tmp / f"{page}.webtweak.json").read_text())
+    return doc["batches"][0]["patches"]
+
+
+def changes(tmp, index=0):
+    """One patch's recorded changes - the half of every assertion that says what
+    Claude will receive, as opposed to what the page rendered."""
+    return patches(tmp)[index]["changes"]
+
+
+def place_shape(page, kind="square", x=400, y=350):
+    """Open the palette, pick `kind`, and click the canvas at (x, y) to drop it."""
+    page.click("#wt-shape-btn")
+    page.click(f'.wt-shape-item[data-shape="{kind}"]')
+    page.mouse.click(x, y)                     # place mode: next canvas click drops it
+    page.wait_for_selector("svg.wt-shape")
 
 
 def select_card(page):

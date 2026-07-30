@@ -8,27 +8,13 @@ both halves - what the page rendered AND what the Patch says - because the claim
 being tested is that those two agree.
 """
 
-import json
-
-from conftest import open_page, select_card, set_field
+from conftest import changes, open_page, place_shape, save, select_card, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
 WIDTH, STYLE, COLOUR, RADIUS = "#wt-bw", "#wt-bs", "#wt-bc", "#wt-brad"
 CARD_BORDER = "1px solid #e7e1d8"    # fixture .card, a uniform border
 INK = "#1a1a1a"                      # fixture --ink, so also the default border colour
-
-
-def save(page):
-    page.click("#wt-save")
-    page.wait_for_function(
-        "document.getElementById('wt-status').textContent.startsWith('saved')"
-    )
-
-
-def changes(tmp, index=0):
-    batch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]
-    return batch["patches"][index]["changes"]
 
 
 def border_of(page, selector):
@@ -52,12 +38,6 @@ def group_hidden(page, group="Border"):
         f'#wt-panel .wt-group[data-group="{group}"]', "el => el.hidden")
 
 
-def place_square(page, x=400, y=350):
-    page.click("#wt-shape-btn")
-    page.click('.wt-shape-item[data-shape="square"]')
-    page.mouse.click(x, y)
-
-
 def test_border_group_shows_for_elements_and_hides_for_shapes(served):
     """A CSS border on a shape's <svg> would draw a rectangle around a triangle, so
     the group hides for shapes exactly as typography and colour already do."""
@@ -70,7 +50,7 @@ def test_border_group_shows_for_elements_and_hides_for_shapes(served):
             """() => ['wt-bw', 'wt-bs', 'wt-bc', 'wt-brad']
                 .every(id => !!document.getElementById(id))"""
         )
-        place_square(page)
+        place_shape(page)
         on_shape = group_hidden(page)
         browser.close()
     assert present
@@ -369,7 +349,7 @@ def test_shape_controls_read_stroke(served):
     tmp, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        place_square(page)
+        place_shape(page)
         labels = page.evaluate(
             """() => ['wt-stroke', 'wt-sw', 'wt-rx'].map(
                 id => document.getElementById(id).closest('.wt-field')
