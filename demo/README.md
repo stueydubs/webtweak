@@ -8,6 +8,11 @@ flaky screen capture.
 
 One composition: **`WebtweakDemo`**, 1920×1080, 30fps, 660 frames (~22s).
 
+The poster is taken at frame 420 rather than mid-restyle: by then the headline
+has actually changed colour and size, and the panel is showing the revert marks
+for the two edited properties - so the still sells the loop instead of the
+moment before it.
+
 ## Develop
 
 ```bash
@@ -30,7 +35,7 @@ Or directly:
 
 ```bash
 npx remotion render WebtweakDemo ../site/demo.mp4 --codec=h264
-npx remotion still  WebtweakDemo ../site/demo-poster.png --frame=330
+npx remotion still  WebtweakDemo ../site/demo-poster.png --frame=420
 ```
 
 ## Layout

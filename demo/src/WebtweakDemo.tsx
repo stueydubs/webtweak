@@ -228,7 +228,7 @@ export const WebtweakDemo: React.FC = () => {
       {/* webtweak top bar */}
       <AbsoluteFill style={{ opacity: barOp }}>
         <div style={{ transform: `translateY(${barDrop}px)` }}>
-          <TopBar crumb={crumb} status={status} saveActive={saveActive} />
+          <TopBar crumb={crumb} status={status} saveActive={saveActive} hasEdits={f >= 178} />
         </div>
       </AbsoluteFill>
 
@@ -246,6 +246,8 @@ export const WebtweakDemo: React.FC = () => {
             sizeValue={titleSize}
             colorValue={lerpHex(C.ink, C.accent, colorT)}
             active={panelActive}
+            colorEdited={f >= 372}
+            sizeEdited={f >= 416}
           />
         </div>
       )}

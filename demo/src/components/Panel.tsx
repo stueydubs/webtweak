@@ -5,9 +5,11 @@ type FieldProps = {
   label: string;
   children: React.ReactNode;
   active?: boolean;
+  edited?: boolean;   // shows the per-property revert mark, as the real panel does
+  wide?: boolean;     // narrow label column, for the four-box spacing rows
 };
 
-const Field: React.FC<FieldProps> = ({ label, children, active }) => (
+const Field: React.FC<FieldProps> = ({ label, children, active, edited, wide }) => (
   <div
     style={{
       display: "flex",
@@ -17,13 +19,26 @@ const Field: React.FC<FieldProps> = ({ label, children, active }) => (
       gap: 8,
     }}
   >
-    <label style={{ color: C.muted, flex: "0 0 92px" }}>{label}</label>
+    {/* the revert × lives in the label column, where it cannot shift field widths */}
+    <span
+      style={{
+        color: C.gold,
+        fontSize: 15,
+        lineHeight: 1,
+        width: 12,
+        visibility: edited ? "visible" : "hidden",
+      }}
+    >
+      ×
+    </span>
+    <label style={{ color: C.muted, flex: `0 0 ${wide ? 62 : 80}px` }}>{label}</label>
     <div
       style={{
         flex: 1,
         minWidth: 0,
         display: "flex",
         alignItems: "center",
+        justifyContent: "flex-end",
         gap: 6,
         ...(active
           ? { outline: `2px solid ${C.gold}`, outlineOffset: 2, borderRadius: 6 }
@@ -47,9 +62,55 @@ const inputBox: React.CSSProperties = {
   fontFamily: FONT_MONO,
 };
 
-const Legend: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+// the ▾ that opens a suggestion list (fonts, tracking presets, shadow presets)
+const Chevron: React.FC = () => (
+  <span
+    style={{
+      flex: "0 0 auto",
+      background: C.field,
+      border: `1px solid ${C.border}`,
+      borderRadius: 5,
+      color: C.muted,
+      fontSize: 11,
+      lineHeight: 1,
+      padding: "6px 5px",
+    }}
+  >
+    ▾
+  </span>
+);
+
+// up/down arrows on a value you nudge by eye
+const Stepper: React.FC = () => (
+  <span style={{ flex: "0 0 auto", display: "flex", flexDirection: "column", gap: 2 }}>
+    {["▲", "▼"].map((g) => (
+      <span
+        key={g}
+        style={{
+          background: C.field,
+          border: `1px solid ${C.border}`,
+          borderRadius: 4,
+          color: C.muted,
+          fontSize: 8,
+          lineHeight: "10px",
+          padding: "0 5px",
+        }}
+      >
+        {g}
+      </span>
+    ))}
+  </span>
+);
+
+const Legend: React.FC<{ children: React.ReactNode; collapsed?: boolean }> = ({
+  children,
+  collapsed,
+}) => (
   <div
     style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 5,
       fontSize: 11,
       textTransform: "uppercase",
       letterSpacing: "0.08em",
@@ -58,13 +119,15 @@ const Legend: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     }}
   >
     {children}
+    <span style={{ fontSize: 9, letterSpacing: 0 }}>{collapsed ? "▸" : "▾"}</span>
   </div>
 );
 
 const Swatch: React.FC<{ color: string }> = ({ color }) => (
   <span
     style={{
-      width: 40,
+      flex: "0 0 auto",
+      width: 38,
       height: 26,
       background: color,
       border: `1px solid ${C.border}`,
@@ -74,14 +137,73 @@ const Swatch: React.FC<{ color: string }> = ({ color }) => (
   />
 );
 
+// a colour row: the swatch, plus the hex you can actually read and paste
+const Colour: React.FC<{ color: string }> = ({ color }) => (
+  <>
+    <Swatch color={color} />
+    <span style={{ ...inputBox, flex: "0 1 96px" }}>{color}</span>
+  </>
+);
+
+// margin/padding: four sides on one row, plus the link toggle for "all round"
+const Sides: React.FC<{ values: string[]; linked?: boolean }> = ({ values, linked }) => (
+  <>
+    {values.map((v, i) => (
+      <span
+        key={i}
+        style={{
+          flex: "1 1 0",
+          minWidth: 0,
+          background: C.field,
+          border: `1px solid ${C.border}`,
+          color: C.text,
+          borderRadius: 4,
+          padding: "5px 2px",
+          fontSize: 12,
+          fontFamily: FONT_MONO,
+          textAlign: "center",
+        }}
+      >
+        {v}
+      </span>
+    ))}
+    <span
+      style={{
+        flex: "0 0 auto",
+        background: linked ? "#23200f" : C.field,
+        border: `1px solid ${linked ? C.gold : C.border}`,
+        borderRadius: 4,
+        color: linked ? C.gold : C.dim,
+        fontSize: 11,
+        lineHeight: 1,
+        padding: "5px 4px",
+      }}
+    >
+      🔗
+    </span>
+  </>
+);
+
 // overlay .wt-panel — properties panel. translateX drives the slide-in.
+// Border is drawn collapsed: all five groups expanded would run past the window at
+// this scale, and a folded group is worth showing anyway - it is how you keep a tall
+// panel usable on a short screen.
 export const Panel: React.FC<{
   translateX?: number;
   sizeValue: number;
   colorValue: string;
   active?: "size" | "color" | null;
-}> = ({ translateX = 0, sizeValue, colorValue, active = null }) => {
-  const W = 320;
+  sizeEdited?: boolean;
+  colorEdited?: boolean;
+}> = ({
+  translateX = 0,
+  sizeValue,
+  colorValue,
+  active = null,
+  sizeEdited,
+  colorEdited,
+}) => {
+  const W = 330;
   return (
     <div
       style={{
@@ -117,41 +239,55 @@ export const Panel: React.FC<{
         <Legend>Type</Legend>
         <Field label="Font">
           <span style={inputBox}>Georgia, serif</span>
+          <Chevron />
         </Field>
-        <Field label="Size" active={active === "size"}>
-          <span style={inputBox}>{Math.round(sizeValue)}</span>
-          <span style={{ color: C.dim }}>px</span>
+        <Field label="Size" active={active === "size"} edited={sizeEdited}>
+          <span style={inputBox}>{Math.round(sizeValue)}px</span>
+          <Stepper />
         </Field>
         <Field label="Weight">
           <span style={inputBox}>700</span>
         </Field>
         <Field label="Line">
           <span style={inputBox}>1.1</span>
+          <Stepper />
+        </Field>
+        <Field label="Spacing">
+          <span style={inputBox}>normal</span>
+          <Chevron />
         </Field>
       </div>
 
       <div style={{ marginBottom: 16 }}>
         <Legend>Colour</Legend>
-        <Field label="Text" active={active === "color"}>
-          <Swatch color={colorValue} />
-          <span style={{ ...inputBox, flex: "none", width: 96 }}>
-            {colorValue}
-          </span>
+        <Field label="Text" active={active === "color"} edited={colorEdited}>
+          <Colour color={colorValue} />
         </Field>
         <Field label="Background">
-          <Swatch color="#faf8f4" />
+          <Colour color="#faf8f4" />
+        </Field>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <Legend>Box</Legend>
+        <Field label="Width">
+          <span style={inputBox}>940px</span>
+          <Stepper />
+        </Field>
+        <Field label="Height">
+          <span style={inputBox}>80px</span>
+          <Stepper />
+        </Field>
+        <Field label="Margin" wide>
+          <Sides values={["16px", "0px", "26px", "0px"]} />
+        </Field>
+        <Field label="Padding" wide>
+          <Sides values={["0px", "0px", "0px", "0px"]} />
         </Field>
       </div>
 
       <div style={{ marginBottom: 14 }}>
-        <Legend>Box</Legend>
-        <Field label="Width">
-          <span style={inputBox}>880</span>
-          <span style={{ color: C.dim }}>px</span>
-        </Field>
-        <Field label="Margin">
-          <span style={inputBox}>0 0 26px</span>
-        </Field>
+        <Legend collapsed>Border</Legend>
       </div>
 
       <button

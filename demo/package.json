@@ -6,7 +6,7 @@
   "scripts": {
     "studio": "remotion studio",
     "render": "remotion render WebtweakDemo ../site/demo.mp4 --codec=h264",
-    "poster": "remotion still WebtweakDemo ../site/demo-poster.png --frame=330",
+    "poster": "remotion still WebtweakDemo ../site/demo-poster.png --frame=420",
     "og": "remotion still WebtweakDemo ../site/og.png --frame=636"
   },
   "dependencies": {

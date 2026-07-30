@@ -7,7 +7,8 @@ export const TopBar: React.FC<{
   crumb?: React.ReactNode;
   status?: string;
   saveActive?: boolean; // cursor pressing Save
-}> = ({ crumb, status, saveActive }) => {
+  hasEdits?: boolean;   // lights Undo, as the real bar does
+}> = ({ crumb, status, saveActive, hasEdits }) => {
   return (
     <div
       style={{
@@ -55,6 +56,29 @@ export const TopBar: React.FC<{
       >
         {status ?? ""}
       </span>
+      {/* Undo / Redo, dimming when their stack is empty - the only place history is
+          visible in the real bar, so the demo would look a version behind without it.
+          Redo is dim here because nothing has been undone yet. */}
+      {[
+        { label: "Undo", spent: !hasEdits },
+        { label: "Redo", spent: true },
+      ].map(({ label, spent }) => (
+        <button
+          key={label}
+          style={{
+            border: `1px solid ${C.btnBorder}`,
+            background: C.btn,
+            color: C.text,
+            padding: "7px 13px",
+            borderRadius: 6,
+            fontSize: 14,
+            fontFamily: FONT_UI,
+            opacity: spent ? 0.35 : 1,
+          }}
+        >
+          {label}
+        </button>
+      ))}
       <button
         style={{
           border: `1px solid ${C.btnBorder}`,
