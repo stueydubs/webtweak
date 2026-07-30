@@ -225,6 +225,22 @@
   // so adding a property is one entry, not three hand-synced lists.
   // `read(cs)` maps a computed style to the control's display value; `unit` (if
   // set) is appended on write; `box` re-fits the selection box after the change.
+  // The eight orientations, as {value, label} so the dropdown reads "45°" while the
+  // value stays the bare number the read below returns.
+  var ROTATIONS = [0, 45, 90, 135, 180, 225, 270, 315].map(function (d) {
+    return { value: String(d), label: d + "°" };
+  });
+  // Degrees out of a computed transform, which is always a matrix - so the angle has
+  // to be recovered rather than read. Normalised to 0..359 to match the option values;
+  // anything that is not a 2D matrix (none, matrix3d) reads as unrotated.
+  function rotationOf(cs) {
+    var m = /matrix\(([^)]+)\)/.exec(cs.transform || "");
+    if (!m) return "0";
+    var p = m[1].split(",");
+    var deg = Math.round(Math.atan2(parseFloat(p[1]), parseFloat(p[0])) * 180 / Math.PI);
+    return String((deg % 360 + 360) % 360);
+  }
+
   var CONTROLS = [
     { group: "Type", id: "wt-ff", prop: "font-family", label: "Font", kind: "text",
       suggest: pageFonts, suggestTitle: "Fonts on this page", suggestPreview: true,
@@ -307,6 +323,15 @@
     // property, so its control reads/writes the child via `host` (see applyChange).
     // shapeOnly controls skip the CSS.supports gate: a colour swatch or a px number
     // is always valid, and CSS.supports can report SVG presentation props unevenly.
+    // Snapped to 45 degrees, not free: a decorative shape wants the eight orientations
+    // a designer actually reaches for, and an arbitrary angle would be another value
+    // to nudge by eye when nothing on the page is at 37 degrees. It also retires a
+    // palette entry - a square at 45 degrees IS the diamond that used to be its own
+    // kind. Deliberately NOT shapeOnly: `transform` is a real CSS property, so it
+    // wants the validity gate and the ordinary revert-to-baseline behaviour, unlike
+    // the seeded SVG presentation props below.
+    { group: "Shape", id: "wt-rot", prop: "transform", label: "Rotate", kind: "select",
+      opts: ROTATIONS, compareRaw: true, read: rotationOf },
     { group: "Shape", id: "wt-fill", prop: "fill", label: "Fill", kind: "color", shapeOnly: true,
       read: function (cs) { return rgbToHex(cs.fill); } },
     // Labelled Stroke, not Border: a shape's line is an SVG stroke and an element's
@@ -324,6 +349,7 @@
   ];
   var GROUPS = ["Type", "Colour", "Box", "Border", "Shape"];
   var SIDES = ["top", "right", "bottom", "left"];
+
 
   // Tracking, in the em steps editorial type is actually set in: tightened for a big
   // display line, opened up for small caps and uppercase labels, plus `normal` to take
@@ -698,18 +724,20 @@
   // rest are <polygon>s with precomputed points. Element creation is webtweak's first
   // departure from "only edit what already exists" - see ADR-0002.
   var SVGNS = "http://www.w3.org/2000/svg";
+  // Six kinds, not nine. `rectangle` and `ellipse` were a wide square and a wide
+  // circle - identical geometry, differing only in the size they were dropped at -
+  // which stopped meaning anything once a shape could be DRAWN at any size. `diamond`
+  // was a square at 45 degrees, which the Rotate control now expresses. Nine buttons
+  // for six pictures is a palette that looks duplicated, because it was.
   var SHAPES = {
     square:    { el: "rect",    attrs: { x: 0, y: 0, width: 100, height: 100 }, size: { w: 80, h: 80 } },
-    rectangle: { el: "rect",    attrs: { x: 0, y: 0, width: 100, height: 100 }, size: { w: 140, h: 80 } },
     circle:    { el: "ellipse", attrs: { cx: 50, cy: 50, rx: 50, ry: 50 }, size: { w: 80, h: 80 } },
-    ellipse:   { el: "ellipse", attrs: { cx: 50, cy: 50, rx: 50, ry: 50 }, size: { w: 140, h: 80 } },
     triangle:  { el: "polygon", points: "50,0 100,100 0,100", size: { w: 90, h: 80 } },
     star:      { el: "polygon", points: "50,2 61,38 98,38 68,60 79,96 50,74 21,96 32,60 2,38 39,38", size: { w: 90, h: 90 } },
-    diamond:   { el: "polygon", points: "50,0 100,50 50,100 0,50", size: { w: 90, h: 90 } },
     pentagon:  { el: "polygon", points: "50,0 98,36 80,98 20,98 2,36", size: { w: 90, h: 90 } },
     hexagon:   { el: "polygon", points: "25,2 75,2 100,50 75,98 25,98 0,50", size: { w: 100, h: 86 } },
   };
-  var SHAPE_LIST = ["square", "rectangle", "circle", "ellipse", "triangle", "star", "diamond", "pentagon", "hexagon"];
+  var SHAPE_LIST = ["square", "circle", "triangle", "star", "pentagon", "hexagon"];
   var DEFAULT_FILL = "#e8c468";
 
   // The self-describing structural payload carried in a create patch, so reconcile
@@ -727,20 +755,14 @@
       return k + '="' + spec.attrs[k] + '"';
     }).join(" ") + "/>";
   }
-  // A palette icon drawn at its shape's own aspect ratio, letterboxed inside the
-  // square button. Every shape's geometry fills a 0..100 box, so square and rectangle
-  // are the SAME markup (a full-bleed <rect>), as are circle and ellipse - they differ
-  // only in the default size they are placed at. Drawn full-bleed, the palette showed
-  // nine buttons and seven distinct pictures: two identical squares and two identical
-  // circles, which reads as a duplicated entry rather than a wider default.
-  // Derived from spec.size rather than hand-drawn, so a new shape cannot forget it.
+  // Full-bleed, because every remaining kind is a different picture. This briefly drew
+  // each icon letterboxed to its default aspect ratio, to tell a square from a
+  // rectangle and a circle from an ellipse - which was solving the duplication rather
+  // than removing it. With those kinds retired there is nothing left to disambiguate,
+  // so the smaller icon it cost is no longer worth paying for.
   function paletteIcon(kind) {
-    var spec = SHAPES[kind] || SHAPES.square;
-    var longest = Math.max(spec.size.w, spec.size.h);
-    var sx = spec.size.w / longest, sy = spec.size.h / longest;
     return '<svg viewBox="-8 -8 116 116" preserveAspectRatio="none">' +
-      '<g transform="translate(' + (50 * (1 - sx)) + "," + (50 * (1 - sy)) +
-      ") scale(" + sx + "," + sy + ')">' + innerMarkup(spec) + "</g></svg>";
+      innerMarkup(SHAPES[kind] || SHAPES.square) + "</svg>";
   }
 
   // Create a shape <svg> at document coords (x, y), register it in `edited` with a
@@ -750,7 +772,15 @@
   // fingerprint class capture, and reconcile strips it for a clean source hook.
   function makeShape(kind, x, y, opts) {
     opts = opts || {};
-    var spec = SHAPES[kind] || SHAPES.square;
+    // A restored shape is drawn from its OWN recorded geometry when the kind is no
+    // longer in the table, rather than falling back to a square. A create patch is
+    // self-contained by design (ADR-0002) precisely so it does not depend on this
+    // table - and retiring `diamond` would otherwise have silently redrawn every
+    // saved diamond as a square on the next reload, with nothing on screen saying so.
+    var geo = opts.geometry;
+    var spec = SHAPES[kind] ||
+      (geo && geo.el ? { el: geo.el, points: geo.points, attrs: geo.attrs, size: { w: 90, h: 90 } }
+                     : SHAPES.square);
     var svg = document.createElementNS(SVGNS, "svg");
     var id = opts.id || ("wt-shape-" + Math.random().toString(36).slice(2, 8));
     svg.setAttribute("id", id);
@@ -1183,9 +1213,16 @@
       ' title="Undo this property">&times;</button>' +
       "<label>" + c.label + "</label>" + control + "</div>";
   }
+  // An option is a bare string when the value is what you want shown (a font weight,
+  // a border style), or {value, label} when it is not - Rotate shows "45°" and writes
+  // "45", and a degree sign in the value would have to be parsed back off.
   function select(id, opts) {
     return '<select id="' + id + '">' +
-      opts.map(function (o) { return '<option value="' + o + '">' + o + "</option>"; }).join("") +
+      opts.map(function (o) {
+        var value = o && o.value !== undefined ? o.value : o;
+        var label = o && o.label !== undefined ? o.label : o;
+        return '<option value="' + value + '">' + label + "</option>";
+      }).join("") +
       "</select>";
   }
   function alignButtons(id) {
@@ -1606,6 +1643,10 @@
     if (c.box && bare) raw = Math.max(1, parseFloat(raw) || 1);   // matching the resize grips
     var v = (c.unit && bare) ? raw + c.unit : raw;
     if (c.prop === "font-family") v = quoteFamily(raw);
+    // The control speaks degrees; the page needs a transform function. `none` rather
+    // than `rotate(0deg)` so a shape turned back to square carries no dead declaration
+    // into source when it is not simply reverted (see compareRaw below).
+    if (c.prop === "transform") v = String(raw) === "0" ? "none" : "rotate(" + raw + "deg)";
     // Rejected first, before anything can interpret the value (see accepts).
     if (!accepts(c, v, raw)) return;
     // Setting a control back to the value it was populated with means "revert this
@@ -1613,7 +1654,13 @@
     // (also stops an accidental opaque #000000 from a transparent-shown colour swatch).
     // Compared as the value about to be WRITTEN, not as typed: baselines carry units,
     // so a bare "44" has to become "44px" before it can match "44px".
-    var revertTarget = RESOLVE_TO_COMPARE[c.prop] ? resolveValue(c.prop, v) : String(v);
+    // `compareRaw` compares in the CONTROL's terms rather than the property's, for a
+    // control whose two are different languages: Rotate's baseline is "45" (degrees,
+    // as read back out of the computed matrix) while the value written is
+    // "rotate(45deg)", so comparing the written form would never match and turning a
+    // shape back to its original angle would record a no-op instead of reverting.
+    var revertTarget = c.compareRaw ? String(raw)
+      : (RESOLVE_TO_COMPARE[c.prop] ? resolveValue(c.prop, v) : String(v));
     // A shape's seeded properties (fill/stroke/stroke-width/rx and width/height) have
     // no authored baseline and must stay in the self-contained create patch, so those
     // writes are always recorded - a 1px border or a #000000 fill can't be mistaken for

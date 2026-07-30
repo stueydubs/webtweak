@@ -246,7 +246,7 @@ def test_shape_drag_and_drop_from_palette(served):
         page.click("#wt-shape-btn")              # open the palette
         # native HTML5 drag-and-drop: dragstart on the item, drop on the page at (560, 420)
         placed = page.evaluate("""() => {
-            const item = document.querySelector('.wt-shape-item[data-shape="diamond"]');
+            const item = document.querySelector('.wt-shape-item[data-shape="pentagon"]');
             const dt = new DataTransfer();
             item.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
             const placing = document.documentElement.classList.contains('wt-placing');
@@ -267,7 +267,7 @@ def test_shape_drag_and_drop_from_palette(served):
         browser.close()
 
     assert placed["placingDuringDrag"] is True
-    assert placed["kind"] == "diamond"
+    assert placed["kind"] == "pentagon"
     assert placed["left"] == "560px" and placed["top"] == "420px"  # dropped at the release point
     assert placed["selected"] is True
     assert placed["placeModeCleared"] is True

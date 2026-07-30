@@ -58,7 +58,7 @@ Two patch shapes share the array. An **edit patch** (`{ fingerprint, changes }`,
 
 ## The `create` op
 
-A create patch inserts a brand-new decorative shape (square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon) that the user drew on the page. This is the one place reconcile *adds* source rather than restyling it. Shape:
+A create patch inserts a brand-new decorative shape (square, circle, triangle, star, pentagon, hexagon) that the user drew on the page. Older edits files may name a kind the Overlay no longer offers (`rectangle`, `ellipse`, `diamond`); build those from `geometry` as you would any other - the patch is self-contained and the kind is a label, not a lookup. This is the one place reconcile *adds* source rather than restyling it. Shape:
 
 ```
 { op: "create", shape: "triangle", renderer: "svg",

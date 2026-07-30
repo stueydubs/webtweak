@@ -1,5 +1,7 @@
 # Shape creation: webtweak's first element-creation feature, on an inline-SVG renderer, with absolute placement as the sanctioned ADR-0001 exception
 
+> **Amended later: nine kinds became six.** `rectangle` and `ellipse` were a wide square and a wide circle - the *same* geometry, differing only in the size they were dropped at, which stopped carrying any meaning once a shape could be drawn at the size you want by dragging. `diamond` was a square at 45°, now expressed by the Rotate control. The renderer, the patch shape and everything below are unchanged; only the menu shrank. A create patch is self-contained by design, so an older edits file naming a retired kind still draws itself from its own recorded `geometry` rather than falling back to a square.
+
 Until now webtweak only ever *edited elements that already exist* in the source page (ADR-0001: capture intent, don't rewrite source). Drawing new shapes - square, rectangle, circle, ellipse, triangle, star, diamond, pentagon, hexagon - on the page is the tool's first **element-creation** feature, a genuine extension of the contract rather than another property. We extend the contract cleanly by adding a new patch *operation*, `op: "create"`, alongside the existing edit patches, so the reconcile half learns to *insert* source, not only restyle it. The server stays patch-agnostic (`apply_batch`/`applyBatch` stores patches verbatim), so no server change was needed.
 
 Three decisions shape the design:

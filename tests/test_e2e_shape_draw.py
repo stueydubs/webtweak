@@ -14,7 +14,7 @@ from conftest import open_page, patches, save
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
 
-def arm(page, kind="rectangle"):
+def arm(page, kind="square"):
     """Open the palette and pick a shape, leaving the Overlay in place mode."""
     page.click("#wt-shape-btn")
     page.click(f'.wt-shape-item[data-shape="{kind}"]')
@@ -180,13 +180,13 @@ def test_place_mode_ends_when_the_draw_ends(served):
     assert after["shapes"] == 1
 
 
-def test_no_two_palette_icons_draw_the_same_picture(served):
-    """Nine buttons must be nine distinct pictures.
+def test_the_palette_offers_six_distinct_shapes(served):
+    """Six kinds, six pictures.
 
-    Every shape's geometry fills the same 0..100 box, so square and rectangle are the
-    identical `<rect>` markup, as are circle and ellipse - they differ only in the
-    default size they place at. Drawn full-bleed, the palette showed two identical
-    squares and two identical circles, which reads as a duplicated entry.
+    `rectangle` and `ellipse` were a wide square and a wide circle - identical
+    geometry, differing only in the size they were dropped at, which stopped meaning
+    anything once a shape could be drawn at any size. `diamond` was a square at 45
+    degrees, which Rotate now expresses.
     """
     tmp, port = served
     with sync_playwright() as p:
@@ -194,27 +194,59 @@ def test_no_two_palette_icons_draw_the_same_picture(served):
         page.click("#wt-shape-btn")
         icons = page.evaluate(
             """() => Array.from(document.querySelectorAll('.wt-shape-item')).map(btn => {
-                const shape = btn.querySelector('svg > g > *');
-                const r = shape.getBoundingClientRect();
+                const shape = btn.querySelector('svg > *');
                 return {
                     kind: btn.dataset.shape,
-                    // What the button actually PAINTS: the tag, the outline, and the
-                    // proportions it is drawn at.
-                    signature: [shape.tagName,
-                                shape.getAttribute('points') || '',
-                                (r.width / r.height).toFixed(2)].join('|'),
+                    // What the button actually PAINTS, so a re-added variation of an
+                    // existing shape fails here rather than looking like a duplicate.
+                    signature: shape.tagName + '|' + (shape.getAttribute('points') || ''),
                     titled: btn.title.toLowerCase().startsWith(btn.dataset.shape),
                 };
             })"""
         )
         browser.close()
-    assert len(icons) == 9
+    kinds = [i["kind"] for i in icons]
+    assert kinds == ["square", "circle", "triangle", "star", "pentagon", "hexagon"]
     signatures = [i["signature"] for i in icons]
-    assert len(set(signatures)) == 9, f"duplicate palette icons: {signatures}"
-    # The wider defaults are drawn wider, rather than merely differing by some accident.
-    by_kind = {i["kind"]: i["signature"] for i in icons}
-    assert by_kind["square"].endswith("1.00")
-    assert by_kind["rectangle"].endswith("1.75")
-    assert by_kind["circle"].endswith("1.00")
-    assert by_kind["ellipse"].endswith("1.75")
+    assert len(set(signatures)) == 6, f"duplicate palette icons: {signatures}"
     assert all(i["titled"] for i in icons), "each icon should name its shape"
+
+
+def test_a_saved_shape_of_a_retired_kind_still_draws_itself(served):
+    """A create patch is self-contained by design, so it must not depend on the kinds
+    the current build happens to offer. Without this, retiring `diamond` would have
+    silently redrawn every saved diamond as a square on the next reload."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        drawn = page.evaluate(
+            """() => {
+                const doc = {batches: [{sessionId: sessionStorage.getItem(
+                    'wt-session-sample.html'), status: 'pending', patches: [{
+                    op: 'create', shape: 'diamond', renderer: 'svg',
+                    geometry: {viewBox: '0 0 100 100', el: 'polygon',
+                               points: '50,0 100,50 50,100 0,50', attrs: null},
+                    anchor: {parent: {tag: 'body'}, position: 'append'},
+                    fingerprint: {tag: 'svg', id: 'wt-shape-old', classes: [],
+                                  text: '', ownText: '', selector: '#wt-shape-old',
+                                  siblingIndex: 0, openTag: '<svg>'},
+                    changes: {position: 'absolute', left: '300px', top: '300px',
+                              width: '90px', height: '90px', fill: '#e8c468'}}]}]};
+                return fetch('/__webtweak__/save', {method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(doc.batches[0])}).then(() => true);
+            }"""
+        )
+        assert drawn is True
+        page.reload()
+        page.wait_for_selector("#wt-root")
+        page.wait_for_selector("svg.wt-shape")
+        child = page.evaluate(
+            """() => {
+                const el = document.querySelector('svg.wt-shape > *');
+                return {tag: el.tagName, points: el.getAttribute('points')};
+            }"""
+        )
+        browser.close()
+    # The diamond's own recorded geometry, not the square it would have fallen back to.
+    assert child == {"tag": "polygon", "points": "50,0 100,50 50,100 0,50"}
