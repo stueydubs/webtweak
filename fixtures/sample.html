@@ -33,6 +33,9 @@
     /* One visible side - a rule under a heading, the case the per-side border
        controls exist for: composing a full border here turns a rule into a box. */
     .ruled { border-bottom: 2px solid var(--accent); padding-bottom: 8px; margin: 48px 0 0; }
+    /* Corners that differ - a tab shape, which a single radius value would flatten,
+       so the overlay declines that field the way it declines differing sides. */
+    .tab-top { border-radius: 12px 12px 0 0; background: #efe9df; padding: 12px; margin: 24px 0 0; }
     /* Several sides differing - a deliberate design the overlay declines to edit. */
     .mixed-rule { border-left: 3px solid var(--accent); border-bottom: 1px dotted #c9c1b4;
                   padding: 12px; margin: 24px 0 0; }
@@ -69,6 +72,7 @@
          selector and every test that matches on it. -->
     <h3 class="ruled" id="ruled">A heading with a bottom rule</h3>
     <aside class="mixed-rule" id="mixed-rule">An element whose sides differ.</aside>
+    <figure class="tab-top" id="tab-top">A tab, rounded on its top corners only.</figure>
   </main>
 </body>
 </html>

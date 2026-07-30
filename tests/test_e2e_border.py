@@ -341,6 +341,25 @@ def test_undo_of_a_per_side_border_restores_the_rule(served):
     assert status == "nothing changed yet"
 
 
+def test_mixed_corner_radii_disable_the_radius_field(served):
+    """Same principle as differing sides, one property along: a card rounded on its
+    top two corners is a deliberate shape, and a single value here would round all
+    four. The two guards are independent - this element has no border at all, so its
+    Width/Style/Colour stay live while only Radius is declined.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#tab-top")               # .tab-top { border-radius: 12px 12px 0 0 }
+        state = disabled(page)
+        tip = page.eval_on_selector(RADIUS, "el => el.title")
+        rendered = border_of(page, "#tab-top")
+        browser.close()
+    assert state == [False, False, False, True]   # only Radius is off
+    assert "corner" in tip
+    assert rendered["radius"] == "12px 12px 0px 0px"   # untouched, and untouchable
+
+
 def test_shape_controls_read_stroke(served):
     """A shape's line is an SVG stroke, an element's is a CSS border - so the labels
     say so. The shape's Radius keeps its name: rx and border-radius are the same

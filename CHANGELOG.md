@@ -58,6 +58,12 @@ know that a per-side `border-bottom` must never be normalised into an all-sides
   because the side is the intent. When several sides differ the controls switch off
   with an explanation, the same way width and height already switch off on an inline
   element: the overlay declines rather than quietly wrecking a deliberate design.
+
+  **Corner radii work the same way.** A card rounded on its top two corners is a
+  deliberate shape, and one value in the Radius field would have rounded all four -
+  so an element whose corners differ has that field switched off too, with its own
+  explanation. The two guards are independent: an element can have differing corners
+  and perfectly ordinary borders, and only Radius is declined.
 - **The Font control offers the page's own fonts.** It was the one field that
   demanded you already knew an exact string: to set a heading in the site's
   display face you had to type `Fraunces, Georgia, serif` from memory, fallbacks

@@ -123,7 +123,7 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 - **No structural reordering.** Moving an element above another (rewriting the DOM order in source) is deferred to v2. v1 is resize, restyle, and nudge.
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
 - **Single viewport.** Changes are authored as base CSS; the session's viewport width is recorded so Claude can warn about mobile breakage, but deliberate per-breakpoint authoring is v2.
-- **Limited property set.** Flex/grid alignment editors and hover/focus states are out of the panel. Borders and shadows are in as of 0.4.0, but not per-corner radii or per-side border controls: an element whose sides carry *different* borders is declined rather than edited, so a deliberate design can't be silently replaced with a box.
+- **Limited property set.** Flex/grid alignment editors and hover/focus states are out of the panel. Borders and shadows are in as of 0.4.0, but not per-side border controls or per-corner radii - and in both cases the overlay *declines* rather than flattens: an element whose sides carry different borders, or whose corners carry different radii, has those controls switched off with an explanation, so a deliberate design can't be silently replaced with a box.
 - **Serves one directory as web root.** By default that is the page's own folder, so a page in a subfolder referencing site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 them. Pass `--root` at the real site root to fix it. Pages needing a build step (Tailwind compile, server-side partials) still won't render identically to production.
 
 ## Development

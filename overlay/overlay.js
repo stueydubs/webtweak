@@ -924,12 +924,20 @@
       legend.textContent = borderMixed ? "Border (sides differ)"
         : (borderSide ? "Border (" + borderSide + ")" : "Border");
     }
-    // Radius stays editable throughout - it is not a per-side property, so differing
-    // sides say nothing about whether a corner radius can be set.
     Object.keys(BORDER).forEach(function (part) {
       var n = document.getElementById(BORDER[part]);
       if (n) { n.disabled = borderMixed; n.title = borderMixed ? MIXED_TIP : ""; }
     });
+    // Radius is judged on its own - it is not a per-side property, so differing sides
+    // say nothing about whether a corner radius can be set. But differing CORNERS are
+    // the same problem one property along: a card rounded on its top two corners is a
+    // deliberate shape, and one value in this field would round all four. Computed
+    // border-radius is a single length only when all four corners agree, so a space
+    // in it is the whole test (it also catches an elliptical `10px / 20px`, which one
+    // number cannot express either).
+    var mixedCorners = cs.borderRadius.indexOf(" ") >= 0;
+    var rad = document.getElementById("wt-brad");
+    if (rad) { rad.disabled = mixedCorners; rad.title = mixedCorners ? MIXED_CORNERS_TIP : ""; }
     // width/height + nudge are inert on NON-REPLACED inline elements - disable them
     // so a user can't record a dead patch the element never honours. Replaced inline
     // elements (img, svg, video, form controls...) DO honour sizing/transform, so they
@@ -1075,6 +1083,8 @@
   var SEEDED_WIDTH = "1", SEEDED_STYLE = "solid";
   var MIXED_TIP = "this element's sides have different borders - editing them here " +
     "would replace them with one box";
+  var MIXED_CORNERS_TIP = "this element's corners have different radii - a single " +
+    "value here would round all four";
 
   // Which single side the controls edit, and whether they are declined outright.
   // Recomputed per selection in populate(), so it always describes the element in
