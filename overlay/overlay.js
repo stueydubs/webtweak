@@ -229,13 +229,22 @@
       opts: ["100", "200", "300", "400", "500", "600", "700", "800", "900"],
       read: function (cs) { return String(parseInt(cs.fontWeight, 10) || 400); } },
     { group: "Type", id: "wt-lh", prop: "line-height", label: "Line", kind: "text",
+      // Stepper rather than a number input, because a number input could hold none of
+      // `normal`, `1.4em` or `24px` - all of which real stylesheets author and all of
+      // which this field accepts today.
+      step: 0.1,
       // show the unitless ratio (computed resolves to px); writing a bare number keeps it unitless
       read: function (cs) {
         if (cs.lineHeight === "normal") return "normal";
         var fs = parseFloat(cs.fontSize), lh = parseFloat(cs.lineHeight);
         return (fs > 0 && lh > 0) ? String(+(lh / fs).toFixed(2)) : cs.lineHeight;
       } },
+    // Tracking is a value nobody holds in their head, so it gets the same picker the
+    // Font and Shadow fields use - presets, still typeable. Deliberately not a closed
+    // <select>: an arbitrary em or px value has always worked here.
     { group: "Type", id: "wt-ls", prop: "letter-spacing", label: "Spacing", kind: "text",
+      suggest: function () { return SPACING_PRESETS; }, suggestTitle: "Tracking presets",
+      suggestPreview: true,   // each row is tracked at its own value
       read: function (cs) { return cs.letterSpacing === "normal" ? "normal" : cs.letterSpacing; } },
     { group: "Type", id: "wt-align", prop: "text-align", label: "Align", kind: "align",
       read: function (cs) { var a = cs.textAlign; return a === "start" ? "left" : (a === "end" ? "right" : a); } },
@@ -297,6 +306,19 @@
       read: function (cs) { return px(cs.rx); } },
   ];
   var GROUPS = ["Type", "Colour", "Box", "Border", "Shape"];
+
+  // Tracking, in the em steps editorial type is actually set in: tightened for a big
+  // display line, opened up for small caps and uppercase labels, plus `normal` to take
+  // it off. Kept in em, not px, so the tracking scales with the type it is set on.
+  var SPACING_PRESETS = [
+    "normal",
+    "-0.02em",
+    "0.02em",
+    "0.05em",
+    "0.08em",
+    "0.12em",
+    "0.18em",
+  ];
 
   // Enough to cover the range an editorial page actually wants - a hairline, a card
   // lift, a modal lift, a dramatic drop, an inset press - plus `none` to take a
@@ -632,7 +654,19 @@
     if (c.kind === "select") return select(c.id, c.opts);
     if (c.kind === "align") return alignButtons(c.id);
     if (c.suggest) return suggestField(c);
+    if (c.step) return stepperField(c);
     return '<input type="text" id="' + c.id + '">';
+  }
+  // A text input with up/down buttons. The input stays free text, so a keyword or a
+  // unit the stepper cannot compute on is still typeable - the buttons are an
+  // addition to the field, not a replacement for it.
+  function stepperField(c) {
+    return '<span class="wt-stepper">' +
+      '<input type="text" id="' + c.id + '">' +
+      '<span class="wt-step-btns">' +
+      '<button id="' + c.id + '-up" type="button" title="Increase" aria-label="Increase">&#9650;</button>' +
+      '<button id="' + c.id + '-down" type="button" title="Decrease" aria-label="Decrease">&#9660;</button>' +
+      "</span></span>";
   }
   // A text input plus a dropdown of suggestions - deliberately not a closed
   // dropdown, so free text still works and nothing that was possible before this
@@ -1186,8 +1220,71 @@
     } else {
       node.addEventListener("input", function () { writeControl(c, this.value); });
       if (c.suggest) attachSuggest(c);
+      if (c.step) attachStepper(c);
     }
   });
+
+  // ---- steppers -------------------------------------------------------------
+  // Nudging a value by eye wants arrows, not typing. The arithmetic has three cases,
+  // and the awkward ones are the reason this is not just <input type="number">:
+  //   1.6      -> unitless, step the number
+  //   1.4em    -> keep the unit, or a step would silently change what the value means
+  //   normal   -> resolve to the ratio the browser is already rendering, then step it,
+  //               so the first press does something instead of nothing
+  function attachStepper(c) {
+    var input = document.getElementById(c.id);
+    ["up", "down"].forEach(function (dir) {
+      var btn = document.getElementById(c.id + "-" + dir);
+      if (!btn || !input) return;
+      btn.addEventListener("click", function () {
+        if (!selectedEl) return;
+        var next = stepValue(c, input.value, dir === "up" ? 1 : -1);
+        if (next === null) return;
+        input.value = next;
+        writeControl(c, next);   // one write path: revert, undo and validity all apply
+      });
+    });
+  }
+  // What `line-height: normal` is actually rendering as, as a ratio. It is font
+  // dependent (the browser uses the face's own metrics), so it is measured rather
+  // than assumed: a hidden one-line probe in the element's own font, its rendered
+  // height over its font-size. The probe lives inside the Overlay's own root, so the
+  // page's DOM is never touched even for an instant.
+  function measuredRatio(el) {
+    var cs = getComputedStyle(el);
+    var size = parseFloat(cs.fontSize);
+    if (!(size > 0)) return null;
+    var probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;" +
+      "line-height:normal;padding:0;border:0;" +
+      "font-family:" + cs.fontFamily + ";font-size:" + cs.fontSize +
+      ";font-weight:" + cs.fontWeight + ";font-style:" + cs.fontStyle;
+    probe.textContent = "Mg";
+    root.appendChild(probe);
+    var h = probe.getBoundingClientRect().height;
+    root.removeChild(probe);
+    return h > 0 ? +(h / size).toFixed(2) : null;
+  }
+  function stepValue(c, raw, sign) {
+    var m = String(raw).trim().match(/^(-?[\d.]+)([a-z%]*)$/i);
+    var value, unit;
+    if (m) {
+      value = parseFloat(m[1]);
+      unit = m[2];
+    } else {
+      // A keyword has no number to step. `line-height: normal` does not even compute
+      // to a length - it stays the keyword - so the ratio has to be measured.
+      value = measuredRatio(selectedEl);
+      unit = "";
+      if (value === null) return null;
+    }
+    if (isNaN(value)) return null;
+    var stepped = value + sign * c.step;
+    if (stepped < 0) stepped = 0;               // a negative line-height is not a thing
+    // Trim float noise (1.6 + 0.1 = 1.7000000000000002) without forcing decimals on
+    // a value that does not need them.
+    return String(+stepped.toFixed(4)) + unit;
+  }
 
   // ---- suggestion lists -----------------------------------------------------
   // Entries are rebuilt every time a list opens rather than cached: the page's own

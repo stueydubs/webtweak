@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Line and Spacing stopped being bare text boxes.** Both were fields you typed a
+  value into from memory, which is the same complaint that produced the font picker.
+  Line now has up/down arrows, so a leading you are judging by eye can be walked 0.1
+  at a time; Spacing has a ▾ of tracking presets in em, from tightened display type
+  to opened-up uppercase labels.
+
+  Both stay text inputs, and deliberately so. A number input could hold none of
+  `normal`, `1.4em` or `24px`, and a closed dropdown of presets could not hold an
+  arbitrary tracking value - each would have removed an edit that already worked. The
+  arrows handle the awkward cases instead: they keep whatever unit they were given, and
+  on a `line-height: normal` they measure what the browser is actually rendering (it is
+  font dependent, and does not even compute to a length) before stepping it, so the
+  first press does something rather than nothing.
+
 ## [0.4.0] - 2026-07-30
 
 A property-set and quality-of-life release for the Overlay: a font picker fed by

@@ -227,7 +227,17 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
    differ, and width/height on a non-replaced inline element. */
 .wt-field input:disabled,
 .wt-field select:disabled { opacity: 0.4; cursor: not-allowed; }
-/* --- suggestion list (Font; shadow presets reuse it) ---------------------- */
+/* --- stepper (a text field you can also nudge with arrows) ---------------- */
+.wt-stepper { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+.wt-step-btns { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.wt-step-btns button {
+  background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
+  border-radius: 4px; padding: 0 5px; font-size: 7px; line-height: 10px;
+  cursor: pointer;
+}
+.wt-step-btns button:hover { border-color: #ffd479; color: #ffd479; }
+
+/* --- suggestion list (Font; shadow and tracking presets reuse it) --------- */
 /* A text input plus a dropdown, so free text still works. */
 .wt-suggest { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .wt-suggest-toggle {
