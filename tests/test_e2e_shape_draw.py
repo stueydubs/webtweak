@@ -178,3 +178,43 @@ def test_place_mode_ends_when_the_draw_ends(served):
     assert state == {"hint": True, "placing": False, "shapes": 1}
     assert after["tag"] == "h1#headline"   # a normal selection, not a second shape
     assert after["shapes"] == 1
+
+
+def test_no_two_palette_icons_draw_the_same_picture(served):
+    """Nine buttons must be nine distinct pictures.
+
+    Every shape's geometry fills the same 0..100 box, so square and rectangle are the
+    identical `<rect>` markup, as are circle and ellipse - they differ only in the
+    default size they place at. Drawn full-bleed, the palette showed two identical
+    squares and two identical circles, which reads as a duplicated entry.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#wt-shape-btn")
+        icons = page.evaluate(
+            """() => Array.from(document.querySelectorAll('.wt-shape-item')).map(btn => {
+                const shape = btn.querySelector('svg > g > *');
+                const r = shape.getBoundingClientRect();
+                return {
+                    kind: btn.dataset.shape,
+                    // What the button actually PAINTS: the tag, the outline, and the
+                    // proportions it is drawn at.
+                    signature: [shape.tagName,
+                                shape.getAttribute('points') || '',
+                                (r.width / r.height).toFixed(2)].join('|'),
+                    titled: btn.title.toLowerCase().startsWith(btn.dataset.shape),
+                };
+            })"""
+        )
+        browser.close()
+    assert len(icons) == 9
+    signatures = [i["signature"] for i in icons]
+    assert len(set(signatures)) == 9, f"duplicate palette icons: {signatures}"
+    # The wider defaults are drawn wider, rather than merely differing by some accident.
+    by_kind = {i["kind"]: i["signature"] for i in icons}
+    assert by_kind["square"].endswith("1.00")
+    assert by_kind["rectangle"].endswith("1.75")
+    assert by_kind["circle"].endswith("1.00")
+    assert by_kind["ellipse"].endswith("1.75")
+    assert all(i["titled"] for i in icons), "each icon should name its shape"

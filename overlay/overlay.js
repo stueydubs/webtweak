@@ -727,6 +727,21 @@
       return k + '="' + spec.attrs[k] + '"';
     }).join(" ") + "/>";
   }
+  // A palette icon drawn at its shape's own aspect ratio, letterboxed inside the
+  // square button. Every shape's geometry fills a 0..100 box, so square and rectangle
+  // are the SAME markup (a full-bleed <rect>), as are circle and ellipse - they differ
+  // only in the default size they are placed at. Drawn full-bleed, the palette showed
+  // nine buttons and seven distinct pictures: two identical squares and two identical
+  // circles, which reads as a duplicated entry rather than a wider default.
+  // Derived from spec.size rather than hand-drawn, so a new shape cannot forget it.
+  function paletteIcon(kind) {
+    var spec = SHAPES[kind] || SHAPES.square;
+    var longest = Math.max(spec.size.w, spec.size.h);
+    var sx = spec.size.w / longest, sy = spec.size.h / longest;
+    return '<svg viewBox="-8 -8 116 116" preserveAspectRatio="none">' +
+      '<g transform="translate(' + (50 * (1 - sx)) + "," + (50 * (1 - sy)) +
+      ") scale(" + sx + "," + sy + ')">' + innerMarkup(spec) + "</g></svg>";
+  }
 
   // Create a shape <svg> at document coords (x, y), register it in `edited` with a
   // seeded full-style `changes` snapshot so its create patch is self-contained even
@@ -888,10 +903,12 @@
     var btn = document.createElement("button");
     btn.className = "wt-shape-item";
     btn.dataset.shape = kind;
-    btn.title = "Click me, then drag on the page to draw - or drag me straight onto the page";
+    // Names the shape, so the two pairs that share geometry are told apart by more
+    // than their proportions on a 40px button.
+    btn.title = capitalise(kind) +
+      " - click me, then drag on the page to draw, or drag me straight onto the page";
     btn.setAttribute("draggable", "true");   // also draggable straight onto the page
-    btn.innerHTML = '<svg viewBox="-8 -8 116 116" preserveAspectRatio="none">' +
-      innerMarkup(SHAPES[kind]) + "</svg>";
+    btn.innerHTML = paletteIcon(kind);
     palette.appendChild(btn);
   });
   document.getElementById("wt-shape-btn").addEventListener("click", function () {
