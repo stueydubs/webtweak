@@ -26,8 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   condition; a patch carrying no band stays byte-identical to what every release
   before this one wrote. Undo, the change list, and revert are all band-aware, so a
   base edit and a banded edit of the same property never overwrite one another. See
-  ADR-0004. Border and per-side spacing controls stay base-only for now - a banded
-  border or padding is not yet expressible.
+  ADR-0004. Border, per-side spacing, and every control on a shape stay base-only for
+  now (`controlBand()`) - a banded border, padding, or shape fill is not yet
+  expressible, and each is refused at the point it would otherwise be recorded,
+  not merely documented as unsupported.
 
 ### Changed
 
@@ -59,6 +61,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the way `selector` already does, so a shape's `wt-shape` class (and now a banded
   edit's generated `wt-mq-N`) was reaching Claude as though the page had authored
   it. Fixed to rebuild `class` the same way the rest of the Fingerprint does.
+
+The four below were found by a dynamic-team review of the banded-editing commit
+(five parallel reviewers, each Codex-verified against the running code) and fixed
+the same session, before any of them shipped to a tagged release:
+
+- **A border edit made while a band was selected recorded into `media` instead of
+  `changes`**, contradicting this release's own documented scoping. `writeBorder()`
+  ends in the same shared `commit()` tail as every plain control, which read the
+  Scope picker's band unconditionally; reconcile does not read `media` yet, so the
+  edit previewed and saved but was silently unreachable from real source. Fixed by
+  routing every band-aware function (`commit`, `populate`, the revert marks) through
+  a `controlBand(c)` that forces base for a composed border, per-side spacing, or
+  any control on a shape - one place all of them now agree with, instead of each
+  re-deriving it and drifting apart.
+- **A banded edit on a shape (fill, stroke, rotate, ...) was recorded and shown in
+  the change list, then silently dropped on save** - the shape branch of `save()`
+  only ever read `e.changes`, never `e.media`. Closed at the source by the same
+  `controlBand()` fix above: a shape control now always writes base, so there is
+  nothing for that branch to have dropped.
+- **Two bands sharing a min-width but no max-width (e.g. two ordinary mobile-first
+  breakpoints) could win the cascade in the wrong order.** `Infinity - anything` is
+  `Infinity` in IEEE754, so `makeBand()`'s span collapsed every such band to the
+  identical value and the "narrowest wins" sort saw `NaN` for any pair of them -
+  which a stable sort treats as equal, silently falling back to edit order instead
+  of width order. Fixed with a large finite sentinel in place of `Infinity`, so two
+  min-width-only bands stay distinguishable by their actual threshold.
+- **Switching the Scope picker's band left the per-field revert dot stale.**
+  `setScope()` repopulated each field's shown value for the new band but never
+  refreshed the revert marks, so a dot could keep showing (or hiding) a still-active
+  override that belonged to the band you had just left.
 
 ## [0.6.0] - 2026-07-30
 

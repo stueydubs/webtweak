@@ -567,6 +567,15 @@
     return text.trim().split(/\s+/).every(function (word) { return MEDIA_WORDS[word.toLowerCase()]; });
   }
 
+  // A finite stand-in for "no upper bound", far past any real window width. Two
+  // min-width-only bands both used literal `Infinity` here, and `Infinity - anything`
+  // is `Infinity` in IEEE754 regardless of the subtrahend - collapsing every
+  // min-width-only band to the identical span and turning `spanA - spanB` into `NaN`
+  // for any pair of them, which a stable sort treats as "equal" and silently leaves
+  // in whatever order they happened to be inserted. A finite sentinel keeps two such
+  // bands distinguishable by their actual min-width threshold instead.
+  var UNBOUNDED_SPAN = 1e9;
+
   function makeBand(condition) {
     var norm = normaliseRanges(condition);
     var min = condLength(norm, "min-width"), max = condLength(norm, "max-width");
@@ -589,7 +598,7 @@
       : condition;
     // How wide a range the band covers - the measure of "narrowest", and so of which
     // band a user who has just dragged their window narrow is thinking about.
-    b.span = (max ? max.px : Infinity) - (min ? min.px : 0);
+    b.span = (max ? max.px : UNBOUNDED_SPAN) - (min ? min.px : 0);
     return b;
   }
   // Re-asked rather than cached: a band object is a snapshot, and the window it was
@@ -634,6 +643,12 @@
     // something asks it to: a field left showing the PREVIOUS scope's value after
     // the scope itself visibly moved would be its own small silent-failure mode.
     if (selectedEl) populate(selectedEl);
+    // Every other mutation path in the file pairs a state change with refreshChanges()
+    // (it also repaints the per-field revert marks) - a scope switch is exactly as
+    // load-bearing: a revert dot correctly showing "font-size overridden" at Base can
+    // otherwise keep showing after switching to a band with no override of its own,
+    // until an unrelated edit happens to trigger a refresh.
+    refreshChanges();
   }
   // Watch the SCOPE'S OWN condition, not the window. The browser fires this exactly
   // when the condition stops (or starts) being true, with the new state already
@@ -771,9 +786,34 @@
 
   function currentBand() { return scope ? scope.condition : ""; }
 
+  // The band a given CONTROL actually writes/reads under - not always the Scope
+  // picker's own currentBand(). A composed border (c.part) and per-side spacing
+  // (c.kind === "sides") stay base-only regardless of which band is selected, and so
+  // does every control on a shape - a decorative shape has no authored CSS baseline,
+  // so there is no "revert to what this band already renders" story for one to override.
+  // Centralised here so every band-aware function (commit, populate,
+  // refreshRevertMarks, revertRow, revertControl) agrees on which controls are
+  // bandable, rather than each re-deriving it and drifting out of sync - which is
+  // exactly how a border edit ended up recorded into `media` despite this release's
+  // own stated scoping (writeBorder ends in the shared commit() tail, which used to
+  // read currentBand() unconditionally).
+  function controlBand(c) {
+    if (c.kind === "sides" || c.part) return "";
+    if (selectedEl && selectedEl.__wtShape) return "";
+    return currentBand();
+  }
+
   function ensureMqClass(ent, el) {
     if (!ent.mqClass) {
-      ent.mqClass = "wt-mq-" + (++mqCounter);
+      var name;
+      // A bare counter alone could coincidentally match a class the PAGE already
+      // authored (unlikely for this exact prefix, but not impossible - the page is
+      // arbitrary markup the Overlay does not control) - if it did, the injected
+      // !important rule would apply to every element carrying that literal class,
+      // not just the one being edited. Skip forward past any counter value already
+      // present anywhere in the document before claiming it.
+      do { name = "wt-mq-" + (++mqCounter); } while (document.getElementsByClassName(name).length);
+      ent.mqClass = name;
       WT_OWN_CLASSES[ent.mqClass] = 1;
     }
     if (!el.classList.contains(ent.mqClass)) el.classList.add(ent.mqClass);
@@ -1588,11 +1628,6 @@
   function populate(el) {
     var cs = getComputedStyle(el);
     var ent = edited.get(el);
-    // The band being edited, if any - "" means base, and reads exactly as before
-    // 0015. Sides and border controls stay base-only in this release (see writeSides
-    // / writeBorder, untouched below); only the plain single-value controls this
-    // loop otherwise handles are band-aware.
-    var band = currentBand();
     baselines = {};
     closeAllSuggests();   // a list left open would hang over the repopulated fields
     // Before the reads: the border controls read (and write) whichever side they are
@@ -1619,8 +1654,11 @@
       // detected (and doesn't record a no-op patch setting a prop to its own value).
       // A banded override lives in the injected stylesheet, not inline, so peeling
       // it off means editing that stylesheet rather than `host.style` - see
-      // withTempBandRemoved.
+      // withTempBandRemoved. controlBand(c), not currentBand(): this control might be
+      // one (border, or any control on a shape) that stays base-only regardless of
+      // which band the picker shows.
       var prop = propOf(c);   // `border-bottom` for a one-sided rule, else c.prop
+      var band = controlBand(c);
       if (band && ent) {
         base = withTempBandRemoved(ent, band, prop, function () {
           return c.read(getComputedStyle(host));
@@ -1773,7 +1811,7 @@
   // authored inline style plus whatever other edits remain on the element.
   function revertControl(c) {
     var ent = edited.get(selectedEl);
-    var band = currentBand();
+    var band = controlBand(c);
     var prop = propOf(c);
     var map = ent && targetMap(ent, band, false);
     if (map && map[prop] !== undefined) pushUndoWrite(selectedEl, prop, band);
@@ -1859,7 +1897,7 @@
   // path below both end here, so there is one place a Patch can be created.
   function commit(c, v) {
     var prop = propOf(c);
-    var band = currentBand();
+    var band = controlBand(c);
     pushUndoWrite(selectedEl, prop, band);
     // A base write previews inline (routes rx to the child node; plain setProperty
     // otherwise). A banded write has no inline path - it previews through the
@@ -1899,10 +1937,15 @@
   }
   function refreshRevertMarks() {
     var ent = selectedEl && edited.get(selectedEl);
-    var ch = (ent && targetMap(ent, currentBand(), false)) || {};
     CONTROLS.forEach(function (c) {
       var mark = document.getElementById(c.id + "-revert");
       if (!mark) return;
+      // Per control, not once for the whole panel: a border or shape control is
+      // always base-only regardless of the Scope picker (controlBand(c)), so its
+      // revert mark must keep reading ent.changes even while a band is selected -
+      // reading a single outer band for every row hid a still-active base override
+      // the moment any band was picked.
+      var ch = (ent && targetMap(ent, controlBand(c), false)) || {};
       mark.hidden = !rowProps(c).some(function (p) {
         return Object.prototype.hasOwnProperty.call(ch, p);
       });
@@ -1915,7 +1958,7 @@
     if (!selectedEl) return;
     var ent = edited.get(selectedEl);
     if (!ent) return;
-    var band = currentBand();
+    var band = controlBand(c);
     var map = targetMap(ent, band, false);
     if (!map) return;
     var props = rowProps(c).filter(function (p) {

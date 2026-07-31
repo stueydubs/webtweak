@@ -14,11 +14,15 @@ to assume one value per element per property, and a banded edit that quietly
 overwrote a base one would still produce a valid-looking Patch.
 """
 
-from conftest import open_page, patches, save, set_field
+from conftest import open_page, patches, place_shape, save, select_card, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
 NARROW = "(max-width: 600px)"
+
+
+def revert_shown(page, control):
+    return page.eval_on_selector(f"#{control}-revert", "el => !el.hidden")
 
 
 def resize(page, width):
@@ -297,3 +301,148 @@ def test_two_bands_on_one_element_stay_separate(served):
     media = patches(tmp)[0]["media"]
     assert media[NARROW]["font-size"] == "30px"
     assert media["(max-width: 900px)"]["font-size"] == "38px"
+
+
+def test_two_different_elements_each_keep_their_own_banded_edit(served):
+    """renderBandStyle()'s per-condition grouping is architected to hold more than one
+    element's declarations under a shared band - every other test in this file only
+    ever edits #headline, which cannot tell a correct per-element grouping apart from a
+    bug that dropped or cross-leaked declarations between elements sharing a band."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        pick(page, NARROW)
+        headline(page)
+        set_field(page, "#wt-fs", "30px")
+        page.click(".lede", position={"x": 8, "y": 8})   # scope survives selecting another element
+        set_field(page, "#wt-fs", "15px")
+        headline_narrow = rendered(page, "#headline", "font-size")
+        lede_narrow = rendered(page, ".lede", "font-size")
+        resize(page, 1280)
+        headline_wide = rendered(page, "#headline", "font-size")
+        lede_wide = rendered(page, ".lede", "font-size")
+        save(page)
+        browser.close()
+    assert headline_narrow == "30px"
+    assert lede_narrow == "15px"
+    assert headline_wide == "44px"                        # base values, untouched
+    assert lede_wide == "21px"
+    ps = patches(tmp)
+    assert len(ps) == 2
+    headline_patch = next(p for p in ps if p["fingerprint"]["id"] == "headline")
+    lede_patch = next(p for p in ps if p["fingerprint"]["id"] != "headline")
+    assert headline_patch["media"][NARROW]["font-size"] == "30px"
+    assert lede_patch["media"][NARROW]["font-size"] == "15px"
+    assert "lede" in lede_patch["fingerprint"]["classes"]
+
+
+def test_a_real_shapes_opentag_excludes_wt_shape(served):
+    """openTag()'s Fingerprint-leak fix is documented as covering a shape's wt-shape
+    class, but its only regression test drove a font-size band edit on #headline and
+    never touched a real shape."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        place_shape(page)
+        save(page)
+        browser.close()
+    create = next(p for p in patches(tmp) if p.get("op") == "create")
+    fp = create["fingerprint"]
+    assert "wt-shape" not in fp["classes"]
+    # Not a bare substring check: the shape's OWN id is "wt-shape-<rand>" (a legitimate
+    # attribute value, not a leak), so openTag has to be checked for the class token
+    # specifically, not for "wt-shape" appearing anywhere in the tag at all.
+    assert 'class="wt-shape"' not in fp["openTag"]
+
+
+def test_status_message_never_pushes_save_off_screen(served):
+    """Regression: a long status message ("reset - save to drop these edits") used to
+    hold the bar at its own unwrapped width (.wt-status was flex-shrink:0, like every
+    other bar control) and push Save past the viewport - at exactly the widths band
+    editing exists to be used at. No earlier test did Reset-then-Save below 700px."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        headline(page)
+        set_field(page, "#wt-fs", "30px")
+        page.click("#wt-reset")
+        box = page.eval_on_selector("#wt-save", "el => el.getBoundingClientRect()")
+        # This used to time out: Save sat past the 480px viewport's right edge.
+        page.click("#wt-save", timeout=5000)
+        browser.close()
+    assert box["right"] <= 480
+
+
+def test_a_banded_edit_and_a_different_base_property_dont_cross_contaminate(served):
+    """Every other base+band test in this file reuses font-size for both, which cannot
+    distinguish correct per-key label/namespace handling from a bug that mismaps a
+    band label or leaks a banded key into `changes`."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        pick(page, "")
+        headline(page)
+        set_field(page, "#wt-color", "#ff0000")    # base: a DIFFERENT property
+        pick(page, NARROW)
+        set_field(page, "#wt-fs", "30px")          # banded: font-size
+        save(page)
+        browser.close()
+    patch = patches(tmp)[0]
+    assert patch["changes"]["color"] == "#ff0000"
+    assert "font-size" not in patch["changes"]
+    assert patch["media"][NARROW] == {"font-size": "30px"}
+    assert "color" not in patch["media"][NARROW]
+
+
+def test_a_border_edit_under_a_band_still_lands_in_changes(served):
+    """Regression: writeBorder() ends in the shared commit() tail, which used to read
+    currentBand() unconditionally - a border edit made under a selected band was
+    recorded into `media` even though border is documented (PRD, CHANGELOG) to stay
+    base-only, and reconcile does not read `media` yet, so the edit was silently
+    unreachable from real source."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        pick(page, NARROW)
+        select_card(page)
+        set_field(page, "#wt-bw", "5")
+        save(page)
+        browser.close()
+    patch = patches(tmp)[0]
+    assert "border" in patch["changes"]
+    assert not patch.get("media", {})
+
+
+def test_a_shape_edit_under_a_band_still_lands_in_changes(served):
+    """Regression: a Shape-group control (Fill/Stroke/etc.) routed through the same
+    shared commit() tail as any plain control, so a banded edit on a shape was
+    recorded into `media` - then silently dropped altogether, because save()'s shape
+    branch never read it at all."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        place_shape(page)
+        pick(page, NARROW)
+        set_field(page, "#wt-fill", "#00ff00")
+        save(page)
+        browser.close()
+    create = next(p for p in patches(tmp) if p.get("op") == "create")
+    assert create["changes"]["fill"] == "#00ff00"
+    assert "media" not in create
+
+
+def test_switching_scope_refreshes_the_revert_mark(served):
+    """Regression: setScope() repopulated the shown VALUE for the new band but never
+    refreshed the per-field revert-dot, so it kept reflecting whichever band was
+    active before the switch until an unrelated edit happened to trigger a refresh."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        pick(page, "")
+        headline(page)
+        set_field(page, "#wt-fs", "40px")   # base override -> dot shows at Base
+        assert revert_shown(page, "wt-fs") is True
+        pick(page, NARROW)                  # no override recorded in this band yet
+        shown = revert_shown(page, "wt-fs")
+        browser.close()
+    assert shown is False
