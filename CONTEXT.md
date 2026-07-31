@@ -28,6 +28,10 @@ One editing session's worth of Patches inside the edits file, stamped with viewp
 Claude's half of the loop - reading the edits file and applying the Patches cleanly into the real source files (proper CSS, house conventions). Reconcile stops at source; it does not push.
 _Avoid_: merge, sync
 
+**Band**:
+One width range an edit can be scoped to, taken from the Target page's own media queries - `(max-width: 600px)`, or `base` for "every width". The Overlay reads the page's declared conditions rather than offering a device list, so an edit lands inside the site's existing responsive system instead of adding a breakpoint nobody asked for. **Scope** is the name of the picker that selects one (it reads *Applies at*, because the Band is the condition a change is written under, not the thing being edited); **media group** is the Band once serialised, one entry in a Patch's `media` map keyed by the condition text. Not every control is bandable - Border, per-side spacing and every shape control stay base-only, and the panel says so.
+_Avoid_: breakpoint (that is the page's own CSS boundary, not the range between two of them), viewport (that is the window width you are authoring at), device
+
 **Border**:
 A CSS `border` on an ordinary page element - composed in the panel from Width, Style and Colour, and emitted as one declaration (or a per-side `border-bottom` when the element carries a rule on one side only).
 _Avoid_: using it for a shape's outline, which is a Stroke
@@ -39,8 +43,9 @@ _Avoid_: border, outline
 ## Relationships
 
 - A **Target page** is edited via the **Overlay**, producing one or more **Patches**
+- Each **Patch** carries base declarations, plus one **media group** per **Band** the edit was scoped to
 - **Patches** are serialised into the **Edits file** (`<page-stem>.webtweak.json`)
-- Claude reads the **Edits file** to **Reconcile** changes into the **Target page**'s real source
+- Claude reads the **Edits file** to **Reconcile** changes into the **Target page**'s real source, folding each media group into the `@media` block that already governs its **Band**
 
 ## Decisions captured
 
@@ -53,7 +58,7 @@ _Avoid_: border, outline
 - **Reconcile scopes to the single edited element by default, and flags systemic-looking changes.** Default output is CSS targeting only the element you touched (no surprise ripple to siblings sharing a class). When a change looks global (the only paragraph, or every heading changed alike), Claude pauses and asks "just this one or all `.section-title`s?" rather than guessing. Reconcile always writes real CSS rules into the stylesheet already governing the element - never inline styles.
 - **v1 is single-viewport editing - changes are base CSS.** You author at one window width; webtweak stamps the session's viewport width into edits.json so Claude can warn when a desktop-width change would obviously break mobile and offer to scope it to a media query in that one case. Deliberate per-breakpoint authoring (auto-writing media queries) is v2. Honest limitation: v1 is for base-layout work, not responsive fine-tuning.
 
-  **Being superseded, partly.** The [per-breakpoint PRD](./docs/PRD-per-breakpoint-authoring.md) is mid-flight: the Overlay now *discovers* the page's own media queries and offers a **Scope** picker in the bar (issue 0014, shipped), but **every edit is still recorded as base CSS** - the picker's choice does not yet reach the Patch. Until issue 0015 lands, the sentence above remains true of what actually gets written, and the bar promises a scope the Patch does not carry. That gap is deliberate and pinned by a test; see the PRD's Progress section for exactly where the work stands.
+  **Being superseded, and now mostly superseded.** The [per-breakpoint PRD](./docs/PRD-per-breakpoint-authoring.md) is mid-flight but past its hard part: the Overlay discovers the page's own media queries and offers a **Scope** picker (0014), an edit made under a picked Band previews only inside it and is recorded into the Patch's `media` map (0015), and Reconcile knows to merge that map into the stylesheet's existing `@media` block (0016). So the paragraph above is no longer true of plain Type, Colour and Box edits, which can now be genuinely per-breakpoint. It *is* still true of Border, per-side spacing and every shape control, which stay base-only whatever Band is picked - the Overlay says so in the panel rather than silently ignoring the picker. What remains before release is restore-after-reload coverage (0017) and the release itself (0019); see the PRD's Progress section for exactly where the work stands.
 - **The edits file is a running history of Batches, never cleared.** Lives next to the Target page (`<page-stem>.webtweak.json`). Each Save overwrites the current `pending` Batch with a full snapshot of the session's Patches. Reconcile flips the Batch to `reconciled` (timestamped) and leaves it in place; Claude only ever applies `pending` Batches, so stale patches can't re-apply. To keep that history as a version-controlled changelog, commit the edits file **in the site's own repo** (the file lives beside the page being edited, not in the webtweak repo). The webtweak dev repo gitignores `*.webtweak.json` because there it only ever appears as a transient test artefact. Command: `webtweak <path-to-html>`; published to npm, and the dev copy lives at `~/projects/webtweak/`.
 - **The server watches the served tree and pushes reloads, so the loop is visible.** Reconcile happens in another window; before this, the user saved and had no signal until they reloaded by hand. webtweak watches its served directory and sends events over SSE (`GET /__webtweak__/events`); a clean page reloads itself, so a reconcile lands in front of the user, and a **reconcile badge** reflects the edits file's own view (`N pending` until Claude flips the batch to `reconciled`). **Three rules make it safe**, and the third is the subtle one:
   1. A reload **never** runs over unsaved edits. Guarded on `dirty`, not on "has edits" - after a Save the batch is on disk and `restore()` re-applies it, and reloading after a save is exactly the case that matters.

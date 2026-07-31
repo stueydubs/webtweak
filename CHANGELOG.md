@@ -52,7 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `media`, which has no way to carry a band and so cannot have come from webtweak:
   `media?!` inline in the summary, plus a stderr warning in both modes, since
   `--full` dumps patches verbatim and is the path the skill sends Claude to for real
-  work.
+  work. A condition is quoted in that summary when it holds the summary's own
+  delimiters (`;` or `[]`, both of which survive inside parens per CSS MQ4
+  `<general-enclosed>`) or is blank - unquoted, one group could print as two, with a
+  property list that was never there.
 
 ### Changed
 

@@ -97,10 +97,26 @@ def _changes_summary(changes: dict) -> str:
     return ", ".join(parts)
 
 
+def _fmt_condition(cond: str) -> str:
+    # A media condition is free text: the Scope picker accepts a hand-typed one, and
+    # a page's own `conditionText` round-trips verbatim. This summary is a delimited
+    # format - groups joined by "; ", properties wrapped in "[...]" - and CSS MQ4's
+    # <general-enclosed> lets both delimiters survive inside parens. So
+    # `(max-width: 9px) or (foo: a[b];c)` is one condition that would otherwise print
+    # as two groups with a property list that was never there: a plausible-looking
+    # wrong reading, which is the failure mode this codebase keeps re-learning.
+    # Quote only when a delimiter is actually present, so every real condition stays
+    # unquoted and readable. An empty/blank condition is quoted too - otherwise it
+    # prints as a gap in the line and reads as a rendering fault rather than as what
+    # it is, a group whose condition went missing.
+    return f'"{cond}"' if (not cond.strip() or any(c in cond for c in ';[]"')) else cond
+
+
 def _media_summary(media: dict) -> str:
     # One group per condition (ADR-0004) - a patch that is media-only (no base
     # changes) must still read as real work, not a no-op `[]`.
-    return "; ".join(f"{cond} [{_changes_summary(props)}]" for cond, props in media.items())
+    return "; ".join(f"{_fmt_condition(cond)} [{_changes_summary(props)}]"
+                     for cond, props in media.items())
 
 
 def _unbanded_summary(changes: dict, media: dict) -> str:

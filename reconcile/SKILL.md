@@ -12,7 +12,7 @@ The second half of the webtweak loop. The webtweak tool (`~/projects/webtweak`) 
 A `<page>.webtweak.json` file sitting next to the edited page:
 
 ```
-{ target, batches: [ { sessionId, savedAt, viewport, status, patches: [ { fingerprint, changes: { ...cssProps, nudge? } } ] } ] }
+{ target, batches: [ { sessionId, savedAt, viewport, status, patches: [ { fingerprint, changes: { ...cssProps, nudge? }, media?: { "<condition>": { ...cssProps } } } ] } ] }
 ```
 
 Only `status: "pending"` batches are reconciled. `reconciled` batches are history - never re-apply them.

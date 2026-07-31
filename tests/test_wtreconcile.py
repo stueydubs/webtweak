@@ -124,6 +124,47 @@ def test_pending_shows_every_condition_of_a_multi_band_patch(tmp_path):
             "(max-width: 600px) [font-size]" in r.stdout)
 
 
+def test_pending_quotes_a_condition_holding_its_own_delimiters(tmp_path):
+    """A condition is free text - hand-typed in the Scope picker, or round-tripped
+    verbatim from the page's own conditionText - and CSS MQ4 <general-enclosed>
+    lets `;` and `[]` survive inside parens. Unquoted, ONE group would print as two
+    with a property list that was never there."""
+    cond = "(max-width: 99999px) or (foo: a[b];c)"
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"}, "changes": {},
+         "media": {cond: {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert f'media: "{cond}" [font-size]' in r.stdout
+    # One group, so nothing may read as a second one.
+    assert r.stdout.count("[font-size]") == 1
+
+
+def test_pending_quotes_a_blank_condition(tmp_path):
+    """Otherwise it prints as a gap in the line and reads as a rendering fault
+    rather than as a group whose condition went missing."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"}, "changes": {},
+         "media": {"": {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert 'media: "" [font-size]' in r.stdout
+
+
+def test_pending_leaves_an_ordinary_condition_unquoted(tmp_path):
+    """Quoting is the exception, not the format - every real condition reads bare."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"}, "changes": {},
+         "media": {"(max-width: 600px)": {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "media: (max-width: 600px) [font-size]" in r.stdout
+    assert '"' not in r.stdout
+
+
 def test_pending_names_the_base_declarations_no_band_covers(tmp_path):
     """Step 6 asks the responsiveness question per declaration. On a mixed patch
     the set difference is mechanical, so the summary does it: `width` was resized
