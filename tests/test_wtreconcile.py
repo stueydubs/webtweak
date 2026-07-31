@@ -70,6 +70,43 @@ def test_pending_flags_a_create_patch(tmp_path):
     assert "create triangle" in r.stdout
 
 
+def test_pending_shows_a_banded_patch(tmp_path):
+    """0016: a media group must be visible in the summary - reconcile can no
+    longer treat a patch as if the banded half weren't there."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"},
+         "changes": {"font-size": "52px"},
+         "media": {"(max-width: 600px)": {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "(max-width: 600px)" in r.stdout
+    assert "font-size" in r.stdout
+
+
+def test_pending_shows_a_media_only_patch(tmp_path):
+    """A patch can carry a media group with no base changes at all (an edit made
+    purely inside a band) - it must still read as real work, not a no-op."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "p", "classes": ["lede"]},
+         "changes": {},
+         "media": {"(max-width: 900px)": {"color": "#333333"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "(max-width: 900px)" in r.stdout
+    assert "color" in r.stdout
+
+
+def test_pending_without_media_is_unchanged(tmp_path):
+    """A patch carrying no media key is exactly the pre-0.5.0 shape - the summary
+    must not grow a media marker for it (ADR-0004: additive, not a rewrite)."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch()]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "media:" not in r.stdout
+
+
 # --- corrupt input ---------------------------------------------------------
 
 @pytest.mark.parametrize("doc", [
@@ -79,6 +116,11 @@ def test_pending_flags_a_create_patch(tmp_path):
                   "patches": [{"fingerprint": {}, "changes": ["oops"]}]}]},
     {"batches": [{"sessionId": "s", "status": "pending",
                   "patches": [{"fingerprint": "oops", "changes": {}}]}]},
+    {"batches": [{"sessionId": "s", "status": "pending",
+                  "patches": [{"fingerprint": {}, "changes": {}, "media": "oops"}]}]},
+    {"batches": [{"sessionId": "s", "status": "pending",
+                  "patches": [{"fingerprint": {}, "changes": {},
+                               "media": {"(max-width: 600px)": "oops"}}]}]},
     {"batches": "oops"},
     {"batches": ["oops"]},
 ])
@@ -112,6 +154,17 @@ def test_mark_flips_the_single_pending_batch(tmp_path):
     doc = json.loads(f.read_text())
     assert doc["batches"][0]["status"] == "reconciled"
     assert doc["batches"][0]["reconciledAt"]
+
+
+def test_mark_round_trips_a_media_group_untouched(tmp_path):
+    """Marking is pure bookkeeping - it must not touch a patch's media map."""
+    patches = [{"fingerprint": {"tag": "h1", "id": "headline"},
+                "changes": {"font-size": "52px"},
+                "media": {"(max-width: 600px)": {"font-size": "32px"}}}]
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=patches)]})
+    assert run("mark", str(f)).returncode == 0
+    doc = json.loads(f.read_text())
+    assert doc["batches"][0]["patches"][0]["media"] == {"(max-width: 600px)": {"font-size": "32px"}}
 
 
 def test_bare_mark_refuses_when_several_are_pending(tmp_path):

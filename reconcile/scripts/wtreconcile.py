@@ -53,6 +53,10 @@ def _load(path: str) -> dict:
             fp = p.get("fingerprint")
             if fp is not None and not isinstance(fp, dict):
                 _die(f"{path} has a malformed fingerprint object (corrupt edits file)")
+            media = p.get("media")
+            if media is not None and (not isinstance(media, dict)
+                                       or any(not isinstance(g, dict) for g in media.values())):
+                _die(f"{path} has a malformed media object (corrupt edits file)")
     return doc
 
 
@@ -83,6 +87,12 @@ def _changes_summary(changes: dict) -> str:
         else:
             parts.append(k)
     return ", ".join(parts)
+
+
+def _media_summary(media: dict) -> str:
+    # One group per condition (ADR-0004) - a patch that is media-only (no base
+    # changes) must still read as real work, not a no-op `[]`.
+    return "; ".join(f"{cond} [{_changes_summary(props)}]" for cond, props in media.items())
 
 
 def _describe(fp: dict) -> str:
@@ -128,7 +138,11 @@ def pending(args) -> None:
                 lead = f"+ create {p.get('shape', 'shape')} ->"
             else:
                 lead = "-"
-            print(f"    {lead} {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]")
+            line = f"    {lead} {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]"
+            media = p.get("media") or {}
+            if media:
+                line += "  media: " + _media_summary(media)
+            print(line)
 
 
 def mark(args) -> None:

@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at every width" (or the Shape equivalent) whenever a band is selected on an
   element carrying one of these controls, rather than silently ignoring the band it
   is still visibly showing.
+- **The reconcile skill merges banded edits into the page's own media queries.**
+  A patch's `media` map is written into the `@media` block that already governs
+  that condition - never a duplicate block for a condition the stylesheet already
+  has, and existing `@media` blocks are never reordered, since media order is
+  cascade order. A block is created only when the page genuinely has none for that
+  condition. The condition the user picked is treated as intent, not a suggestion
+  to round to a nearby breakpoint the site uses elsewhere. `wtreconcile.py`'s
+  pending-batch summary now surfaces each patch's media groups (condition +
+  properties) instead of showing only `changes`, so a media-only patch no longer
+  reads as a no-op.
 
 ### Changed
 
