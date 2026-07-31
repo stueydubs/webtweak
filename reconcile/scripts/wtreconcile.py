@@ -103,6 +103,19 @@ def _media_summary(media: dict) -> str:
     return "; ".join(f"{cond} [{_changes_summary(props)}]" for cond, props in media.items())
 
 
+def _unbanded_summary(changes: dict, media: dict) -> str:
+    # SKILL.md step 6 asks the responsiveness question per DECLARATION, not per
+    # patch: one patch routinely carries an un-banded resize (every drag and grip
+    # gesture records to base regardless of the selected band) alongside an unrelated
+    # banded edit, and only the un-banded half can still break mobile. Which base
+    # properties have no counterpart in any band is a set difference - mechanical, so
+    # the script does it rather than leaving Claude to re-derive it by eye across
+    # several conditions. That eyeballing is what read step 6 at the wrong
+    # granularity once already.
+    banded = {prop for group in media.values() for prop in group}
+    return _changes_summary({k: v for k, v in changes.items() if k not in banded})
+
+
 def _describe(fp: dict) -> str:
     s = fp.get("tag", "?")
     if fp.get("id"):
@@ -174,6 +187,13 @@ def pending(args) -> None:
                 # exact token - rename it there too.
                 label = "media?!" if is_create else "media:"
                 line += f"  {label} {_media_summary(media)}"
+                # Only worth saying on a MIXED patch. With no `media` at all every
+                # base property is un-banded, which is the pre-0016 status quo step 6
+                # already handled - marking it there would be noise on every legacy
+                # patch and would train the eye to skip the marker that matters.
+                unbanded = _unbanded_summary(p.get("changes") or {}, media)
+                if unbanded:
+                    line += f"  base-only: {unbanded}"
             print(line)
 
 

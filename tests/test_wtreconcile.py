@@ -124,6 +124,74 @@ def test_pending_shows_every_condition_of_a_multi_band_patch(tmp_path):
             "(max-width: 600px) [font-size]" in r.stdout)
 
 
+def test_pending_names_the_base_declarations_no_band_covers(tmp_path):
+    """Step 6 asks the responsiveness question per declaration. On a mixed patch
+    the set difference is mechanical, so the summary does it: `width` was resized
+    at a wide window and no band covers it, while `font-size` is condition-scoped
+    and needs no warning."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"},
+         "changes": {"font-size": "52px", "width": "900px"},
+         "media": {"(max-width: 600px)": {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "base-only: width" in r.stdout
+
+
+def test_pending_says_base_only_of_a_nudge_under_a_band(tmp_path):
+    """A nudge always records to base (drags ignore the band picker), so on a
+    banded patch it is exactly the kind of un-banded change step 6 is about - and
+    it must render in the same form the base segment uses."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "p", "classes": ["lede"]},
+         "changes": {"nudge": {"dx": 0, "dy": -8}},
+         "media": {"(max-width: 600px)": {"font-size": "18px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "base-only: nudge(0,-8)" in r.stdout
+
+
+def test_pending_omits_base_only_when_every_base_property_is_banded(tmp_path):
+    """The same property at base and in a band is condition-scoped, so nothing is
+    left un-banded - claiming otherwise would send Claude chasing a warning that
+    does not apply."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"},
+         "changes": {"font-size": "52px"},
+         "media": {"(max-width: 600px)": {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "base-only" not in r.stdout
+
+
+def test_pending_counts_every_band_when_working_out_what_is_base_only(tmp_path):
+    """Coverage is the union of all bands, not the first one. `color` is banded
+    only in the second group - reading one band alone would report it un-banded
+    and send Claude warning about a change the user did scope to a width."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"},
+         "changes": {"font-size": "52px", "color": "#111111"},
+         "media": {"(max-width: 900px)": {"font-size": "38px"},
+                   "(max-width: 600px)": {"color": "#333333"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "base-only" not in r.stdout
+
+
+def test_pending_omits_base_only_on_a_patch_with_no_bands(tmp_path):
+    """With no media at all every declaration is base - the pre-0016 case step 6
+    already handled. A marker on every legacy patch would be noise, and noise
+    trains the eye past the marker that matters."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch()]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "base-only" not in r.stdout
+
+
 def impossible_media_batch():
     """A create patch carrying `media` - a combination the Overlay cannot emit,
     since every shape control is base-only."""

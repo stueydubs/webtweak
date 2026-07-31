@@ -45,10 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one patch routinely carries an un-banded resize alongside an unrelated banded
   edit. `wtreconcile.py`'s pending-batch summary surfaces each patch's media groups
   (condition + properties) instead of showing only `changes`, so a media-only patch
-  no longer reads as a no-op - and flags a `create` patch carrying `media`, which has
-  no way to carry a band and so cannot have come from webtweak: `media?!` inline in
-  the summary, plus a stderr warning in both modes, since `--full` dumps patches
-  verbatim and is the path the skill sends Claude to for real work.
+  no longer reads as a no-op. On a patch carrying both it also appends `base-only:
+  <props>`, naming the base declarations no band covers - the set difference step 6
+  needs is mechanical, and leaving it to be re-derived by eye is what read the rule
+  at the wrong granularity once already. And it flags a `create` patch carrying
+  `media`, which has no way to carry a band and so cannot have come from webtweak:
+  `media?!` inline in the summary, plus a stderr warning in both modes, since
+  `--full` dumps patches verbatim and is the path the skill sends Claude to for real
+  work.
 
 ### Changed
 
