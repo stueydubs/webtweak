@@ -73,8 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eleventh control on a bar sized for ten, so below 620px it sheds its second word
   (`Reset`, with the full meaning kept in the button's title) and every bar button
   gives up some padding - the same shortened-never-removed treatment the scope label
-  already had. Below 480px, the width the Overlay targets and the suite tests at, the
-  bar was already over-full before this button existed.
+  already had. The bar itself now wraps rather than relying on that shed alone; see
+  Fixed, below.
 
 - **A band you typed by hand survives a reload.** `pageConditions()` re-derives itself
   from the page's stylesheets on every call, so a condition the CSS does not declare
@@ -115,6 +115,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so it is now the one control that shrinks, with an ellipsis for whatever doesn't
   fit; the `.wt-status { min-width: 0 }` narrow-window rule this reactivates had
   been dead code since the flex-shrink hardening, doing nothing at any width.
+- **Save could sit outside the window, unclickable, once anything had been saved.**
+  The reconcile badge appears only after a save, and the 68px it takes was enough to
+  push Save past the right edge - 65px past, at 480px. It went unseen because the
+  test guarding this had filtered out anything `hidden`, which the badge is until the
+  moment it matters, and because no test had saved at a narrow width and then gone
+  back to the bar. The badge was not the real fault, though: the bar had been pushed
+  past its own width three times, each time answered by shortening a label, and by
+  480px the eight controls needed 472 of the 480 before the badge had any width at
+  all. There was no shed left to make, and the overflow was never confined to narrow
+  windows either - the longest badge text pushed Save out at 640px and 820px too. So
+  **the bar wraps now**, at every width, and keeps its labels. Its height is
+  therefore a rendered fact rather than a constant, so the Overlay measures it and
+  publishes `--wt-bar-h`, which the panel and the place-hint position against -
+  replacing two `top: 56px` rules and a `calc(100vh - 72px)` that encoded the same
+  guess in three places, none of which knew about the others. The status line gets
+  `flex-basis: 0` at narrow widths so a long message fills what is left of its row
+  instead of claiming a whole one. Two tests now assert the invariants directly, at
+  ten widths each, with the badge showing and every control live: nothing the bar
+  shows may fall outside the bar's box, and the panel must clear the bar.
 - **The opening tag in a Fingerprint could leak an Overlay-generated class.**
   `openTag()` read `class` straight off the DOM instead of through `nonWtClasses()`
   the way `selector` already does, so a shape's `wt-shape` class (and now a banded

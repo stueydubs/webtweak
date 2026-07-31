@@ -23,15 +23,40 @@ Two existing behaviours need re-checking against the new shape, because both wer
 
 ## Acceptance criteria
 
-- [ ] After a reload, a banded edit still applies at a width inside its band
-- [ ] After a reload, that same edit does not apply at a width outside its band
-- [ ] An element with both a base and a banded change restores both
-- [ ] A restored banded edit re-saves identically, producing no duplicate or drifted patch
-- [ ] A banded patch whose element cannot be relocated is preserved whole across a save, bands included
-- [ ] Setting a restored banded edit back to its authored value is recognised as a revert and clears it
+- [x] After a reload, a banded edit still applies at a width inside its band
+- [x] After a reload, that same edit does not apply at a width outside its band
+- [x] An element with both a base and a banded change restores both
+- [x] A restored banded edit re-saves identically, producing no duplicate or drifted patch
+- [x] A banded patch whose element cannot be relocated is preserved whole across a save, bands included
+- [x] Setting a restored banded edit back to its authored value is recognised as a revert and clears it
 - [x] A hand-typed Band is still selectable in the Scope picker after a reload
-- [ ] The existing reload-safety rules still hold, with their existing tests unmodified
-- [ ] Browser tests cover the above, asserting at two widths, and carry the browser marker
+- [x] The existing reload-safety rules still hold, with their existing tests unmodified
+- [x] Browser tests cover the above, asserting at two widths, and carry the browser marker
+
+## Outcome
+
+`restore()` already did the right thing - the six open criteria were all about
+proving it, and every one passed first time. The code that made them pass had been
+written alongside 0015, because restoring has to undo whatever `save()` did; what was
+missing was any test that a reload round-trip preserved a band, and an untested
+promise is not a kept one.
+
+`tests/test_e2e_banded_reload.py` covers them: applies-inside/not-outside on a band
+the page declares (the hand-typed case was already covered in
+`test_e2e_banded_edits.py`), base-and-band on one element, the re-save round-trip,
+the stranded banded patch, and the revert-to-authored-value baseline. Each asserts at
+two widths, per the PRD's testing decision.
+
+**Writing them surfaced a real defect elsewhere**, which is the return on the work: three of the
+five timed out because Save was outside the viewport. The reconcile badge appears
+only after a save and takes 68px, which pushed Save 65px off a 480px window - and no
+test had ever saved at a narrow width and then gone back to the bar. The bar had been
+over its width three times before this, each time answered by shortening a label, and
+at 480px the eight controls needed 472 of the 480 before the badge had any width at
+all. It is fixed at the source: the bar wraps now, its height is measured and
+published as `--wt-bar-h` rather than guessed in three places, and two parametrised
+tests assert across ten widths that nothing falls outside the bar and that the panel
+clears it. See CHANGELOG.
 
 ## Blocked by
 

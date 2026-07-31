@@ -1148,6 +1148,22 @@
   bandStyleEl.id = BAND_STYLE_ID;
   document.head.appendChild(bandStyleEl);
 
+  // Publish the bar's measured height as --wt-bar-h, which the panel and the
+  // place-hint position themselves against. The bar wraps, so its height is a fact
+  // about what is currently rendered - it measures 44px on one row and 85-90px on
+  // two, depending on how the controls fall - and it changes for reasons no media
+  // query can see: a badge appearing after a save is enough to wrap the row. The
+  // stylesheet carries the one-row value as a fallback, so nothing is unpositioned
+  // if this never runs. Two `top: 56px` rules and a `calc(100vh - 72px)` used to
+  // encode the same guess in three places, none of which knew about the others.
+  var barEl = root.querySelector(".wt-bar");
+  function measureBar() {
+    root.style.setProperty("--wt-bar-h", Math.round(barEl.getBoundingClientRect().height) + "px");
+  }
+  measureBar();
+  if (window.ResizeObserver) new ResizeObserver(measureBar).observe(barEl);
+  else window.addEventListener("resize", measureBar);   // no RO: a resize is the common cause
+
   var hoverBox = document.getElementById("wt-hover");
   var selBox = document.getElementById("wt-selected");
   var selTag = document.getElementById("wt-seltag");

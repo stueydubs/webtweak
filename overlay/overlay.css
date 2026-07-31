@@ -17,17 +17,37 @@ html { user-select: none; }
   inset: 0;
   z-index: 2147483000;
   pointer-events: none; /* let the page receive picker events; UI re-enables locally */
+  /* How tall the bar currently is. Everything that hangs below the bar reads this
+     instead of repeating a number, because the bar wraps (see .wt-bar) and its
+     height is therefore a fact about the rendered content, not a constant - it
+     measured 44, 85 and 90px across the widths this is used at. The value here is
+     only the one-row fallback; overlay.js measures the bar and writes the real
+     height back onto this property, which is the one thing CSS cannot do for
+     itself. Two `top: 56px` rules and a `calc(100vh - 72px)` used to encode the
+     same guess in three places, none of which knew about the others. */
+  --wt-bar-h: 44px;
 }
 
 #wt-root .wt-ui { pointer-events: auto; }
 
 /* --- top bar ------------------------------------------------------------- */
+/* Wraps at every width, not only narrow ones. The bar has now been pushed past its
+   own width three times - a long status message, Reset all as an eleventh control,
+   and the reconcile badge appearing after a save - and each time the fix was to
+   shorten a label, which buys back only what that one addition cost. At 480px the
+   eight controls need 472 of the 480px before the badge has any width at all, so
+   there was no shed left to make; and the overflow was never confined to narrow
+   windows anyway - the longest badge text pushed Save out at 640px and 820px too.
+   Wrapping ends the whole class instead of the latest instance, and it keeps the
+   rule the .wt-crumb comment states: a narrow window is not a reduced overlay. */
 .wt-bar {
   position: fixed;
   top: 0; left: 0; right: 0;
-  height: 44px;
+  min-height: 44px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   padding: 0 14px;
   background: #15171c;
@@ -56,11 +76,12 @@ html { user-select: none; }
 /* flex-shrink:1 (not 0 like every other control): status has nothing clickable in
    it, so letting it shrink can never overlap a control the way the crumb comment
    above warns about - and it has to shrink, or a long message (e.g. "reset - save
-   to drop these edits") holds the bar at its own unwrapped width and pushes Save
-   out past the right edge at a narrow window, which is exactly the width band
-   editing (0015) means to be worked at. The `min-width: 0` override at 820px below
-   only takes effect because of this - shrink is what lets the reserved width in
-   the comment there actually go away. */
+   to drop these edits") holds the bar at its own unwrapped width. That used to push
+   Save clean out of the window; now that the bar wraps it costs a row instead, which
+   is cheaper but still worth avoiding - see the flex-basis override at 620px, where
+   shrink alone stops being enough. The `min-width: 0` override at 820px below only
+   takes effect because of this - shrink is what lets the reserved width in the
+   comment there actually go away. */
 .wt-status {
   flex: 0 1 auto; color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -113,11 +134,14 @@ html { user-select: none; }
 .wt-band-list .wt-band:disabled { cursor: not-allowed; opacity: 0.55; }
 .wt-band-list .wt-band:disabled:hover { background: none; }
 
-/* The bar carries ten controls, and this feature asks you to work at 480px - so it
-   has to survive the widths it is for. Shed in order of how little is lost: the
-   scope label (the field's own title says the same thing), the status column's
-   reserved width, then the wordmark and some button padding. Nothing that is a
-   control gets removed - a narrow window is not a reduced overlay. */
+/* The bar carries eleven controls and this feature asks you to work at 480px, so the
+   three blocks below keep it to as few rows as they can. Reachability is no longer
+   what they defend - the bar wraps, so nothing can be pushed out of it - but every
+   row the bar grows by is a row of the user's page it covers, and that is worth
+   shedding a label for. Shed in order of how little is lost: the scope label (the
+   field's own title says the same thing), the status column's reserved width, then
+   the wordmark and some button padding. Nothing that is a control gets removed - a
+   narrow window is not a reduced overlay. */
 @media (max-width: 820px) {
   /* Shortened, never removed. The control has to keep reading as a scope at every
      width, so "Applies at:" becomes "At:" rather than disappearing. */
@@ -132,11 +156,10 @@ html { user-select: none; }
   .wt-scope { gap: 4px; }
   #wt-scope-input { width: 66px; }
 }
-/* Reset all is the eleventh control on a bar the comment above sized for ten, and by
-   480px every shrinkable thing (crumb, status, wordmark) is already at zero - so this
-   is where the last 50px comes from. The word first, then padding off every button:
-   losing "all" costs a shade of precision the button's own title still carries, and
-   losing padding costs nothing but air.
+/* The bar itself wraps at every width now (see .wt-bar), so this block no longer has
+   to make the controls fit - it makes the wrapped bar read well, which is a smaller
+   job. The shed stays because two short rows look composed where two ragged ones look
+   broken, and because every row the bar takes is a row of the user's page it covers.
    620, not the round 600 it wants to be: the Overlay's own breakpoints must not
    collide with any the test fixture declares, or `pageConditions()` cannot be shown
    to exclude this stylesheet - a shared condition string is offered either way, and
@@ -146,8 +169,19 @@ html { user-select: none; }
 @media (max-width: 620px) {
   .wt-reset-long { display: none; }
   .wt-reset-short { display: inline; }
-  .wt-bar { gap: 5px; padding: 0 6px; }
+  .wt-bar { gap: 5px; padding: 4px 6px; }
   .wt-bar .wt-btn { padding: 6px 7px; }
+  /* The crumb names the selected element; on a bar that has wrapped it takes the
+     whole first row, so the controls beneath line up rather than sitting in a ragged
+     column beside a stub of element name. */
+  .wt-crumb { flex: 1 0 100%; }
+  /* flex-basis 0, which is the whole point rather than a tidy-up: `auto` sizes the
+     status to its own text before wrapping is decided, so a long message (the
+     partial-restore report is 76 characters) does not shrink - it claims an entire
+     row to itself and takes the bar to four. Basis 0 means it never widens a line,
+     so it fills what is left of whichever row it lands on and ellipsises. Nothing is
+     lost that was not already lost: shrink alone had it measuring 0px wide here. */
+  .wt-status { flex: 1 1 0; }
 }
 /* The hint is the one thing here that teaches rather than does, so it goes last. */
 @media (max-width: 640px) {
@@ -227,7 +261,7 @@ html { user-select: none; }
 html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-place-hint {
   position: fixed;
-  top: 56px; left: 50%; transform: translateX(-50%);
+  top: calc(var(--wt-bar-h) + 12px); left: 50%; transform: translateX(-50%);
   background: #ffd479; color: #1a1300;
   border-radius: 8px;
   padding: 8px 14px; font-size: 12px; font-weight: 600;
@@ -276,9 +310,9 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 /* --- properties panel --------------------------------------------------- */
 .wt-panel {
   position: fixed;
-  top: 56px; right: 12px;
+  top: calc(var(--wt-bar-h) + 12px); right: 12px;
   width: 270px;
-  max-height: calc(100vh - 72px);
+  max-height: calc(100vh - var(--wt-bar-h) - 28px);
   overflow-y: auto;
   background: #1a1d23;
   color: #e8eaed;

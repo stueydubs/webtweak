@@ -1147,31 +1147,85 @@ def test_reset_all_leaves_nothing_to_save(served):
     assert status == "nothing changed yet"
 
 
-def test_every_bar_control_fits_at_the_narrow_width_the_overlay_targets(served):
-    """Adding Reset all was the second time a bar control pushed Save off a 480px
-    viewport - the first was a long status message, fixed by letting .wt-status
-    shrink. This asserts the whole bar, not one button, so the next control added
-    fails here rather than in five unrelated banded-edit tests that simply could no
-    longer reach Save. 480px is the width the breakpoint feature exists to be used
-    at, and the width the suite runs its narrow tests at."""
+# The bar's worst case, assembled by hand because no single user action produces all
+# of it at once: every control enabled, the longest status the Overlay writes, and the
+# badge showing its longest text. The badge is the part that keeps being forgotten -
+# it is hidden until a save, so an earlier version of this test filtered it out with
+# `!k.hidden` and passed while Save sat 65px off a 480px viewport the moment anything
+# was saved. Whatever the bar can show at once is what has to fit.
+LONGEST_STATUS = ("restored 4 of 6 edited elements; 2 could not be re-located"
+                  " (kept for reconcile)")
+LONGEST_BADGE = "source changed - reload"
+
+_WORST_CASE = """([status, badge]) => {
+    document.getElementById('wt-status').textContent = status;
+    const b = document.getElementById('wt-badge');
+    b.hidden = false; b.textContent = badge; b.className = 'wt-badge wt-badge-warn';
+    ['wt-undo', 'wt-redo', 'wt-reset-all', 'wt-deselect', 'wt-save']
+        .forEach(id => { const e = document.getElementById(id); if (e) e.disabled = false; });
+}"""
+
+# Every width the Overlay's own stylesheet changes behaviour at, plus one either side.
+# The overflow was never confined to narrow windows: the longest badge pushed Save out
+# at 640px and 820px as well, which a 480px-only test could not see.
+BAR_WIDTHS = [360, 400, 480, 560, 620, 640, 700, 820, 900, 1280]
+
+
+@pytest.mark.parametrize("width", BAR_WIDTHS)
+def test_every_bar_control_stays_inside_the_bar(served, width):
+    """The bar has been pushed past its own width three times - a long status message,
+    Reset all as an eleventh control, then the reconcile badge appearing after a save.
+    Each was fixed by shortening a label, which buys back only what that one addition
+    cost; the bar now wraps instead, so this asserts the invariant that actually
+    matters rather than the width of one row: nothing the bar shows may fall outside
+    the bar's own box, at any width, in the worst state the bar can be in.
+
+    A control outside that box is not merely ugly - it is unclickable, and Save was
+    the one that kept landing there.
+    """
     tmp, port = served
     with sync_playwright() as p:
-        browser, page = open_page(p, port, width=480)
-        # The worst case: every control live, and the longest status the Overlay writes.
+        browser, page = open_page(p, port, width=width)
         edit(page, "#headline", "#wt-fs", "70px")
-        page.evaluate(
-            """() => { document.getElementById('wt-status').textContent =
-                'restored 4 of 6 edited elements; 2 could not be re-located'
-                + ' (kept for reconcile)'; }"""
-        )
-        overflow = page.evaluate(
+        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        escaped = page.evaluate(
             """() => {
                 const bar = document.querySelector('.wt-bar');
-                const shown = Array.from(bar.children).filter(k => !k.hidden);
-                return shown
-                    .filter(k => k.getBoundingClientRect().right > bar.getBoundingClientRect().width + 1)
+                const box = bar.getBoundingClientRect();
+                return Array.from(bar.children)
+                    .filter(k => !k.hidden && k.getBoundingClientRect().width > 0)
+                    .filter(k => {
+                        const r = k.getBoundingClientRect();
+                        return r.right > box.right + 1 || r.left < box.left - 1
+                            || r.bottom > box.bottom + 1;
+                    })
                     .map(k => k.id || k.className);
             }"""
         )
         browser.close()
-    assert overflow == [], f"pushed outside a 480px viewport: {overflow}"
+    assert escaped == [], f"outside the bar at {width}px: {escaped}"
+
+
+@pytest.mark.parametrize("width", BAR_WIDTHS)
+def test_the_panel_clears_the_bar_at_every_width(served, width):
+    """The bar wraps, so its height is a rendered fact rather than a constant, and the
+    panel positions itself against a `--wt-bar-h` the Overlay measures and writes back.
+    If that measurement stops happening the panel silently slides under the bar and
+    its top controls become unclickable - so assert the geometry, not the property."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=width)
+        page.click("#headline", position={"x": 8, "y": 8})    # opens the panel
+        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        # A wait, not a bare read: the measurement rides a ResizeObserver, so it lands
+        # a frame after the layout change rather than synchronously. Five seconds is
+        # far more than a frame and keeps a real failure from costing 30.
+        page.wait_for_function(
+            """() => {
+                const bar = document.querySelector('.wt-bar').getBoundingClientRect();
+                const panel = document.querySelector('.wt-panel').getBoundingClientRect();
+                return panel.top >= bar.bottom;
+            }""",
+            timeout=5000,
+        )
+        browser.close()
