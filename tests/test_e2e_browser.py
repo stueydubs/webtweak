@@ -11,7 +11,7 @@ import shutil
 
 import pytest
 
-from conftest import edit, open_page, place_shape, select_card
+from conftest import edit, open_page, place_shape, select_card, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -1039,3 +1039,139 @@ def test_shorthand_spacing_revert_records_nothing(served):
         status = page.eval_on_selector("#wt-status", "el => el.textContent")
         browser.close()
     assert status == "nothing changed yet"
+
+
+# --- Reset all --------------------------------------------------------------
+# "Reset this element" only ever cleared the selection. Discarding a session meant
+# selecting each edited element in turn and resetting it - and the change list was
+# the only place that even said which ones they were.
+
+def reset_all_disabled(page):
+    return page.eval_on_selector("#wt-reset-all", "el => el.disabled")
+
+
+def test_reset_all_is_disabled_until_there_is_something_to_discard(served):
+    """A button that offers to reset nothing teaches you to ignore it."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        at_start = reset_all_disabled(page)
+        edit(page, "#headline", "#wt-fs", "70px")
+        after_edit = reset_all_disabled(page)
+        browser.close()
+    assert at_start is True
+    assert after_edit is False
+
+
+def test_selecting_an_element_alone_does_not_arm_reset_all(served):
+    """Selecting arms a baseline entry in `edited`, so a naive "is the map empty"
+    check would enable the button for a session with no edits in it."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#headline")
+        select_card(page)
+        disabled = reset_all_disabled(page)
+        browser.close()
+    assert disabled is True
+
+
+def test_reset_all_discards_every_element_at_once(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "70px")
+        select_card(page)
+        set_field(page, "#wt-padding-top", "70px")
+        before = page.evaluate("""() => [
+            getComputedStyle(document.querySelector('#headline')).fontSize,
+            getComputedStyle(document.querySelector('.card')).paddingTop]""")
+        page.click("#wt-reset-all")
+        status = page.eval_on_selector("#wt-status", "el => el.textContent")
+        after = page.evaluate("""() => [
+            getComputedStyle(document.querySelector('#headline')).fontSize,
+            getComputedStyle(document.querySelector('.card')).paddingTop]""")
+        disabled = reset_all_disabled(page)
+        browser.close()
+    assert before == ["70px", "70px"]
+    assert after == ["44px", "24px"]      # both back to authored
+    assert status.startswith("reset 2 elements")
+    assert disabled is True
+
+
+def test_reset_all_is_one_undo_step(served):
+    """The undo batch IS the safety net here - there is deliberately no confirm
+    dialog - so one Ctrl+Z has to bring the whole session back, not one element."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "70px")
+        select_card(page)
+        set_field(page, "#wt-padding-top", "70px")
+        page.click("#wt-reset-all")
+        page.keyboard.press("Control+z")
+        restored = page.evaluate("""() => [
+            getComputedStyle(document.querySelector('#headline')).fontSize,
+            getComputedStyle(document.querySelector('.card')).paddingTop]""")
+        browser.close()
+    assert restored == ["70px", "70px"]
+
+
+def test_reset_all_removes_a_drawn_shape_and_one_undo_brings_it_back(served):
+    """A created shape has no authored baseline, so resetting it is a deletion -
+    the destructive case the single undo step most has to cover."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        place_shape(page)
+        page.click("#wt-reset-all")
+        gone = page.evaluate("document.querySelectorAll('svg.wt-shape').length")
+        page.keyboard.press("Control+z")
+        back = page.evaluate("document.querySelectorAll('svg.wt-shape').length")
+        browser.close()
+    assert gone == 0
+    assert back == 1
+
+
+def test_reset_all_leaves_nothing_to_save(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "70px")
+        select_card(page)
+        set_field(page, "#wt-padding-top", "70px")
+        page.click("#wt-reset-all")
+        page.click("#wt-save")
+        status = page.eval_on_selector("#wt-status", "el => el.textContent")
+        browser.close()
+    assert status == "nothing changed yet"
+
+
+def test_every_bar_control_fits_at_the_narrow_width_the_overlay_targets(served):
+    """Adding Reset all was the second time a bar control pushed Save off a 480px
+    viewport - the first was a long status message, fixed by letting .wt-status
+    shrink. This asserts the whole bar, not one button, so the next control added
+    fails here rather than in five unrelated banded-edit tests that simply could no
+    longer reach Save. 480px is the width the breakpoint feature exists to be used
+    at, and the width the suite runs its narrow tests at."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        # The worst case: every control live, and the longest status the Overlay writes.
+        edit(page, "#headline", "#wt-fs", "70px")
+        page.evaluate(
+            """() => { document.getElementById('wt-status').textContent =
+                'restored 4 of 6 edited elements; 2 could not be re-located'
+                + ' (kept for reconcile)'; }"""
+        )
+        overflow = page.evaluate(
+            """() => {
+                const bar = document.querySelector('.wt-bar');
+                const shown = Array.from(bar.children).filter(k => !k.hidden);
+                return shown
+                    .filter(k => k.getBoundingClientRect().right > bar.getBoundingClientRect().width + 1)
+                    .map(k => k.id || k.className);
+            }"""
+        )
+        browser.close()
+    assert overflow == [], f"pushed outside a 480px viewport: {overflow}"

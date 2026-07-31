@@ -56,6 +56,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delimiters (`;` or `[]`, both of which survive inside parens per CSS MQ4
   `<general-enclosed>`) or is blank - unquoted, one group could print as two, with a
   property list that was never there.
+- **Drag a margin or padding box up and down to change it.** Spacing is tuned by eye
+  against the page rather than by typing a figure, so the four boxes take a vertical
+  drag - up adds, down subtracts, one CSS unit per pixel, the unit preserved. Typing
+  still works: the drag only takes over once the pointer has travelled 3px, so a plain
+  click still lands a caret. A whole drag is one Ctrl+Z, not one per pointermove.
+  Padding stops at zero; margin does not, because a negative margin is a real
+  technique. A box showing `auto` is left alone rather than turned into a number
+  nobody asked for - that one silently kills a centred block.
+- **Reset all, in the bar.** Discarding a session meant selecting each edited element
+  and resetting it one at a time, with the change list the only place that said which
+  ones they were. The button is disabled until there is something to discard
+  (selecting an element arms a baseline entry, which does not count), and the whole
+  reset is a single undo step - deliberately no confirm dialog, because the undo IS
+  the safety net and a modal would block every Overlay event behind it. It is the
+  eleventh control on a bar sized for ten, so below 620px it sheds its second word
+  (`Reset`, with the full meaning kept in the button's title) and every bar button
+  gives up some padding - the same shortened-never-removed treatment the scope label
+  already had. Below 480px, the width the Overlay targets and the suite tests at, the
+  bar was already over-full before this button existed.
+
 - **A band you typed by hand survives a reload.** `pageConditions()` re-derives itself
   from the page's stylesheets on every call, so a condition the CSS does not declare
   lives only in memory - and `restore()` re-applied such an edit without re-registering
@@ -77,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The alignment buttons read as words.** `L C R J` was an abbreviation you had to
+  decode, crammed into the right-hand corner of a row that was otherwise empty: the
+  control was sizing to its content while the row's `space-between` pushed it there.
+  `.wt-align` now claims the row the way `.wt-colour` and `.wt-sides` already did, and
+  the buttons say Left, Centre, Right and Justify. A test asserts none of the four is
+  clipped, since four words in one row is tight by design.
 - The browser test suite genuinely runs locally now. It had been skipping one line per
   module - which reads green - because Playwright was never installed. See the
   README's Development section, and check the skip count rather than the colour.

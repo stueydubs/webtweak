@@ -82,6 +82,7 @@ html { user-select: none; }
 .wt-scope { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .wt-scope-label { color: #717784; font-size: 11px; white-space: nowrap; }
 .wt-scope-short { display: none; }
+.wt-reset-short { display: none; }   /* swapped in below 600px; see the media block */
 #wt-scope-input {
   width: 92px;
   background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
@@ -130,6 +131,23 @@ html { user-select: none; }
   .wt-bar .wt-btn { padding: 6px 9px; }
   .wt-scope { gap: 4px; }
   #wt-scope-input { width: 66px; }
+}
+/* Reset all is the eleventh control on a bar the comment above sized for ten, and by
+   480px every shrinkable thing (crumb, status, wordmark) is already at zero - so this
+   is where the last 50px comes from. The word first, then padding off every button:
+   losing "all" costs a shade of precision the button's own title still carries, and
+   losing padding costs nothing but air.
+   620, not the round 600 it wants to be: the Overlay's own breakpoints must not
+   collide with any the test fixture declares, or `pageConditions()` cannot be shown
+   to exclude this stylesheet - a shared condition string is offered either way, and
+   test_webtweaks_own_media_queries_are_not_offered_as_the_pages cannot tell which
+   sheet it came from. The fixture uses 900 and 600; the Overlay uses 820, 700, 640
+   and this one. */
+@media (max-width: 620px) {
+  .wt-reset-long { display: none; }
+  .wt-reset-short { display: inline; }
+  .wt-bar { gap: 5px; padding: 0 6px; }
+  .wt-bar .wt-btn { padding: 6px 7px; }
 }
 /* The hint is the one thing here that teaches rather than does, so it goes last. */
 @media (max-width: 640px) {
@@ -357,7 +375,8 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
    scarce dimension - it already scrolls on a short window. The boxes share the row
    evenly and stay legible at three digits plus a unit. */
 /* Four boxes need the room a full-width label was taking, so a sides row gets a
-   narrower label column - enough that "32px" reads without clipping. */
+   narrower label column - enough that "32px" reads without clipping. The align row
+   uses it for the same reason: four full words need the width back. */
 .wt-field-wide label { flex: 0 0 54px; }
 .wt-sides { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; }
 .wt-sides input[type="text"] {
@@ -365,7 +384,15 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
   border-radius: 4px; padding: 4px 2px;
   font: 11px ui-monospace, Menlo, monospace; text-align: center;
+  /* Spacing is tuned by eye against the page, so these boxes take a vertical drag.
+     The cursor is the only thing advertising it - without it the gesture is a secret. */
+  cursor: ns-resize;
 }
+.wt-sides input[type="text"]:disabled { cursor: not-allowed; }
+.wt-sides input[type="text"]:focus { cursor: text; }
+/* While a drag is running the pointer is captured and moving over text, which would
+   otherwise leave the box with a highlighted range under the cursor. */
+.wt-sides input.wt-scrubbing { user-select: none; border-color: #ffd479; }
 .wt-link {
   flex: 0 0 auto; background: #0f1115; border: 1px solid #2c303a; color: #6b7280;
   border-radius: 4px; padding: 3px 4px; font-size: 10px; line-height: 1; cursor: pointer;
@@ -422,10 +449,19 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 }
 .wt-suggest-item:hover, .wt-suggest-item:focus { background: #2c303a; }
 
-.wt-align { display: flex; gap: 4px; }
+/* `flex: 1` on the container, not just the buttons: without it the control sized to
+   its content and the row's `space-between` parked four tiny buttons in the right
+   corner with the rest of the row empty - the space for full words was there all
+   along. Matches .wt-colour and .wt-sides, which already claim the row this way. */
+.wt-align { flex: 1; min-width: 0; display: flex; gap: 3px; }
 .wt-align button {
-  flex: 1; background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
-  border-radius: 5px; padding: 4px 0; cursor: pointer; font-size: 12px;
+  flex: 1 1 0; min-width: 0;
+  background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
+  border-radius: 5px; padding: 4px 1px; cursor: pointer; font-size: 11px;
+  /* Four words in ~180px is tight by design - clip rather than wrap, so a narrow
+     panel never reflows the row to two lines. The title attribute carries the
+     full word either way. */
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .wt-align button.on { background: #ffd479; color: #1a1300; border-color: #ffd479; }
 .wt-block { width: 100%; margin-top: 4px; }

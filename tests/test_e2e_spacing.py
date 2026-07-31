@@ -169,3 +169,138 @@ def test_undo_steps_back_through_one_side(served):
         browser.close()
     assert widened[1] == "48px"
     assert restored == ["24px"] * 4
+
+
+# --- drag-to-scrub ----------------------------------------------------------
+# Spacing is tuned by eye against the page rather than by typing a figure, so the
+# boxes take a vertical drag: up adds, down subtracts, one CSS unit per pixel.
+
+def scrub(page, field, dy, steps=8):
+    """Drag a spacing box vertically. `dy` > 0 drags UP, which increases.
+
+    Deliberately moves in several hops: a real drag is a stream of pointermoves,
+    and the first implementation only worked for slow ones - it took the pointer
+    capture at the 3px threshold rather than on pointerdown, so a quick flick left
+    the 24px-tall box before any pointermove landed on it and nothing happened.
+    """
+    box = page.eval_on_selector(
+        field, "el => { const b = el.getBoundingClientRect();"
+               "return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; }")
+    page.mouse.move(box["x"], box["y"])
+    page.mouse.down()
+    for i in range(1, steps + 1):
+        page.mouse.move(box["x"], box["y"] - dy * i / steps)
+    page.mouse.up()
+
+
+def test_dragging_a_spacing_box_up_increases_it(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        scrub(page, "#wt-padding-top", 20)
+        field = page.input_value("#wt-padding-top")
+        rendered = spacing_of(page, ".card", "padding")[0]
+        browser.close()
+    assert field == "44px"       # 24 + 20, unit preserved
+    assert rendered == "44px"    # and the page actually shows it
+
+
+def test_dragging_down_decreases_it(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        scrub(page, "#wt-padding-top", -10)
+        rendered = spacing_of(page, ".card", "padding")[0]
+        browser.close()
+    assert rendered == "14px"
+
+
+def test_a_fast_drag_scrubs_as_well_as_a_slow_one(served):
+    """Two big jumps rather than eight small ones - the case the capture-on-threshold
+    implementation silently ignored."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        scrub(page, "#wt-padding-top", 40, steps=2)
+        rendered = spacing_of(page, ".card", "padding")[0]
+        browser.close()
+    assert rendered == "64px"
+
+
+def test_a_whole_drag_is_one_undo_step(served):
+    """A drag fires an input event per pointermove. Without the existing
+    same-prop collapsing that would be dozens of undo steps for one gesture."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        scrub(page, "#wt-padding-top", 20)
+        dragged = spacing_of(page, ".card", "padding")[0]
+        page.keyboard.press("Control+z")
+        undone = spacing_of(page, ".card", "padding")[0]
+        browser.close()
+    assert dragged == "44px"
+    assert undone == "24px"
+
+
+def test_dragging_padding_below_zero_stops_at_zero(served):
+    """Padding cannot be negative, so the drag stops rather than recording a value
+    the browser would discard."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        scrub(page, "#wt-padding-top", -200)
+        field = page.input_value("#wt-padding-top")
+        rendered = spacing_of(page, ".card", "padding")[0]
+        browser.close()
+    assert field == "0px"
+    assert rendered == "0px"
+
+
+def test_dragging_margin_below_zero_is_allowed(served):
+    """A negative margin is a real technique - reconcile already maps an upward
+    nudge onto one - so margin has no floor, unlike padding."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        scrub(page, "#wt-margin-top", -60)
+        field = page.input_value("#wt-margin-top")
+        browser.close()
+    assert field == "-28px"      # 32 - 60
+
+
+def test_a_plain_click_still_lands_a_caret_for_typing(served):
+    """The drag must not swallow the click. Below the slop threshold nothing is
+    scrubbed and the box behaves like the text input it is."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        page.click("#wt-padding-left")
+        unchanged = page.input_value("#wt-padding-left")
+        page.keyboard.press("Control+a")
+        page.keyboard.type("9px")
+        page.dispatch_event("#wt-padding-left", "input")
+        typed = spacing_of(page, ".card", "padding")[3]
+        browser.close()
+    assert unchanged == "24px"
+    assert typed == "9px"
+
+
+def test_dragging_a_keyword_box_changes_nothing(served):
+    """`auto` has no number to move. Turning it into one would invent a value the
+    user never asked for - and silently kill a centred block."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        page.evaluate("document.getElementById('wt-margin-left').value = 'auto'")
+        scrub(page, "#wt-margin-left", 25)
+        field = page.input_value("#wt-margin-left")
+        browser.close()
+    assert field == "auto"

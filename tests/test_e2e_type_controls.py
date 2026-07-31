@@ -139,3 +139,83 @@ def test_a_typed_spacing_still_works(served):
         save(page)
         browser.close()
     assert changes(tmp) == {"letter-spacing": "0.3px"}
+
+
+# --- alignment --------------------------------------------------------------
+# The buttons said `L C R J`: an abbreviation you had to decode, crammed into the
+# right-hand corner of a row that was mostly empty. The control was sizing to its
+# content while the row's `space-between` pushed it there.
+
+def align_buttons(page):
+    return page.evaluate(
+        """() => Array.from(document.querySelectorAll('#wt-align button')).map(b => ({
+            value: b.dataset.align,
+            text: b.textContent,
+            on: b.classList.contains('on'),
+            clipped: b.scrollWidth > b.clientWidth + 1,
+        }))"""
+    )
+
+
+def test_the_align_buttons_read_as_words(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("h1.title")
+        buttons = align_buttons(page)
+        browser.close()
+    assert [b["text"] for b in buttons] == ["Left", "Centre", "Right", "Justify"]
+    # The label is what changed; the value written to CSS must not have.
+    assert [b["value"] for b in buttons] == ["left", "center", "right", "justify"]
+
+
+def test_no_align_button_is_clipped(served):
+    """Four words in one row is tight by design, so this is the assertion that
+    stops a future label or padding change from silently truncating one."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("h1.title")
+        buttons = align_buttons(page)
+        browser.close()
+    assert [b["clipped"] for b in buttons] == [False] * 4
+
+
+def test_the_align_control_claims_its_whole_row(served):
+    """The bug was the container sizing to content. Sibling controls (.wt-colour,
+    .wt-sides) already claim the row; this one did not."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("h1.title")
+        widths = page.evaluate(
+            """() => {
+                const c = document.querySelector('#wt-align');
+                const row = c.closest('.wt-field');
+                const label = row.querySelector('label');
+                return {
+                    control: c.getBoundingClientRect().width,
+                    row: row.getBoundingClientRect().width,
+                    label: label.getBoundingClientRect().width,
+                };
+            }"""
+        )
+        browser.close()
+    # Everything the label and the row gap leave over.
+    assert widths["control"] > widths["row"] - widths["label"] - 20
+
+
+def test_clicking_an_alignment_applies_and_marks_it(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("h1.title")
+        page.click('#wt-align button[data-align="right"]')
+        rendered = page.eval_on_selector("h1.title", "el => getComputedStyle(el).textAlign")
+        marked = [b["value"] for b in align_buttons(page) if b["on"]]
+        save(page)
+        recorded = changes(tmp)["text-align"]
+        browser.close()
+    assert rendered == "right"
+    assert marked == ["right"]
+    assert recorded == "right"

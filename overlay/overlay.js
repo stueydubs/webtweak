@@ -107,14 +107,16 @@
   // True iff any edited element still holds real changes (base or banded) - the
   // single source of truth for the unsaved-changes (beforeunload) guard, so resets
   // that empty the map don't leave a stale dirty flag.
+  function entryHasEdits(e) {
+    if (!e) return false;
+    if (Object.keys(e.changes).length) return true;
+    return Object.keys(e.media || {}).some(function (cond) {
+      return Object.keys(e.media[cond]).length > 0;
+    });
+  }
   function hasRealEdits() {
     var any = false;
-    edited.forEach(function (e) {
-      if (Object.keys(e.changes).length) any = true;
-      Object.keys(e.media || {}).forEach(function (cond) {
-        if (Object.keys(e.media[cond]).length) any = true;
-      });
-    });
+    edited.forEach(function (e) { if (entryHasEdits(e)) any = true; });
     return any;
   }
   // ---- undo / redo ----------------------------------------------------------
@@ -328,9 +330,15 @@
     // and the Patch then carried all four sides whatever you touched, which is why
     // reconcile has to guess whether a computed `168px` was an authored `auto`.
     // Recording per-side removes that guess at the source. See sideProp/writeSides.
+    // `scrubMin` is the floor a drag stops at, and only a drag - typing is left to the
+    // usual validity gate. Margin has none on purpose: a negative margin is a real
+    // technique, and reconcile already maps an upward nudge onto one. Padding cannot
+    // go below zero, so a drag there stops at zero rather than recording a value the
+    // browser will discard.
     { group: "Box", id: "wt-margin", prop: "margin", label: "Margin", kind: "sides",
       read: function (cs, side) { return cs["margin" + capitalise(side)]; } },
     { group: "Box", id: "wt-padding", prop: "padding", label: "Padding", kind: "sides",
+      scrubMin: 0,
       read: function (cs, side) { return cs["padding" + capitalise(side)]; } },
     // Width/Style/Colour are three controls over ONE `border` declaration - the
     // first entry in this table to break one-control-one-property. `part` marks
@@ -392,6 +400,17 @@
   ];
   var GROUPS = ["Type", "Colour", "Box", "Border", "Shape"];
   var SIDES = ["top", "right", "bottom", "left"];
+  // Full words, not initials: `L C R J` reads as an abbreviation you have to decode,
+  // and the row had the space all along - the control was sizing to its content while
+  // the row's `space-between` parked it in the right-hand corner. Declared up here
+  // with its siblings, not beside alignButtons(): the panel markup is built while the
+  // Overlay mounts, which is before a `var` further down the file has been assigned.
+  var ALIGNMENTS = [
+    { value: "left", label: "Left" },
+    { value: "center", label: "Centre" },   // British, matching the Colour group
+    { value: "right", label: "Right" },
+    { value: "justify", label: "Justify" },
+  ];
 
 
   // Tracking, in the em steps editorial type is actually set in: tightened for a big
@@ -1087,6 +1106,12 @@
     // and the only feedback a status line after the user had already lost their place.
     '  <button class="wt-btn" id="wt-undo" title="Undo (Cmd/Ctrl+Z)" disabled>Undo</button>',
     '  <button class="wt-btn" id="wt-redo" title="Redo (Shift+Cmd/Ctrl+Z)" disabled>Redo</button>',
+    // Two labels, one control - the same shed the scope label uses. The bar was sized
+    // for ten controls at 480px and this is the eleventh, so the word has to go before
+    // the button does: a narrow window is not a reduced overlay.
+    '  <button class="wt-btn" id="wt-reset-all" title="Discard every edit this session"' +
+    ' disabled><span class="wt-reset-long">Reset all</span>' +
+    '<span class="wt-reset-short">Reset</span></button>',
     '  <button class="wt-btn" id="wt-deselect">Deselect</button>',
     '  <button class="wt-btn wt-primary" id="wt-save">Save</button>',
     "</div>",
@@ -1349,9 +1374,11 @@
         '<button class="wt-legend" type="button" aria-expanded="true">' + g + "</button>" +
         '<div class="wt-group-body">');
       CONTROLS.filter(function (c) { return c.group === g; }).forEach(function (c) {
-        // A sides row needs its label column narrowed to fit four boxes, so it is
-        // marked rather than special-cased in CSS by descendant guesswork.
-        parts.push(field(c, controlMarkup(c), c.kind === "sides" ? " wt-field-wide" : ""));
+        // Sides and align rows need the label column narrowed to fit - four boxes in
+        // one case, four full words in the other - so they are marked rather than
+        // special-cased in CSS by descendant guesswork.
+        var wide = c.kind === "sides" || c.kind === "align";
+        parts.push(field(c, controlMarkup(c), wide ? " wt-field-wide" : ""));
       });
       parts.push("  </div></div>");
     });
@@ -1452,8 +1479,9 @@
   }
   function alignButtons(id) {
     return '<div class="wt-align" id="' + id + '">' +
-      ["left", "center", "right", "justify"].map(function (a) {
-        return '<button data-align="' + a + '">' + a[0].toUpperCase() + "</button>";
+      ALIGNMENTS.map(function (a) {
+        return '<button type="button" data-align="' + a.value +
+          '" title="' + a.label + '">' + a.label + "</button>";
       }).join("") + "</div>";
   }
 
@@ -1642,41 +1670,58 @@
     refreshChanges();            // drop the list's stale current-selection highlight
   }
 
-  function resetEl(el) {
-    var e = edited.get(el);
-    // A created shape has no authored baseline to revert to - resetting it removes it.
-    if (e && e.shape) {
-      // Removing a shape is a delete, so it must be undoable: without this the
-      // button silently destroys work and Ctrl+Z pops some older, unrelated step.
-      var sib = el.nextSibling, parent = el.parentNode;
-      pushUndo([{ el: el, restore: { entry: e, parent: parent, before: sib } }]);
-      if (el === selectedEl) deselect();
-      if (parent) parent.removeChild(el);
-      edited.delete(el);
-      dirty = hasRealEdits();
-      refreshChanges();
-      status("shape removed - Cmd/Ctrl+Z to undo");
-      return;
+  // What undoing a reset of `el` would have to put back. Returned rather than pushed
+  // so Reset all can gather every element's steps into ONE batch - a button that
+  // discarded a whole session and then wanted one Ctrl+Z per element would be worse
+  // than no button at all. A created shape has no authored baseline to revert to, so
+  // resetting it removes it, and the removal must be undoable too: without this the
+  // button silently destroys work and Ctrl+Z pops some older, unrelated step.
+  function resetSteps(el, e) {
+    if (e.shape) {
+      return [{ el: el, restore: {
+        entry: e, parent: el.parentNode, before: el.nextSibling } }];
     }
-    if (e) {
-      // Record every change being discarded, base AND banded, so one Ctrl+Z brings
-      // them all back - Reset now discards an element's bands along with it (a
-      // "reset" element that kept rendering a mobile-only override, with nothing on
-      // screen saying so, would be its own silent-failure mode).
-      var steps = Object.keys(e.changes).map(function (p) {
-        return { el: el, prop: p, prev: e.changes[p], band: "" };
+    // Every change being discarded, base AND banded, so one Ctrl+Z brings them all
+    // back - a reset discards an element's bands along with it (a "reset" element
+    // that kept rendering a mobile-only override, with nothing on screen saying so,
+    // would be its own silent-failure mode).
+    var steps = Object.keys(e.changes).map(function (p) {
+      return { el: el, prop: p, prev: e.changes[p], band: "" };
+    });
+    Object.keys(e.media || {}).forEach(function (cond) {
+      Object.keys(e.media[cond]).forEach(function (p) {
+        steps.push({ el: el, prop: p, prev: e.media[cond][p], band: cond });
       });
-      Object.keys(e.media || {}).forEach(function (cond) {
-        Object.keys(e.media[cond]).forEach(function (p) {
-          steps.push({ el: el, prop: p, prev: e.media[cond][p], band: cond });
-        });
-      });
-      if (steps.length) pushUndo(steps);
+    });
+    return steps;
+  }
+  // The mutation half. Undo steps must already be captured - this destroys the
+  // information they are built from.
+  function applyReset(el, e) {
+    if (e.shape) {
+      if (el === selectedEl) deselect();
+      if (el.parentNode) el.parentNode.removeChild(el);
+    } else {
       if (e.origStyle == null) el.removeAttribute("style");
       else el.setAttribute("style", e.origStyle);
       if (e.mqClass) el.classList.remove(e.mqClass);
-      edited.delete(el);
+    }
+    edited.delete(el);
+  }
+
+  function resetEl(el) {
+    var e = edited.get(el);
+    var wasShape = !!(e && e.shape);
+    if (e) {
+      var steps = resetSteps(el, e);
+      if (steps.length) pushUndo(steps);
+      applyReset(el, e);
       dirty = hasRealEdits();  // don't leave a false 'unsaved changes' flag when nothing remains
+    }
+    if (wasShape) {
+      refreshChanges();
+      status("shape removed - Cmd/Ctrl+Z to undo");
+      return;
     }
     if (el === selectedEl) {
       entry(el); // re-arm a fresh baseline
@@ -1685,6 +1730,45 @@
     }
     refreshChanges();
     status("reset - save to drop these edits");
+  }
+
+  // Every element a reset would actually discard something from. One predicate, so
+  // the Reset all button can never be enabled over nothing, or disabled over work.
+  function resettable() {
+    var live = [];
+    edited.forEach(function (e, el) {
+      // A created shape is itself the edit, so it counts even before it is restyled.
+      if (entryHasEdits(e) || e.shape) live.push(el);
+    });
+    return live;
+  }
+  function refreshResetAll() {
+    var btn = document.getElementById("wt-reset-all");
+    if (btn) btn.disabled = !resettable().length;
+  }
+
+  // Discard the whole session in one step. Deliberately no confirm dialog: the
+  // undo batch IS the safety net, and a modal here would block every subsequent
+  // Overlay event until it was dismissed.
+  function resetAll() {
+    var live = resettable();
+    if (!live.length) { status("nothing to reset"); return; }
+    var batch = [];
+    live.forEach(function (el) {
+      batch.push.apply(batch, resetSteps(el, edited.get(el)));
+    });
+    if (batch.length) pushUndo(batch);
+    live.forEach(function (el) { applyReset(el, edited.get(el)); });
+    dirty = hasRealEdits();
+    // The selection survives a reset unless it was a shape, which is now gone.
+    if (selectedEl && document.contains(selectedEl)) {
+      entry(selectedEl);
+      positionBox(selBox, selectedEl);
+      populate(selectedEl);
+    }
+    refreshChanges();
+    status("reset " + live.length + " element" + (live.length === 1 ? "" : "s") +
+      " - Cmd/Ctrl+Z to undo");
   }
 
   // Replaced (and replaced-like) inline elements that DO honour width/height and
@@ -2221,7 +2305,9 @@
     if (c.kind === "sides") {
       SIDES.forEach(function (side) {
         var input = document.getElementById(c.id + "-" + side);
-        if (input) input.addEventListener("input", function () { writeSides(c, side, this.value); });
+        if (!input) return;
+        input.addEventListener("input", function () { writeSides(c, side, this.value); });
+        attachScrub(c, input);
       });
       var link = document.getElementById(c.id + "-link");
       if (link) link.addEventListener("click", function () {
@@ -2315,12 +2401,24 @@
     root.removeChild(probe);
     return h > 0 ? +(h / size).toFixed(2) : null;
   }
-  function stepValue(c, raw, sign) {
+  // "24px" -> { value: 24, unit: "px" }; null when there is no single number to move.
+  function numericParts(raw) {
     var m = String(raw).trim().match(/^(-?[\d.]+)([a-z%]*)$/i);
+    if (!m) return null;
+    var value = parseFloat(m[1]);
+    return isNaN(value) ? null : { value: value, unit: m[2] };
+  }
+  // Trim float noise (1.6 + 0.1 = 1.7000000000000002) without forcing decimals on a
+  // value that does not need them.
+  function formatNumeric(value, unit) {
+    return String(+value.toFixed(4)) + unit;
+  }
+  function stepValue(c, raw, sign) {
+    var parts = numericParts(raw);
     var value, unit;
-    if (m) {
-      value = parseFloat(m[1]);
-      unit = m[2];
+    if (parts) {
+      value = parts.value;
+      unit = parts.unit;
     } else {
       // A keyword has no number to step. `line-height: normal` does not even compute
       // to a length - it stays the keyword - so the ratio has to be measured.
@@ -2333,9 +2431,75 @@
     var stepped = value + sign * c.step;
     var floor = c.min === undefined ? 0 : c.min;   // what the number input's `min` did
     if (stepped < floor) stepped = floor;
-    // Trim float noise (1.6 + 0.1 = 1.7000000000000002) without forcing decimals on
-    // a value that does not need them.
-    return String(+stepped.toFixed(4)) + unit;
+    return formatNumeric(stepped, unit);
+  }
+
+  // ---- drag-to-scrub on the spacing boxes ------------------------------------
+  // Spacing is the one thing you tune by eye against the page rather than by typing
+  // a figure, so the boxes take a vertical drag: up adds, down subtracts, one CSS
+  // unit per pixel moved. Typing still works - the drag only takes over once the
+  // pointer has actually travelled SCRUB_SLOP, so a plain click still lands a caret.
+  var SCRUB_SLOP = 3;
+
+  function attachScrub(c, input) {
+    var startY = 0, startRaw = "", armed = false, dragging = false;
+
+    input.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== 0 || input.disabled || !selectedEl) return;
+      armed = true;
+      dragging = false;
+      startY = ev.clientY;
+      startRaw = input.value;
+      // Captured HERE, not once the drag passes the slop threshold: these boxes are
+      // ~24px tall, so a quick flick leaves the box before any pointermove lands on
+      // it, and a capture deferred to the threshold is a capture that never happens.
+      // The cost is that dragging to select text inside the box no longer works;
+      // double-click still selects it, and on a three-character field that is a
+      // trade worth making for a gesture that works at any speed.
+      if (input.setPointerCapture) input.setPointerCapture(ev.pointerId);
+    });
+
+    input.addEventListener("pointermove", function (ev) {
+      if (!armed) return;
+      var dy = startY - ev.clientY;             // up is an increase, as everywhere else
+      if (!dragging) {
+        if (Math.abs(dy) < SCRUB_SLOP) return;
+        // Nothing to scrub from (`auto`, or an empty box): stand down rather than
+        // silently turning a keyword into a number the user never asked for.
+        if (!numericParts(startRaw)) { armed = false; return; }
+        dragging = true;
+        input.classList.add("wt-scrubbing");
+      }
+      var parts = numericParts(startRaw);
+      var next = parts.value + dy;
+      if (c.scrubMin !== undefined && next < c.scrubMin) next = c.scrubMin;
+      var v = formatNumeric(next, parts.unit || "px");
+      if (v === input.value) return;
+      input.value = v;
+      // Through the field's own input event, not the write path directly: that keeps
+      // one write path (revert detection, the invalid gate, the change list) and gets
+      // undo collapsing for free, so a whole drag is ONE Ctrl+Z rather than dozens.
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+    ["pointerup", "pointercancel"].forEach(function (type) {
+      input.addEventListener(type, function (ev) {
+        if (!armed) return;
+        armed = false;
+        // Released on every pointerup, drag or not - the capture is taken on every
+        // pointerdown now, so releasing it only after a drag would strand it on a
+        // plain click. (Browsers release implicitly too; this keeps it explicit.)
+        if (input.hasPointerCapture && input.hasPointerCapture(ev.pointerId)) {
+          input.releasePointerCapture(ev.pointerId);
+        }
+        if (!dragging) return;
+        dragging = false;
+        input.classList.remove("wt-scrubbing");
+        // The pointer travelled over the text, so drop any range the browser left
+        // selected and put the caret at the end.
+        input.setSelectionRange(input.value.length, input.value.length);
+      });
+    });
   }
 
   // ---- suggestion lists -----------------------------------------------------
@@ -2713,6 +2877,7 @@
   document.getElementById("wt-deselect").addEventListener("click", deselect);
   document.getElementById("wt-undo").addEventListener("click", undo);
   document.getElementById("wt-redo").addEventListener("click", redo);
+  document.getElementById("wt-reset-all").addEventListener("click", resetAll);
 
   // ---- keyboard -------------------------------------------------------------
   document.addEventListener("keydown", function (ev) {
@@ -2947,12 +3112,10 @@
     renderBandStyle();                // keep the injected @media rules in sync with `edited`
     repaintBadge();                   // the badge depends on hasRealEdits() too
     refreshRevertMarks();             // ...and so does each row's undo affordance
+    refreshResetAll();                // ...and Reset all, which must not offer nothing
     var rows = [];
     edited.forEach(function (e, el) {
-      var hasMedia = Object.keys(e.media || {}).some(function (cond) {
-        return Object.keys(e.media[cond]).length > 0;
-      });
-      if (Object.keys(e.changes).length || hasMedia) rows.push({ el: el, e: e });
+      if (entryHasEdits(e)) rows.push({ el: el, e: e });
     });
     if (!rows.length) {
       changesBox.hidden = true;
