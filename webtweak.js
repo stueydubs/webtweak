@@ -335,6 +335,10 @@ function sendError(res, code, msg) {
   send(res, code, `${code} ${msg}\n`, 'text/plain; charset=utf-8');
 }
 
+function sendJsonError(res, code, message) {
+  send(res, code, JSON.stringify({ ok: false, error: message }), 'application/json');
+}
+
 function log(msg) {
   process.stderr.write(`  webtweak: ${msg}\n`);
 }
@@ -344,8 +348,7 @@ function log(msg) {
 function serveOverlayAsset(name, res) {
   const asset = path.resolve(OVERLAY_DIR, name);
   // Path-traversal guard: must stay inside OVERLAY_DIR
-  if (asset !== OVERLAY_DIR &&
-      !asset.startsWith(OVERLAY_DIR + path.sep)) {
+  if (!contained(asset, OVERLAY_DIR)) {
     return sendError(res, 404, 'Unknown webtweak asset');
   }
   const ctype = OVERLAY_ASSETS[name];
@@ -370,20 +373,15 @@ function contained(p, root) {
   return p === root || p.startsWith(root + path.sep);
 }
 
-function serveHtml(filePath, targetName, method, res) {
+// `transform`, when given, runs on the file's contents before it is sent (used to
+// inject the overlay into the target page); any other HTML is served as-is, so
+// following a nav link out of the target gives you the real page rather than a
+// mis-aimed editor.
+function serveHtml(filePath, method, res, transform) {
   let html;
   try { html = fs.readFileSync(filePath, 'utf8'); }
   catch (e) { return sendError(res, 500, 'Read error'); }
-  send(res, 200, injectOverlay(html, targetName), 'text/html; charset=utf-8', method);
-}
-
-// Any HTML that is not the target page is served as-is, so following a nav link
-// out of the target gives you the real page rather than a mis-aimed editor.
-function servePlainHtml(filePath, method, res) {
-  let html;
-  try { html = fs.readFileSync(filePath, 'utf8'); }
-  catch (e) { return sendError(res, 500, 'Read error'); }
-  send(res, 200, html, 'text/html; charset=utf-8', method);
+  send(res, 200, transform ? transform(html) : html, 'text/html; charset=utf-8', method);
 }
 
 // Stream rather than readFileSync: this server is single-threaded, so slurping a
@@ -434,13 +432,15 @@ function handleSave(body, targetName, editsPath, state, res) {
     return sendError(res, 400, 'Bad JSON: expected an object');
 
   let doc = null;
-  if (fs.existsSync(editsPath)) {
-    let raw;
-    try { raw = fs.readFileSync(editsPath, 'utf8'); }
-    catch (e) {
-      // Transient read error - propagate; don't touch the file
-      return send(res, 500, JSON.stringify({ ok: false, error: e.message }), 'application/json');
-    }
+  let raw;
+  try { raw = fs.readFileSync(editsPath, 'utf8'); }
+  catch (e) {
+    // No existing doc is not an error - doc stays null, same as before a first
+    // save. Anything else (permissions, a transient FS error) propagates; don't
+    // touch the file.
+    if (e.code !== 'ENOENT') return sendJsonError(res, 500, e.message);
+  }
+  if (raw !== undefined) {
     try { doc = JSON.parse(raw); }
     catch (_) {
       // Corrupt JSON - back up and start fresh. If the backup cannot be taken we
@@ -449,10 +449,7 @@ function handleSave(body, targetName, editsPath, state, res) {
       const backup = `${editsPath}.${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
       try { fs.renameSync(editsPath, backup); }
       catch (e) {
-        return send(res, 500, JSON.stringify({
-          ok: false,
-          error: `edits file is corrupt and could not be backed up: ${e.message}`,
-        }), 'application/json');
+        return sendJsonError(res, 500, `edits file is corrupt and could not be backed up: ${e.message}`);
       }
       log(`edits file corrupt; backed up to ${path.basename(backup)}`);
       pruneBackups(editsPath);
@@ -465,7 +462,7 @@ function handleSave(body, targetName, editsPath, state, res) {
   let written;
   try { written = writeJsonAtomic(editsPath, doc); }
   catch (e) {
-    return send(res, 500, JSON.stringify({ ok: false, error: e.message }), 'application/json');
+    return sendJsonError(res, 500, e.message);
   }
 
   // Remember exactly what we wrote so the watcher can tell our own save from a
@@ -575,8 +572,10 @@ function createHandler(targetPath, serveRoot, state) {
       // Only the target page gets the overlay. Injecting into every HTML file
       // handed the editor a page it could not correctly fingerprint, and wrote
       // those patches into the *target's* edits file.
-      if (real === state.realTarget) return serveHtml(local, targetName, req.method, res);
-      return servePlainHtml(local, req.method, res);
+      if (real === state.realTarget) {
+        return serveHtml(local, req.method, res, html => injectOverlay(html, targetName));
+      }
+      return serveHtml(local, req.method, res);
     }
     serveStatic(local, stat.size, req.method, req.headers['range'], res);
   };

@@ -22,6 +22,13 @@
   // condition the Overlay invented back to the user as one of the page's own.
   var BAND_STYLE_ID = "wt-band-style";
 
+  // A short random id, for anything that just needs to be unique this session (a
+  // session id, a throwaway shape id reconcile strips) rather than cryptographically
+  // unpredictable.
+  function randId(prefix, len) {
+    return prefix + Math.random().toString(36).slice(2, 2 + len);
+  }
+
   // Only activate on the target page (not on links the user follows away).
   var here = location.pathname.endsWith("/")
     ? "index.html"
@@ -31,8 +38,7 @@
   // One session per tab, stable across reloads, so re-saving overwrites the same
   // pending Batch rather than orphaning a new one (running-history contract).
   var SKEY = "wt-session-" + (CFG.target || here);
-  var SESSION = sessionStorage.getItem(SKEY) ||
-    ("s" + Math.random().toString(36).slice(2, 10));
+  var SESSION = sessionStorage.getItem(SKEY) || randId("s", 8);
   sessionStorage.setItem(SKEY, SESSION);
 
   // el -> { changes, media, _x, _y, origStyle, mqClass } for every selected/edited
@@ -276,7 +282,8 @@
   var CONTROLS = [
     { group: "Type", id: "wt-ff", prop: "font-family", label: "Font", kind: "text",
       suggest: pageFonts, suggestTitle: "Fonts on this page", suggestPreview: true,
-      read: function (cs) { return cs.fontFamily; } },  // full stack, so editing keeps fallbacks
+      read: function (cs) { return cs.fontFamily; },  // full stack, so editing keeps fallbacks
+      write: function (raw) { return quoteFamily(raw); } },
     { group: "Type", id: "wt-fs", prop: "font-size", label: "Size", kind: "text", unit: "px", step: 1, min: 1,
       // Shows its unit and takes one, so `2rem` is expressible - as a number input it
       // was not merely awkward but impossible, and the panel quietly forced px.
@@ -363,7 +370,11 @@
     // wants the validity gate and the ordinary revert-to-baseline behaviour, unlike
     // the seeded SVG presentation props below.
     { group: "Shape", id: "wt-rot", prop: "transform", label: "Rotate", kind: "select",
-      opts: ROTATIONS, compareRaw: true, read: rotationOf },
+      opts: ROTATIONS, compareRaw: true, read: rotationOf,
+      // The control speaks degrees; the page needs a transform function. `none`
+      // rather than `rotate(0deg)` so a shape turned back to square carries no dead
+      // declaration into source when it is not simply reverted (see compareRaw).
+      write: function (raw) { return String(raw) === "0" ? "none" : "rotate(" + raw + "deg)"; } },
     { group: "Shape", id: "wt-fill", prop: "fill", label: "Fill", kind: "color", shapeOnly: true,
       read: function (cs) { return rgbToHex(cs.fill); } },
     // Labelled Stroke, not Border: a shape's line is an SVG stroke and an element's
@@ -446,18 +457,32 @@
   // Families declared as @font-face - a supplement, so a self-hosted face that is
   // set up but not yet applied anywhere is still offered. Gathered defensively:
   // an unreadable sheet is skipped, degrading the list rather than throwing.
+  // Shared by every page-stylesheet sweep below (fonts, breakpoints): a cross-origin
+  // or otherwise unreadable sheet returns null rather than throwing, so a CDN sheet
+  // degrades the caller's result instead of crashing it.
+  function safeCssRules(node) {
+    try { return node.cssRules || null; } catch (e) { return null; }
+  }
+  // Walk every stylesheet a PAGE declares - never the Overlay's own: the visible
+  // <link> to overlay.css (by its RESERVED href) or the injected banded-preview
+  // sheet (by id - see BAND_STYLE_ID). Offering either back through the font or
+  // breakpoint pickers would be the editor describing itself as the page.
+  function eachPageStylesheet(fn) {
+    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
+      if ((sheet.href || "").indexOf(RESERVED) >= 0) return;
+      if (sheet.ownerNode && sheet.ownerNode.id === BAND_STYLE_ID) return;
+      fn(sheet);
+    });
+  }
+
   function fontFaceFamilies() {
     var out = [];
-    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
-      if ((sheet.href || "").indexOf(RESERVED) >= 0) return;   // webtweak's own sheet
-      collectFaces(sheet, out);
-    });
+    eachPageStylesheet(function (sheet) { collectFaces(sheet, out); });
     return out;
   }
   function collectFaces(node, out, depth) {
     depth = depth || 0;
-    var rules;
-    try { rules = node.cssRules; } catch (e) { return; }  // cross-origin: unreadable, not fatal
+    var rules = safeCssRules(node);
     if (!rules) return;
     Array.prototype.forEach.call(rules, function (r) {
       var fam = r.style && (r.style.fontFamily || "").trim();
@@ -497,8 +522,7 @@
   // bounded, so a pathologically nested sheet cannot spin.
   function collectConditions(node, out, depth, outer) {
     depth = depth || 0;
-    var rules;
-    try { rules = node.cssRules; } catch (e) { return; }   // cross-origin: unreadable, not fatal
+    var rules = safeCssRules(node);
     if (!rules) return;
     Array.prototype.forEach.call(rules, function (r) {
       // `media` discriminates a media rule from an @supports block (which also has a
@@ -518,17 +542,7 @@
   }
   function pageConditions() {
     var out = [];
-    Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
-      // webtweak's own sheet has breakpoints (the bar collapses on a narrow window);
-      // offering them would be the editor describing itself as the page.
-      if ((sheet.href || "").indexOf(RESERVED) >= 0) return;
-      // The Overlay's OWN injected banded-preview sheet (0015) has no href to catch
-      // the check above - same reasoning, different disguise: without this, a
-      // session's own banded edits would start reappearing in the picker as though
-      // the page had declared them.
-      if (sheet.ownerNode && sheet.ownerNode.id === BAND_STYLE_ID) return;
-      collectConditions(sheet, out);
-    });
+    eachPageStylesheet(function (sheet) { collectConditions(sheet, out); });
     return out;
   }
 
@@ -738,14 +752,21 @@
     return li;
   }
   var bandList = null, bandToggle = null;   // assigned once the bar is mounted
+  // Reveal a populated dropdown list (the band picker, or a suggestion list) and
+  // position it - shared by openBands() and openSuggest(), which otherwise differ
+  // only in how they build their own rows.
+  function showSuggestList(list, toggle) {
+    list.hidden = false;
+    placeSuggest(list, toggle);   // measured, so only once it is visible
+    toggle.setAttribute("aria-expanded", "true");
+  }
+
   function openBands() {
     bandList.textContent = "";
     [BASE_BAND].concat(pageBands()).forEach(function (b) {
       bandList.appendChild(bandRow(b));
     });
-    bandList.hidden = false;
-    placeSuggest(bandList, bandToggle);   // measured, so only once it is visible
-    bandToggle.setAttribute("aria-expanded", "true");
+    showSuggestList(bandList, bandToggle);
   }
   function pickBand(condition) {
     if (!condition) return setScope(null);
@@ -943,7 +964,7 @@
       (geo && geo.el ? { el: geo.el, points: geo.points, attrs: geo.attrs, size: { w: 90, h: 90 } }
                      : SHAPES.square);
     var svg = document.createElementNS(SVGNS, "svg");
-    var id = opts.id || ("wt-shape-" + Math.random().toString(36).slice(2, 8));
+    var id = opts.id || randId("wt-shape-", 6);
     svg.setAttribute("id", id);
     svg.setAttribute("class", "wt-shape");
     svg.setAttribute("data-wt-shape", kind);
@@ -1443,22 +1464,36 @@
     });
   }
 
+  // Every ancestor from just inside <body> down to el itself, outermost first - the
+  // walk cssPath and setCrumb both need, kept in exactly one place so their stop
+  // condition (nodeType 1, short of document.body) can't drift apart.
+  function ancestorChain(el) {
+    var chain = [], n = el;
+    while (n && n.nodeType === 1 && n !== document.body) { chain.unshift(n); n = n.parentElement; }
+    return chain;
+  }
+
   function cssPath(el) {
     if (!el || el === document.body) return "body";
+    var chain = ancestorChain(el);
     var parts = [];
-    while (el && el.nodeType === 1 && el !== document.body) {
-      if (el.id) { parts.unshift("#" + cssEsc(el.id)); return parts.join(" > "); }
-      var part = el.tagName.toLowerCase() +
-        nonWtClasses(el).map(function (c) { return "." + cssEsc(c); }).join("");
-      var parent = el.parentElement;
+    // Walked from el up to body, same order as the original single loop: the
+    // NEAREST ancestor with an id (el itself, if it has one) anchors the selector
+    // and nothing above it needs to be walked, since an id is already a complete,
+    // unique root.
+    for (var i = chain.length - 1; i >= 0; i--) {
+      var node = chain[i];
+      if (node.id) { parts.unshift("#" + cssEsc(node.id)); return parts.join(" > "); }
+      var part = node.tagName.toLowerCase() +
+        nonWtClasses(node).map(function (c) { return "." + cssEsc(c); }).join("");
+      var parent = node.parentElement;
       if (parent) {
         var sibs = Array.prototype.filter.call(parent.children, function (c) {
-          return c.tagName === el.tagName && c.id !== "wt-root";  // ignore the overlay root
+          return c.tagName === node.tagName && c.id !== "wt-root";  // ignore the overlay root
         });
-        if (sibs.length > 1) part += ":nth-of-type(" + (sibs.indexOf(el) + 1) + ")";
+        if (sibs.length > 1) part += ":nth-of-type(" + (sibs.indexOf(node) + 1) + ")";
       }
       parts.unshift(part);
-      el = el.parentElement;
     }
     return "body > " + parts.join(" > ");
   }
@@ -1521,8 +1556,7 @@
   }
 
   function setCrumb(el) {
-    var chain = [], n = el;
-    while (n && n.nodeType === 1 && n !== document.body) { chain.unshift(n); n = n.parentElement; }
+    var chain = ancestorChain(el);
     // Built with textContent, never innerHTML: describe() returns the page's own
     // tag/id/class names, and webtweak is routinely pointed at repos the user did
     // not write. An id like `a"><img src=x onerror=...>` used to execute here, in
@@ -1689,7 +1723,13 @@
     CONTROLS.forEach(function (c) {
       if (!c.rectOnly) return;
       var node = document.getElementById(c.id), wrap = node && node.closest(".wt-field");
-      if (wrap) wrap.hidden = !(isShape && (ent.shape.kind === "square" || ent.shape.kind === "rectangle"));
+      // Derived from SHAPES rather than named directly: rx is meaningless on anything
+      // but a <rect>-backed shape, and SHAPES already knows which kinds those are - a
+      // hand-typed name list drifts the moment a kind is renamed or retired (this one
+      // still named "rectangle", a kind SHAPE_LIST dropped when rectangle/ellipse were
+      // consolidated - see the shape-consolidation note above SHAPES).
+      var spec = isShape && SHAPES[ent.shape.kind];
+      if (wrap) wrap.hidden = !(spec && spec.el === "rect");
     });
     applyCollapse();   // panel state, so it outlives the selection that set it
     // Name the side being edited, or say why the controls are off. A border edit on
@@ -1780,16 +1820,26 @@
       // getPropertyValue, not [prop]: the property names here are kebab-case.
       function () { return getComputedStyle(selectedEl).getPropertyValue(prop); });
   }
-  // Re-apply one recorded change (a nudge transform or a plain property) to an element.
-  // Shape fill/stroke/stroke-width are inherited SVG props, so they're set on the
-  // <svg> and cascade to the child. `rx` is a non-inherited <rect> geometry property,
-  // so it's routed to the child node instead (the patch still records it on the shape).
+  // Which controls route their write to a different node than the one selected -
+  // built once from the CONTROLS table's own `host` field, the same field populate()
+  // already reads generically to know where to read a value FROM. Only `rx` (a
+  // non-inherited <rect> geometry property that lives on a shape's child, not the
+  // <svg> wrapper the rest of a shape's props are set on) uses it today, but this
+  // way applyChange() doesn't hardcode that fact a second time as a literal
+  // prop-name check - a future host-routed control needs one table entry, not a
+  // matching pair of hand-synced special cases in two functions.
+  var HOST_BY_PROP = {};
+  CONTROLS.forEach(function (c) { if (c.host) HOST_BY_PROP[c.prop] = c.host; });
+
+  // Re-apply one recorded change (a nudge transform or a plain property) to an
+  // element. Shape fill/stroke/stroke-width are inherited SVG props, so they're set
+  // on the <svg> and cascade to the child; a host-routed prop is set on whatever
+  // node its control's `host(el)` resolves to instead.
   function applyChange(el, prop, value) {
     if (prop === "nudge") { el.style.transform = "translate(" + value.dx + "px, " + value.dy + "px)"; return; }
-    if (prop === "rx" && el.__wtShape && el.firstElementChild) {
-      el.firstElementChild.style.setProperty("rx", value);
-      return;
-    }
+    var hostFor = HOST_BY_PROP[prop];
+    var host = hostFor && el.__wtShape && hostFor(el);
+    if (host) { host.style.setProperty(prop, value); return; }
     el.style.setProperty(prop, value);
   }
   // Rebuild an element's inline style from its authored original plus the session's
@@ -1807,6 +1857,20 @@
       if (p === "nudge") { ent._x = v.dx; ent._y = v.dy; }  // re-seed the drag accumulator to the snapped value
     });
   }
+  // The shared tail every "revert" function ends with: recompute the unsaved flag,
+  // clear any stale status notice, repaint, and refit the selection box. `before`
+  // runs between clearing status and the repaint (revertRow repopulates the panel
+  // there); `after` runs between the repaint and refitting the box (revertSide
+  // resets its own fields there, which the repaint does not touch).
+  function settleAfterRevert(before, after) {
+    dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
+    status("");                      // abandoning an edit supersedes a stale notice too
+    if (before) before();
+    refreshChanges();
+    if (after) after();
+    positionBox(selBox, selectedEl);
+  }
+
   // Drop the override and the recorded change for one control, restoring the
   // authored inline style plus whatever other edits remain on the element.
   function revertControl(c) {
@@ -1820,10 +1884,7 @@
     // longhands); a banded revert has nothing inline to rebuild - refreshChanges()
     // below regenerates the injected stylesheet without this declaration instead.
     if (!band) rebuildInline(selectedEl, ent);
-    dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
-    status("");                      // abandoning an edit supersedes a stale notice too
-    refreshChanges();
-    positionBox(selBox, selectedEl);
+    settleAfterRevert();
   }
 
   function writeControl(c, raw) {
@@ -1845,11 +1906,11 @@
     var bare = /^-?\d*\.?\d+$/.test(String(raw).trim());
     if (c.box && bare) raw = Math.max(1, parseFloat(raw) || 1);   // matching the resize grips
     var v = (c.unit && bare) ? raw + c.unit : raw;
-    if (c.prop === "font-family") v = quoteFamily(raw);
-    // The control speaks degrees; the page needs a transform function. `none` rather
-    // than `rotate(0deg)` so a shape turned back to square carries no dead declaration
-    // into source when it is not simply reverted (see compareRaw below).
-    if (c.prop === "transform") v = String(raw) === "0" ? "none" : "rotate(" + raw + "deg)";
+    // A control's own `write`, symmetric to `read`: font-family and transform are the
+    // two properties whose typed form differs from what the page needs (a bare font
+    // name wants quoting; a degree number wants wrapping in rotate()) - one table
+    // entry each, rather than a growing set of `if (c.prop === ...)` branches here.
+    if (c.write) v = c.write(raw);
     // Rejected first, before anything can interpret the value (see accepts).
     if (!accepts(c, v, raw)) return;
     // Setting a control back to the value it was populated with means "revert this
@@ -1968,11 +2029,7 @@
     pushUndo(props.map(function (p) { return { el: selectedEl, prop: p, prev: map[p], band: band }; }));
     props.forEach(function (p) { delete map[p]; });
     if (!band) rebuildInline(selectedEl, ent);
-    dirty = hasRealEdits();
-    status("");
-    populate(selectedEl);          // every field back to what the element now renders
-    refreshChanges();
-    positionBox(selBox, selectedEl);
+    settleAfterRevert(function () { populate(selectedEl); });   // every field back to what the element now renders
   }
 
   // ---- per-side spacing -----------------------------------------------------
@@ -2021,12 +2078,10 @@
     if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
     if (ent) delete ent.changes[prop];
     rebuildInline(selectedEl, ent);
-    dirty = hasRealEdits();
-    status("");
-    refreshChanges();
-    // Put the field(s) back to the value the element is rendering again.
-    [].concat(baseId).forEach(function (id) { set(id, baselines[id]); });
-    positionBox(selBox, selectedEl);
+    settleAfterRevert(null, function () {
+      // Put the field(s) back to the value the element is rendering again.
+      [].concat(baseId).forEach(function (id) { set(id, baselines[id]); });
+    });
   }
 
   // ---- the composed border --------------------------------------------------
@@ -2293,9 +2348,7 @@
       li.appendChild(btn);
       list.appendChild(li);
     });
-    list.hidden = false;
-    placeSuggest(list, toggle);   // measured, so only once it is visible
-    toggle.setAttribute("aria-expanded", "true");
+    showSuggestList(list, toggle);
   }
   // The list is positioned in viewport coordinates because the panel is a scroll box
   // and would otherwise clip it (Shadow is the last field of the last group). Drops
@@ -2383,6 +2436,14 @@
       h -= parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) +
         parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
     }
+    // Read before any write below, in the same recalc pass as the padding/border
+    // reads above: max-width/min-height don't depend on the element's own
+    // width/height, so the value is exactly as correct as reading it after - and
+    // reading it after would force a SECOND synchronous layout, on every
+    // pointermove of every resize gesture, purely to re-derive a value that
+    // couldn't have changed.
+    var cMaxW = cs.maxWidth;
+    var cMinH = cs.minHeight;
     w = Math.max(1, Math.round(w));
     h = Math.max(1, Math.round(h));
     el.style.width = w + "px";
@@ -2391,12 +2452,10 @@
     record(el, "height", h + "px");
     // If a stylesheet max-width/min-height would override the resize, pin it inline
     // so the element actually reaches the desired size.
-    var cMaxW = getComputedStyle(el).maxWidth;
     if (cMaxW && cMaxW !== "none" && w > parseFloat(cMaxW)) {
       el.style.maxWidth = w + "px";
       record(el, "max-width", w + "px");
     }
-    var cMinH = getComputedStyle(el).minHeight;
     if (cMinH && cMinH !== "0px" && h < parseFloat(cMinH)) {
       el.style.minHeight = h + "px";
       record(el, "min-height", h + "px");
@@ -2417,7 +2476,7 @@
     // Scale the resize grab-band to the element so small elements stay nudgeable.
     var margin = el.offsetHeight < 40 ? 4 : 10;
     // Gesture-batched undo: snapshot at start, push one batch at end.
-    var nudgePrev, resizePrev, movePrev;
+    var nudgePrev, resizePrev, movePrev, nudgeScale;
     interact(el)
       .draggable({
         // a nudge is a CSS transform, which has no effect on non-replaced inline
@@ -2429,6 +2488,10 @@
             interacting = true; hoverBox.hidden = true;
             if (el.__wtShape) movePrev = snapshotProps(el, MOVE_PROPS);
             else nudgePrev = ((edited.get(el) || {}).changes || {}).nudge;
+            // A gesture's parent scale can't change mid-drag, so compute it once here
+            // rather than forcing a layout read on every pointermove - the same
+            // pattern the grip-resize handler below already uses.
+            nudgeScale = getParentScale(el);
           },
           end: function () {
             endGesture();
@@ -2441,7 +2504,7 @@
           },
           move: function (event) {
             var e = entry(el);
-            var sc = getParentScale(el);
+            var sc = nudgeScale;
             // A shape is an absolute element: dragging is a true move - update its
             // left/top inline and record them, not a transform nudge (ADR-0002).
             // Read back from the inline style we set last frame (cheaper than
@@ -2551,12 +2614,17 @@
     if (interacting) { hoverBox.hidden = true; return; }  // don't flicker during drag/resize
     if (pendingShape) { hoverBox.hidden = true; return; }  // place mode: no select-hover
     var el = ev.target;
+    // Same element, already drawn: skip isOverlay()'s ancestor walk below entirely -
+    // a stationary mouse (or one moving within the same element) fires this on every
+    // pixel. Safe to check before isOverlay(): lastHoverEl is only ever set to a
+    // non-overlay element (below), so this can only match a page element already
+    // known to have passed that check.
+    if (el === lastHoverEl && !hoverBox.hidden) return;
     if (isOverlay(el) || el === document.body || el === document.documentElement) {
       hoverBox.hidden = true;
       lastHoverEl = null;
       return;
     }
-    if (el === lastHoverEl && !hoverBox.hidden) return;  // same element, already drawn
     lastHoverEl = el;
     positionBox(hoverBox, el);
   });
@@ -2737,9 +2805,13 @@
   document.getElementById("wt-save").addEventListener("click", save);
 
   // ---- restore this session's pending edits after a reload ------------------
+  // Returns its promise chain so the boot sequence can reuse this fetch for the
+  // badge refresh too, instead of both independently fetching the same edits file
+  // on load.
   function restore() {
-    fetchEdits()
+    return fetchEdits()
       .then(function (doc) {
+        noteDoc(doc);   // let the boot sequence's refreshStatus(lastDoc) reuse this fetch
         var batch = myPending(doc)[0];
         if (!batch) return;
         persisted = true;  // a saved batch exists on disk; a full revert must clear it
@@ -2750,7 +2822,7 @@
           // to relocate); its stored id + changes reproduce it exactly (ADR-0002).
           if (p.op === "create") {
             var cfp = p.fingerprint || {};
-            var cid = cfp.id || ("wt-shape-" + Math.random().toString(36).slice(2, 8));
+            var cid = cfp.id || randId("wt-shape-", 6);
             if (document.getElementById(cid)) { n++; return; }  // already on the page
             var cch = p.changes || {};
             makeShape(p.shape, parseFloat(cch.left) || 0, parseFloat(cch.top) || 0,
@@ -3132,8 +3204,7 @@
   // The narrowest band the window is already inside, so opening webtweak at a phone
   // width and typing a value does the obviously-right thing. `base` when none match.
   setScope(narrowestMatch());
-  restore();
+  restore().then(function () { refreshStatus(lastDoc); });   // reuses restore()'s own fetch
   refreshChanges();
-  refreshStatus();
   connectEvents();
 })();
