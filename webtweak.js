@@ -376,7 +376,7 @@ function contained(p, root) {
 // `transform`, when given, runs on the file's contents before it is sent (used to
 // inject the overlay into the target page); any other HTML is served as-is, so
 // following a nav link out of the target gives you the real page rather than a
-// mis-aimed editor.
+// mis-aimed overlay.
 function serveHtml(filePath, method, res, transform) {
   let html;
   try { html = fs.readFileSync(filePath, 'utf8'); }
@@ -570,7 +570,7 @@ function createHandler(targetPath, serveRoot, state) {
     const ext = path.extname(local).toLowerCase();
     if (ext === '.html' || ext === '.htm') {
       // Only the target page gets the overlay. Injecting into every HTML file
-      // handed the editor a page it could not correctly fingerprint, and wrote
+      // handed the overlay a page it could not correctly fingerprint, and wrote
       // those patches into the *target's* edits file.
       if (real === state.realTarget) {
         return serveHtml(local, req.method, res, html => injectOverlay(html, targetName));

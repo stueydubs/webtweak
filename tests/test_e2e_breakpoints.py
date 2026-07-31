@@ -263,7 +263,7 @@ def test_a_non_width_query_is_listed_as_unavailable_with_a_reason(served):
 
 def test_webtweaks_own_media_queries_are_not_offered_as_the_pages(served):
     """The Overlay's stylesheet has breakpoints of its own (the bar collapses on a
-    narrow window). Offering them would be the editor describing itself."""
+    narrow window). Offering them would be the Overlay describing itself."""
     tmp, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)

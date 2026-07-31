@@ -116,7 +116,7 @@ html { user-select: none; }
    has to survive the widths it is for. Shed in order of how little is lost: the
    scope label (the field's own title says the same thing), the status column's
    reserved width, then the wordmark and some button padding. Nothing that is a
-   control gets removed - a narrow window is not a reduced editor. */
+   control gets removed - a narrow window is not a reduced overlay. */
 @media (max-width: 820px) {
   /* Shortened, never removed. The control has to keep reading as a scope at every
      width, so "Applies at:" becomes "At:" rather than disappearing. */

@@ -446,3 +446,30 @@ def test_switching_scope_refreshes_the_revert_mark(served):
         shown = revert_shown(page, "wt-fs")
         browser.close()
     assert shown is False
+
+
+def test_the_scope_note_declines_border_and_spacing_out_loud(served):
+    """ADR-0004: "decline out loud rather than lie." Border and per-side spacing stay
+    base-only regardless of the band shown - the scope note has to say so, or it
+    reads as though the element's whole style applies at the band named there."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        pick(page, NARROW)
+        select_card(page)
+        note = page.eval_on_selector("#wt-scope-note", "el => el.textContent")
+        browser.close()
+    assert note.startswith("div.card at ")
+    assert note.endswith(" - Border and spacing always apply at every width")
+
+
+def test_the_scope_note_declines_shape_properties_out_loud(served):
+    """Same principle, for a shape: every Shape-group control stays base-only too."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        place_shape(page)
+        pick(page, NARROW)
+        note = page.eval_on_selector("#wt-scope-note", "el => el.textContent")
+        browser.close()
+    assert note.endswith(" - Shape properties always apply at every width")

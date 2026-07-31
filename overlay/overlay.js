@@ -466,7 +466,7 @@
   // Walk every stylesheet a PAGE declares - never the Overlay's own: the visible
   // <link> to overlay.css (by its RESERVED href) or the injected banded-preview
   // sheet (by id - see BAND_STYLE_ID). Offering either back through the font or
-  // breakpoint pickers would be the editor describing itself as the page.
+  // breakpoint pickers would be the Overlay describing itself as the page.
   function eachPageStylesheet(fn) {
     Array.prototype.forEach.call(document.styleSheets || [], function (sheet) {
       if ((sheet.href || "").indexOf(RESERVED) >= 0) return;
@@ -685,7 +685,18 @@
     var input = document.getElementById("wt-scope-input");
     if (input) input.value = scopeLabel();
     var note = document.getElementById("wt-scope-note");
-    if (note) note.textContent = selectedEl ? describe(selectedEl) + " at " + scopeLabel() : "";
+    if (!note) return;
+    note.textContent = selectedEl ? describe(selectedEl) + " at " + scopeLabel() : "";
+    // Border, per-side spacing, and every control on a shape stay base-only
+    // regardless of the band named above (controlBand()) - decline that out loud
+    // here, the same principle ADR-0004 applies to a band the window cannot show,
+    // rather than let this line imply a scope those controls will silently ignore.
+    if (selectedEl && scope) {
+      var isShape = !!(edited.get(selectedEl) || {}).shape;
+      note.textContent += isShape
+        ? " - Shape properties always apply at every width"
+        : " - Border and spacing always apply at every width";
+    }
   }
   // Dragging out of the band being authored moves the scope to the narrowest band
   // that still matches, ending at base. Authoring into a band you have left would mean

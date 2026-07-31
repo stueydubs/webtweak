@@ -29,7 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-0004. Border, per-side spacing, and every control on a shape stay base-only for
   now (`controlBand()`) - a banded border, padding, or shape fill is not yet
   expressible, and each is refused at the point it would otherwise be recorded,
-  not merely documented as unsupported.
+  not merely documented as unsupported. Declined out loud, too, per ADR-0004's own
+  principle: the properties panel's scope note says "Border and spacing always apply
+  at every width" (or the Shape equivalent) whenever a band is selected on an
+  element carrying one of these controls, rather than silently ignoring the band it
+  is still visibly showing.
 
 ### Changed
 

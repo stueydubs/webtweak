@@ -9,9 +9,9 @@
 | Issue | State |
 |---|---|
 | 0014 discovery + band picker | **Shipped** (`4d209fb`) |
-| 0015 banded preview + recording | **Shipped, uncommitted.** `tests/test_e2e_banded_edits.py` (21 tests, now tracked) all green; `test_e2e_breakpoints.py`'s transitional pin replaced by its documented opposite. A dynamic-team review + Codex verify pass (see below) found and fixed four real bugs before any of it reached a tagged release. |
+| 0015 banded preview + recording | **Shipped, unpushed.** `tests/test_e2e_banded_edits.py` (23 tests, now tracked) all green; `test_e2e_breakpoints.py`'s transitional pin replaced by its documented opposite. A dynamic-team review + Codex verify pass (see below) found and fixed four real bugs before any of it reached a tagged release. |
 | 0016 reconcile merges media groups | Not started |
-| 0017 restore banded edits after reload | Not started |
+| 0017 restore banded edits after reload | **Partial, untested.** `restore()` already reconstructs a `media` group from a saved patch (added alongside 0015, since restoring naturally has to undo whatever save() did) - but no test exercises a reload with banded edits, so this stays open until that's verified. |
 | 0018 document the local browser-test setup | **Shipped** (`4d209fb`, same commit) |
 | 0019 release | Not started |
 
@@ -26,6 +26,10 @@
 **Dynamic-team review + Codex verify, run once 0015's tests were green (five parallel reviewers - band data model, undo/redo keying, save/restore round-trip, scoping boundaries, test adequacy - each finding then adversarially verified by Codex CLI against the running code).** 12 of 13 raw findings survived verification; after deduping two pairs of overlapping findings, ten distinct issues, all fixed same session: (1) a border edit made under a selected band was recorded into `media` instead of `changes`, contradicting the scoping above - `writeBorder()` ends in the shared `commit()` tail, which read the picker's band unconditionally; (2) a banded shape edit was recorded and shown in the change list, then silently dropped on save, because `save()`'s shape branch never read `e.media`; both closed at the source by the `controlBand()` fix rather than patched downstream. (3) Two min-width-only bands (an ordinary mobile-first pattern) could win the cascade in the wrong order - `makeBand()`'s span was `Infinity` for any such band regardless of its actual threshold, so the narrowest-wins sort saw `NaN` for any pair of them; fixed with a large finite sentinel. (4) Switching the Scope picker left the per-field revert dot stale, because `setScope()` never called `refreshChanges()`. The remaining six were test-coverage gaps (two elements sharing a band, a real shape's `openTag`, the status-bar fix, mixed base+band properties) plus one low-severity hardening (`wt-mq-N` class generation now checks the live DOM for a coincidental collision before claiming a name) - all now have regression tests in `test_e2e_banded_edits.py`.
 
 **Three side-quests interrupted the epic before 0015** and are shipped: drag-to-draw shapes (`1b6dcbc`), one distinct picture per palette icon (`7ec26e5`), and 45° rotation replacing the three duplicate shape kinds (`3c5b541`). None touch breakpoint code.
+
+**A `/simplify` pass (`277e434`)** then swept the whole project (not just this epic) for reuse, simplification, efficiency and altitude issues - see CHANGELOG for the full list; nothing behavioural changed, 299 tests passed before and after.
+
+**A two-axis Standards+Spec review against `origin/main` (all ten local commits above)** found and fixed three things: four spots using "editor" where CONTEXT.md's glossary says "Overlay" (a documented-standard violation); the border/per-side/shape controls that stay base-only under a band were doing so silently, with no signal in the panel - `#wt-scope-note` now appends "Border and spacing always apply at every width" (or the Shape equivalent) whenever a band is selected, so ADR-0004's own "decline out loud rather than lie" principle actually holds there too; and this table under-reported 0017 as "Not started" when `restore()` already has (untested) code for it, fixed above. Two tests added for the new scope-note behaviour.
 
 Nothing in this epic has been pushed.
 
