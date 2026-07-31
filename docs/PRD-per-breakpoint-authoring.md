@@ -9,19 +9,23 @@
 | Issue | State |
 |---|---|
 | 0014 discovery + band picker | **Shipped** (`4d209fb`) |
-| 0015 banded preview + recording | **Tests written and red, no implementation.** `tests/test_e2e_banded_edits.py`, 15 tests, deliberately **untracked** - committing them would redden CI |
+| 0015 banded preview + recording | **Shipped, uncommitted.** `tests/test_e2e_banded_edits.py` (14 tests, now tracked) all green; `test_e2e_breakpoints.py`'s transitional pin replaced by its documented opposite. |
 | 0016 reconcile merges media groups | Not started |
 | 0017 restore banded edits after reload | Not started |
 | 0018 document the local browser-test setup | **Shipped** (`4d209fb`, same commit) |
 | 0019 release | Not started |
 
-**`4d209fb` is deliberately not shippable on its own.** The bar shows a Scope picker, but the Patch it produces is still byte-identical to 0.6.0's - no `media` key, ever. Until 0015 lands, the UI promises a scope the recording half does not honour. That is pinned by a test asserting the *patch* carries no `media` (asserting on `changes` would be vacuous, since `media` is its sibling, not a member).
+**0015 is itself not shippable on its own**, for the same reason `4d209fb` wasn't: reconcile (0016) doesn't yet know how to merge a `media` group into an existing `@media` block in real source, and restore-after-reload for banded groups (0017) is untested past what the overlay's own restore() does. A save now genuinely records a banded Patch - that half of the promise is kept - but nothing downstream of the edits file understands it yet.
 
-**The 0015 design is settled and was validated in a prototype** before the tests were written: one injected `<style>` holding real `@media` blocks, a generated `wt-mq-N` class per element registered in `WT_OWN_CLASSES` so it can never reach a Fingerprint, and declarations written `!important`. The `!important` is not bluntness - a base edit is an inline style, and inline beats any class rule, so it is the only way the banded rule lands at all.
+**What 0015 actually built**, matching the design that was settled and prototyped before the tests were written: one injected `<style id="wt-band-style">` holding real `@media` blocks, a generated `wt-mq-N` class per element registered in `WT_OWN_CLASSES` (also excluded from `pageConditions()`'s own sweep, or the picker would start offering back its own generated conditions), and declarations written `!important` - necessary, not blunt, because the base edit a banded one competes with is an inline style, which beats any class rule that isn't. Two-band overlap orders narrowest-last in the injected block, so it wins the same way it would in the page's own cascade. Undo, revert, the change list and `hasRealEdits()` are all band-aware now, keyed by `(el, prop, band)` rather than `(el, prop)` - `font-size` at base and `font-size` at `(max-width: 600px)` are two different recorded values on the same element and the same property, per ADR-0004's stated failure mode, and every one of those structures needed the band added to its key to keep them from silently overwriting each other.
 
-**Three side-quests interrupted the epic** and are shipped: drag-to-draw shapes (`1b6dcbc`), one distinct picture per palette icon (`7ec26e5`), and 45° rotation replacing the three duplicate shape kinds (`3c5b541`). None touch breakpoint code.
+**Scoped to plain single-value controls** (Type, Colour, Box) for this pass. Border (composed from three controls) and per-side spacing keep writing to `changes` regardless of which band is selected - a banded border or a banded padding is not yet expressible, and gesture-driven edits (drag-nudge, grip-resize, shape move) stay base-only too, since neither is exercised by the PRD's testing decisions and both would need their own review of the same `(el, prop, band)` question this pass answered for the panel-field path alone.
 
-Nothing in this epic has been pushed. Four local commits sit on top of `302e2bb`.
+**Two bugs surfaced by 0015's own test coverage, fixed alongside it, both pre-existing:** the status bar could push Save off-screen at a narrow window once its message got long enough (never exercised before, because no earlier test did Reset-then-Save below 700px - and a narrow window is exactly what this epic is for); and `openTag()` built a Fingerprint's opening tag straight off the DOM `class` attribute rather than through `nonWtClasses()` the way `selector` already does, so `wt-shape` (and now `wt-mq-N`) could leak into it. Neither is breakpoint code, both are recorded in CHANGELOG's Fixed section.
+
+**Three side-quests interrupted the epic before 0015** and are shipped: drag-to-draw shapes (`1b6dcbc`), one distinct picture per palette icon (`7ec26e5`), and 45° rotation replacing the three duplicate shape kinds (`3c5b541`). None touch breakpoint code.
+
+Nothing in this epic has been pushed.
 
 ## Problem
 
