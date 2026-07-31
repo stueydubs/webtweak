@@ -19,7 +19,7 @@ Two existing behaviours need re-checking against the new shape, because both wer
 - **The unrelocatable-patch path.** A patch whose element cannot be found is preserved across saves rather than dropped. A banded patch must be preserved whole, bands included, not reduced to its base changes.
 - **The revert-after-reload baseline.** The panel recovers a true authored baseline by reading computed style with the override peeled off. With a band selected, the override to peel is the injected rule, not the inline style - so a restored banded edit set back to its authored value must still be recognised as a revert and clear the batch.
 
-- **A hand-typed Band is not restored into the picker** (found during the 0016 integration sweep, verified by reading `restore()` and `setManualScope`). `manualBands` is written only by the manual-entry path, so after a reload a Band the user typed by hand is no longer offered in the Scope picker even though its edit restored correctly and still previews and saves. The edit is intact; it just cannot be re-selected, so it cannot be revisited or reverted through the Scope control - the user has to retype the exact condition to get back to it. `restore()` should re-register any condition it restores that the page's own sweep does not supply.
+- **A hand-typed Band was not restored into the picker** - found during the 0016 integration sweep, and **fixed**. `manualBands` was written only by the manual-entry path, so after a reload a Band the user typed by hand was no longer offered in the Scope picker even though its edit had restored correctly and still previewed and saved. The edit was intact; it just could not be re-selected, so it could not be revisited or reverted through the Scope control without retyping the exact condition. Both routes to such a condition now go through one `rememberBand()` helper - typed into the picker, or restored from a saved patch - and a browser test covers it (`test_a_hand_typed_band_is_still_offered_after_a_reload`), asserting the restored edit is still *conditional* as well as that its band is back, since a test reading only the list would pass against a restore that had flattened the edit to base.
 
 ## Acceptance criteria
 
@@ -29,7 +29,7 @@ Two existing behaviours need re-checking against the new shape, because both wer
 - [ ] A restored banded edit re-saves identically, producing no duplicate or drifted patch
 - [ ] A banded patch whose element cannot be relocated is preserved whole across a save, bands included
 - [ ] Setting a restored banded edit back to its authored value is recognised as a revert and clears it
-- [ ] A hand-typed Band is still selectable in the Scope picker after a reload
+- [x] A hand-typed Band is still selectable in the Scope picker after a reload
 - [ ] The existing reload-safety rules still hold, with their existing tests unmodified
 - [ ] Browser tests cover the above, asserting at two widths, and carry the browser marker
 

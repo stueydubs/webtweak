@@ -56,6 +56,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delimiters (`;` or `[]`, both of which survive inside parens per CSS MQ4
   `<general-enclosed>`) or is blank - unquoted, one group could print as two, with a
   property list that was never there.
+- **A band you typed by hand survives a reload.** `pageConditions()` re-derives itself
+  from the page's stylesheets on every call, so a condition the CSS does not declare
+  lives only in memory - and `restore()` re-applied such an edit without re-registering
+  its band. The edit came back and still previewed correctly, but its band was gone
+  from the Scope picker, so there was no way to return to it and revert it short of
+  retyping the exact condition. Both routes to a hand-typed condition now go through
+  one `rememberBand()`.
 
 ### Changed
 

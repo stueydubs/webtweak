@@ -624,13 +624,33 @@
     return "resize over " + b.min.text;
   }
 
+  // Two conditions are the same band if they differ only in whitespace or case -
+  // `(max-width:600px)` and `(max-width: 600px)` are one row, not two.
+  function bandKey(c) { return String(c).replace(/\s+/g, " ").trim().toLowerCase(); }
+
+  // A condition the page's own stylesheets do not declare has to be remembered here
+  // or it stops being offered: `pageConditions()` re-derives itself from the page on
+  // every call, so anything not in the CSS lives only in `manualBands`. Both routes
+  // to such a condition come through here - typed into the picker, or restored from a
+  // saved patch after a reload. Without the second, a reload left a restored banded
+  // edit applying with its band absent from the list, so it could not be returned to
+  // and reverted without retyping the exact condition.
+  function rememberBand(condition) {
+    var k = bandKey(condition);
+    if (!k) return;
+    var offered = pageConditions().concat(manualBands).some(function (c) {
+      return bandKey(c) === k;
+    });
+    if (!offered) manualBands.push(condition);
+  }
+
   // The page's bands plus any typed by hand, deduped, narrowest first - so the list
   // reads in the order the default is chosen from. Non-width conditions sort last:
   // they are listed only to say why they are unavailable.
   function pageBands() {
     var seen = {}, out = [];
     pageConditions().concat(manualBands).forEach(function (c) {
-      var key = c.replace(/\s+/g, " ").trim().toLowerCase();
+      var key = bandKey(c);
       if (!key || seen[key]) return;
       seen[key] = true;
       var b = makeBand(c);
@@ -801,7 +821,7 @@
     }
     if (!b.previewable) { status(b.label + " " + NOT_A_WIDTH, false); return refreshScope(); }
     if (!bandMatches(b)) { status(resizeHint(b), false); return refreshScope(); }
-    if (!known && manualBands.indexOf(b.condition) < 0) manualBands.push(b.condition);
+    rememberBand(b.condition);
     setScope(b);
   }
 
@@ -2875,6 +2895,8 @@
           // edit restored that way would appear at every width (ADR-0004).
           Object.keys(p.media || {}).forEach(function (cond) {
             var group = p.media[cond] || {};
+            if (!Object.keys(group).length) return;
+            rememberBand(cond);   // or the restored edit's band drops out of the picker
             Object.keys(group).forEach(function (prop) {
               ensureMqClass(e, el);
               targetMap(e, cond, true)[prop] = group[prop];

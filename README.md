@@ -10,7 +10,7 @@ It is deliberately **half of a loop**. webtweak never rewrites your source - it 
 
 **You need Claude for the second half.** Claude Code with the bundled skill is the smooth path (`webtweak --install-skill`), but any Claude conversation works - paste `reconcile/SKILL.md` and your edits file. And without an LLM at all, `page.webtweak.json` is still a plain readable list of exactly what you changed, which you can apply by hand.
 
-**What v1 is for:** base layout and appearance work on hand-coded pages - resize, restyle, nudge, and drop in decorative shapes. It is *not* a responsive-design tool (you author at one viewport), it does not reorder your DOM, and it does not edit copy. Full list under [What v1 does not do](#what-v1-does-not-do).
+**What it is for:** layout and appearance work on hand-coded pages - resize, restyle, nudge, and drop in decorative shapes. Type, colour and box changes can also be scoped to one of the breakpoints your page already declares, so "smaller, but only on mobile" is expressible and previews as you resize. It does not reorder your DOM and it does not edit copy. Full list under [What it does not do](#what-it-does-not-do).
 
 ## Install
 
@@ -124,11 +124,11 @@ Then from any Claude Code conversation, in your site's project directory:
 
 Claude reads the pending patches, proposes CSS changes, writes them to source, and marks the batch done. If you don't use Claude Code, `reconcile/SKILL.md` documents the full process as plain instructions you can give any Claude conversation.
 
-## What v1 does not do
+## What it does not do
 
-- **No structural reordering.** Moving an element above another (rewriting the DOM order in source) is deferred to v2. v1 is resize, restyle, and nudge.
+- **No structural reordering.** Moving an element above another (rewriting the DOM order in source) is deferred. Today it is resize, restyle, and nudge.
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
-- **Single viewport.** Changes are authored as base CSS; the session's viewport width is recorded so Claude can warn about mobile breakage, but deliberate per-breakpoint authoring is v2.
+- **Per-breakpoint editing is partial, and unreleased.** Type, colour and box changes can be scoped to a breakpoint your page already declares - they preview only inside it, and Claude merges them into the `@media` block your stylesheet already has rather than adding a second one. But border, per-side spacing and every shape control stay base-only whatever you pick; the panel says so rather than quietly ignoring the scope you chose. There is no device frame either: you resize your own window, so you can only author at widths your screen can actually show. **This is in `main`, not yet published** - `npm install -g webtweak` gets the previous behaviour, where every change is base CSS and the session's viewport width is recorded so Claude can warn about mobile breakage.
 - **Limited property set.** Flex/grid alignment editors and hover/focus states are out of the panel. Borders and shadows are in as of 0.4.0, but not per-side border controls or per-corner radii - and in both cases the overlay *declines* rather than flattens: an element whose sides carry different borders, or whose corners carry different radii, has those controls switched off with an explanation, so a deliberate design can't be silently replaced with a box.
 - **Serves one directory as web root.** By default that is the page's own folder, so a page in a subfolder referencing site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 them. Pass `--root` at the real site root to fix it. Pages needing a build step (Tailwind compile, server-side partials) still won't render identically to production.
 

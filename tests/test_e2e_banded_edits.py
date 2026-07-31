@@ -473,3 +473,50 @@ def test_the_scope_note_declines_shape_properties_out_loud(served):
         note = page.eval_on_selector("#wt-scope-note", "el => el.textContent")
         browser.close()
     assert note.endswith(" - Shape properties always apply at every width")
+
+
+def offered_conditions(page):
+    """Every condition the Scope picker currently offers."""
+    page.click("#wt-scope-toggle")
+    out = page.evaluate(
+        """() => Array.from(document.querySelectorAll('#wt-scope-list .wt-band'))
+            .map(b => b.dataset.condition)"""
+    )
+    page.click("#wt-scope-toggle")
+    return out
+
+
+def test_a_hand_typed_band_is_still_offered_after_a_reload(served):
+    """`pageConditions()` re-derives itself from the page's stylesheets every call,
+    so a band the CSS does not declare lives only in memory. restore() re-applied
+    such an edit but never re-registered its condition, leaving the edit applying
+    after a reload with its band gone from the picker - no way to return to it and
+    revert it short of retyping the exact condition from memory.
+
+    Asserts the edit too: a test that only read the list would pass against a
+    restore that had dropped the edit entirely.
+    """
+    tmp, port = served
+    typed = "(max-width: 520px)"   # deliberately not declared anywhere in the fixture
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        assert typed not in offered_conditions(page)
+        page.fill("#wt-scope-input", typed)
+        page.dispatch_event("#wt-scope-input", "change")
+        select_card(page)
+        set_field(page, "wt-fs", "31px")
+        save(page)
+
+        page.reload()
+        page.wait_for_selector("#wt-scope-toggle")
+        page.wait_for_function(
+            "() => getComputedStyle(document.querySelector('.card')).fontSize === '31px'"
+        )
+        listed = offered_conditions(page)
+        inside = rendered(page, ".card", "font-size")
+        resize(page, 1280)
+        outside = rendered(page, ".card", "font-size")
+        browser.close()
+    assert typed in listed, "the restored edit's band dropped out of the picker"
+    assert inside == "31px"
+    assert outside != "31px", "restored as a base edit - it applies at every width"
