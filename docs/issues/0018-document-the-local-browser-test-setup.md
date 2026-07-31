@@ -1,5 +1,7 @@
 # Issue 0018: Document the local browser-test setup
 
+> **Shipped** in `4d209fb`, 2026-07-30. It turned out to be more than a chore: Playwright was not installed at all, so the browser modules had been skipping silently and the suite read green. `requirements-dev.txt` was added, `.venv/` gitignored, and the README now says to check the skip count rather than the colour.
+
 > Labels: chore, ready-for-agent · Type: AFK
 
 ## Parent

@@ -2,6 +2,27 @@
 
 > The release that makes webtweak a responsive tool. You author at a width, webtweak knows which of *your page's own* breakpoints you are inside, and the Patch says so - Claude writes the media query. Changes the Patch contract for the first time; ADR-0001 still holds. See [CONTEXT.md](../CONTEXT.md), [ADR-0001](./adr/0001-capture-intent-not-rewrite-source.md), [ADR-0003](./adr/0003-compose-shorthands-from-discrete-controls.md) and [ADR-0004](./adr/0004-breakpoint-scoped-patches.md).
 
+## Progress
+
+*Last updated 2026-07-31. Update this section in place - it is the one place that says where the epic actually stands.*
+
+| Issue | State |
+|---|---|
+| 0014 discovery + band picker | **Shipped** (`4d209fb`) |
+| 0015 banded preview + recording | **Tests written and red, no implementation.** `tests/test_e2e_banded_edits.py`, 15 tests, deliberately **untracked** - committing them would redden CI |
+| 0016 reconcile merges media groups | Not started |
+| 0017 restore banded edits after reload | Not started |
+| 0018 document the local browser-test setup | **Shipped** (`4d209fb`, same commit) |
+| 0019 release | Not started |
+
+**`4d209fb` is deliberately not shippable on its own.** The bar shows a Scope picker, but the Patch it produces is still byte-identical to 0.6.0's - no `media` key, ever. Until 0015 lands, the UI promises a scope the recording half does not honour. That is pinned by a test asserting the *patch* carries no `media` (asserting on `changes` would be vacuous, since `media` is its sibling, not a member).
+
+**The 0015 design is settled and was validated in a prototype** before the tests were written: one injected `<style>` holding real `@media` blocks, a generated `wt-mq-N` class per element registered in `WT_OWN_CLASSES` so it can never reach a Fingerprint, and declarations written `!important`. The `!important` is not bluntness - a base edit is an inline style, and inline beats any class rule, so it is the only way the banded rule lands at all.
+
+**Three side-quests interrupted the epic** and are shipped: drag-to-draw shapes (`1b6dcbc`), one distinct picture per palette icon (`7ec26e5`), and 45° rotation replacing the three duplicate shape kinds (`3c5b541`). None touch breakpoint code.
+
+Nothing in this epic has been pushed. Four local commits sit on top of `302e2bb`.
+
 ## Problem
 
 **Every edit is a base edit, whatever width you are looking at.** webtweak stamps the session's viewport width into the edits file so Claude can *warn* that a desktop-width change might break mobile - but warning is all it can do. There is no way to say "this heading is too tight, but only at 390px", which is the single most common adjustment on the hand-coded editorial sites webtweak is built for, and the one that most needs to be made by eye rather than by arithmetic. The README says it outright: not a responsive-design tool.
@@ -48,7 +69,7 @@ All of the below are recorded in [ADR-0004](./adr/0004-breakpoint-scoped-patches
 
 - **What a good test is here:** set the window to a width, drive the picker and a panel field the way a user does, and assert on three things together - what the page renders *at that width*, what it renders at another width, and what the Patch says. A banded edit that is not checked at a second width is not tested at all, because the entire claim of the release is that the edit is conditional.
 - **The seam is the existing browser suite, with one addition:** `open_page` already takes a width, and Playwright can resize mid-test, so a test can author at 480px and verify at 1280px in one session. No new seam.
-- **The browser suite runs locally now.** 0.4.0's PRD assumed it could not (Playwright absent on the dev machine); it was installed during that release and the whole suite ran green before each commit. A ticket in this release documents the setup so that stops being folklore.
+- **The browser suite runs locally now** - genuinely, as of 0018. ~~it was installed during 0.4.0 and the whole suite ran green before each commit~~ was itself folklore: Playwright was *not* on the dev machine, and every browser module had been skipping as a single line per module, which reads green. It was installed for real during this epic (`.venv` + `requirements-dev.txt` + `playwright install chromium`), the setup is written down in the README's Development section, and the honest reading rule is there too: **check the skip count, not the colour.**
 - **Every new test carries the browser marker**, selected by marker and never by filename.
 - **Cases to cover:**
   - *Discovery:* the band list contains the page's declared width queries; a `print` query is listed as unavailable; an unreadable cross-origin sheet leaves the list populated from the readable ones; a page with no media queries offers base plus manual entry.

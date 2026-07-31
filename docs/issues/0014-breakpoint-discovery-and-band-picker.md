@@ -1,5 +1,7 @@
 # Issue 0014: Breakpoint discovery and the band picker
 
+> **Shipped** in `4d209fb`, 2026-07-30. Deliberately not releasable alone - the picker chooses a scope the Patch does not yet carry, which 0015 fixes and a test currently pins. See the PRD's Progress section.
+
 > Labels: enhancement, ready-for-agent · Type: AFK
 
 ## Parent

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Shapes turn in 45° steps.** A new Rotate control in the Shape group offers the
+  eight orientations a decorative shape actually wants. An arbitrary angle would be
+  one more value to nudge by eye when nothing else on the page sits at 37°.
+- **Drag on the page to draw a shape at the size you want**, instead of dropping one
+  at a default size and resizing it afterwards. A plain click still drops a default.
+- **The Overlay discovers the page's own breakpoints** and a Scope picker in the bar
+  says which one you are editing at, defaulting to the narrowest that matches your
+  window. Conditions that cannot be previewed by resizing (`print`,
+  `prefers-color-scheme`) are listed as unavailable with the reason, and a manual
+  entry covers a stylesheet the browser will not let us read.
+  **Not yet reflected in what gets recorded** - every edit is still a base edit until
+  the recording half lands, so this is not released on its own.
+
+### Changed
+
+- **The shape palette is six kinds, not nine.** `rectangle` and `ellipse` were a wide
+  square and a wide circle - the same geometry at a different default size, which
+  stopped meaning anything once you could drag one to size. `diamond` was a square at
+  45°, now the Rotate control. A saved edits file naming a retired kind still draws
+  itself correctly: a create patch carries its own geometry and never depended on the
+  shape table.
+- Every palette icon is now a distinct picture; square and rectangle had been drawing
+  the same one.
+
+### Fixed
+
+- The browser test suite genuinely runs locally now. It had been skipping one line per
+  module - which reads green - because Playwright was never installed. See the
+  README's Development section, and check the skip count rather than the colour.
+
 ## [0.6.0] - 2026-07-30
 
 A panel release: the controls stop making you do arithmetic. Spacing is edited per
