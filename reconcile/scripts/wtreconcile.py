@@ -20,6 +20,14 @@ def _die(msg: str) -> NoReturn:
     raise SystemExit(1)
 
 
+def _corrupt(path: str, label: str) -> NoReturn:
+    # One phrasing for every shape guard below. The guards' *conditions* genuinely
+    # differ (list-of-dicts vs dict vs dict-of-dicts), but the message did not, and
+    # `test_malformed_containers_die_cleanly` greps a substring of it - so a typo in
+    # any one hand-typed copy would have diverged silently.
+    _die(f"{path} has a malformed {label} (corrupt edits file)")
+
+
 def _load(path: str) -> dict:
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -36,7 +44,7 @@ def _load(path: str) -> dict:
     batches = doc.get("batches")
     if batches is not None and (not isinstance(batches, list)
                                 or any(not isinstance(b, dict) for b in batches)):
-        _die(f"{path} has a malformed batches array (corrupt edits file)")
+        _corrupt(path, "batches array")
     # One level deeper: without this, a malformed patches/changes container printed
     # a partial listing and then died with a raw traceback, and `status`/`--full`
     # disagreed with `pending` about whether the same file was corrupt at all.
@@ -45,18 +53,18 @@ def _load(path: str) -> dict:
         if patches is None:
             continue
         if not isinstance(patches, list) or any(not isinstance(p, dict) for p in patches):
-            _die(f"{path} has a malformed patches array (corrupt edits file)")
+            _corrupt(path, "patches array")
         for p in patches:
             changes = p.get("changes")
             if changes is not None and not isinstance(changes, dict):
-                _die(f"{path} has a malformed changes object (corrupt edits file)")
+                _corrupt(path, "changes object")
             fp = p.get("fingerprint")
             if fp is not None and not isinstance(fp, dict):
-                _die(f"{path} has a malformed fingerprint object (corrupt edits file)")
+                _corrupt(path, "fingerprint object")
             media = p.get("media")
             if media is not None and (not isinstance(media, dict)
-                                       or any(not isinstance(g, dict) for g in media.values())):
-                _die(f"{path} has a malformed media object (corrupt edits file)")
+                                      or any(not isinstance(g, dict) for g in media.values())):
+                _corrupt(path, "media object")
     return doc
 
 
@@ -107,10 +115,28 @@ def _describe(fp: dict) -> str:
     return s
 
 
+def _warn_impossible_media(pend: list) -> None:
+    # Every shape control is base-only in the Overlay, so a create patch has no way
+    # to record a band - one carrying `media` did not come from webtweak. The summary
+    # marks it `media?!` inline (locality), but --full dumps patches verbatim and
+    # SKILL.md sends Claude there for deep work, so the anomaly also needs a channel
+    # both modes share. stderr, not stdout: --full's stdout is parsed as JSON.
+    # Warn, never _die - the patch is structurally fine and dying here would make the
+    # whole file unreadable over one anomaly, including unrelated pending batches.
+    for i, b in pend:
+        for p in b.get("patches", []):
+            if p.get("op") == "create" and p.get("media"):
+                sys.stderr.write(
+                    f"wtreconcile: batch [{i}] has a create patch carrying `media` "
+                    f"({_describe(p.get('fingerprint', {}))}) - a shape cannot record a "
+                    f"band, so this did not come from webtweak; ask before reconciling\n")
+
+
 def pending(args) -> None:
     doc = _load(args.file)
     pend = [(i, b) for i, b in enumerate(doc.get("batches", []))
             if b.get("status") == "pending"]
+    _warn_impossible_media(pend)
 
     if args.full:  # full patch JSON (fingerprints + changes) for deep work
         out = [
@@ -142,12 +168,12 @@ def pending(args) -> None:
             line = f"    {lead} {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]"
             media = p.get("media") or {}
             if media:
-                # Every shape control is base-only in the Overlay, so a create patch
-                # has no way to record a band - one carrying `media` did not come from
-                # webtweak. Mark it rather than rendering it as an ordinary banded
-                # edit, or the two read identically and the anomaly passes unnoticed.
+                # `media?!` marks the impossible create+media combination (see
+                # _warn_impossible_media) rather than rendering it as an ordinary
+                # banded edit, which would read identically. SKILL.md quotes this
+                # exact token - rename it there too.
                 label = "media?!" if is_create else "media:"
-                line += f"  {label} " + _media_summary(media)
+                line += f"  {label} {_media_summary(media)}"
             print(line)
 
 

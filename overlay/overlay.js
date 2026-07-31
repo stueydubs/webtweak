@@ -829,6 +829,10 @@
   // exactly how a border edit ended up recorded into `media` despite this release's
   // own stated scoping (writeBorder ends in the shared commit() tail, which used to
   // read currentBand() unconditionally).
+  // Two downstream consumers depend on the shape half of this rule: reconcile's
+  // SKILL.md says only an edit patch can carry `media`, and wtreconcile.py flags a
+  // create patch that has one as `media?!`. If a shape control ever becomes bandable,
+  // both need updating first, or that flag fires on perfectly valid output.
   function controlBand(c) {
     if (c.kind === "sides" || c.part) return "";
     if (selectedEl && selectedEl.__wtShape) return "";

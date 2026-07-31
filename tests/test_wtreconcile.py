@@ -75,9 +75,9 @@ def test_pending_shows_a_banded_patch(tmp_path):
     longer treat a patch as if the banded half weren't there.
 
     The same property at base and in a band is ADR-0004's canonical case, so the
-    fixture keeps it - but that makes a bare `"font-size" in stdout` prove nothing
-    (the base segment alone satisfies it). Assert the whole rendered media segment,
-    which only _media_summary can produce.
+    fixture keeps it - which is exactly why this asserts the whole rendered line.
+    A bare `"font-size" in stdout` would be satisfied by the base segment alone
+    and would pass against a _media_summary that dropped properties entirely.
     """
     f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
         {"fingerprint": {"tag": "h1", "id": "headline"},
@@ -86,42 +86,15 @@ def test_pending_shows_a_banded_patch(tmp_path):
     ])]})
     r = run("pending", str(f))
     assert r.returncode == 0
-    assert "media: (max-width: 600px) [font-size]" in r.stdout
-    assert "[font-size]  media:" in r.stdout  # the base half survives alongside it
+    assert ("- h1#headline  [font-size]  media: (max-width: 600px) [font-size]"
+            in r.stdout)
 
 
-def test_pending_shows_a_media_only_patch(tmp_path):
+def test_pending_shows_a_media_only_patch_with_every_property(tmp_path):
     """A patch can carry a media group with no base changes at all (an edit made
-    purely inside a band) - it must still read as real work, not a no-op."""
-    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
-        {"fingerprint": {"tag": "p", "classes": ["lede"]},
-         "changes": {},
-         "media": {"(max-width: 900px)": {"color": "#333333"}}},
-    ])]})
-    r = run("pending", str(f))
-    assert r.returncode == 0
-    assert "media: (max-width: 900px) [color]" in r.stdout
-
-
-def test_pending_shows_every_condition_of_a_multi_band_patch(tmp_path):
-    """One element edited in two bands is the whole point of (el, prop, band)
-    keying - a summary that rendered only the first would hide half the work."""
-    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
-        {"fingerprint": {"tag": "h1", "id": "headline"},
-         "changes": {},
-         "media": {"(max-width: 900px)": {"font-size": "38px"},
-                   "(max-width: 600px)": {"font-size": "32px"}}},
-    ])]})
-    r = run("pending", str(f))
-    assert r.returncode == 0
-    assert "(max-width: 900px) [font-size]" in r.stdout
-    assert "(max-width: 600px) [font-size]" in r.stdout
-    assert "; " in r.stdout  # the two groups are joined, not one clobbering the other
-
-
-def test_pending_shows_every_property_in_one_media_group(tmp_path):
-    """A band can carry several properties; rendering only the first would drop
-    real edits from the summary Claude reconciles against."""
+    purely inside a band), and a band can carry several properties. Asserting the
+    whole line covers both: the empty base segment renders as `[]` rather than the
+    patch reading as a no-op, and every property survives the join in order."""
     f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
         {"fingerprint": {"tag": "p", "classes": ["lede"]},
          "changes": {},
@@ -131,20 +104,41 @@ def test_pending_shows_every_property_in_one_media_group(tmp_path):
     ])]})
     r = run("pending", str(f))
     assert r.returncode == 0
-    for prop in ("font-size", "line-height", "color"):
-        assert prop in r.stdout
+    assert ("- p.lede  []  media: (max-width: 600px) "
+            "[font-size, line-height, color]" in r.stdout)
 
 
-def test_pending_flags_a_create_patch_carrying_media(tmp_path):
-    """Every shape control is base-only, so a create patch cannot record a band -
-    one carrying `media` did not come from webtweak. It must not render
-    identically to a legitimate banded edit."""
+def test_pending_shows_every_condition_of_a_multi_band_patch(tmp_path):
+    """One element edited in two bands is the whole point of (el, prop, band)
+    keying - a summary that rendered only the first would hide half the work.
+    Asserting the joined segment proves the separator and the ordering too."""
     f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"},
+         "changes": {},
+         "media": {"(max-width: 900px)": {"font-size": "38px"},
+                   "(max-width: 600px)": {"font-size": "32px"}}},
+    ])]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert ("media: (max-width: 900px) [font-size]; "
+            "(max-width: 600px) [font-size]" in r.stdout)
+
+
+def impossible_media_batch():
+    """A create patch carrying `media` - a combination the Overlay cannot emit,
+    since every shape control is base-only."""
+    return batch(patches=[
         {"op": "create", "shape": "triangle",
          "fingerprint": {"tag": "svg", "id": "wt-shape-a1b2c3"},
          "changes": {"fill": "#3366cc"},
          "media": {"(max-width: 600px)": {"fill": "#cc3366"}}},
-    ])]})
+    ])
+
+
+def test_pending_flags_a_create_patch_carrying_media(tmp_path):
+    """It must not render identically to a legitimate banded edit."""
+    f = write(tmp_path, {"target": "page.html",
+                         "batches": [impossible_media_batch()]})
     r = run("pending", str(f))
     assert r.returncode == 0
     assert "media?!" in r.stdout
@@ -165,6 +159,40 @@ def test_pending_full_round_trips_a_media_map(tmp_path):
     assert out[0]["patches"][0]["media"] == media
 
 
+def test_pending_full_still_warns_about_an_impossible_media_group(tmp_path):
+    """--full dumps patches verbatim, so the inline `media?!` marker cannot reach
+    it - and --full is the path SKILL.md sends Claude to for real work. The warning
+    goes to stderr so it is visible without corrupting the JSON on stdout."""
+    f = write(tmp_path, {"target": "page.html",
+                         "batches": [impossible_media_batch()]})
+    r = run("pending", "--full", str(f))
+    assert r.returncode == 0
+    json.loads(r.stdout)  # stdout stays parseable JSON
+    assert "create patch carrying `media`" in r.stderr
+
+
+def test_pending_does_not_warn_about_an_ordinary_banded_patch(tmp_path):
+    """The warning must fire on the impossible combination only, or it is noise
+    on every banded session and stops being read."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch(patches=[
+        {"fingerprint": {"tag": "h1", "id": "headline"}, "changes": {},
+         "media": {"(max-width: 600px)": {"font-size": "32px"}}},
+    ])]})
+    for args in ((), ("--full",)):
+        r = run("pending", *args, str(f))
+        assert r.returncode == 0
+        assert r.stderr == ""
+
+
+def test_pending_without_media_is_unchanged(tmp_path):
+    """A patch carrying no media key is exactly the pre-0.5.0 shape - the summary
+    must not grow a media marker for it (ADR-0004: additive, not a rewrite)."""
+    f = write(tmp_path, {"target": "page.html", "batches": [batch()]})
+    r = run("pending", str(f))
+    assert r.returncode == 0
+    assert "media:" not in r.stdout
+
+
 # --- status ----------------------------------------------------------------
 
 def test_status_counts_pending_and_reconciled(tmp_path):
@@ -183,15 +211,6 @@ def test_status_says_fully_reconciled_when_nothing_pends(tmp_path):
     r = run("status", str(f))
     assert r.returncode == 0
     assert "fully reconciled" in r.stdout
-
-
-def test_pending_without_media_is_unchanged(tmp_path):
-    """A patch carrying no media key is exactly the pre-0.5.0 shape - the summary
-    must not grow a media marker for it (ADR-0004: additive, not a rewrite)."""
-    f = write(tmp_path, {"target": "page.html", "batches": [batch()]})
-    r = run("pending", str(f))
-    assert r.returncode == 0
-    assert "media:" not in r.stdout
 
 
 # --- corrupt input ---------------------------------------------------------
