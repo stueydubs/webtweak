@@ -134,14 +134,20 @@ def pending(args) -> None:
             # Flag create patches: they need a different reconcile path (insert
             # clean source, absolute placement sanctioned), and reading them as
             # edit patches sends Claude hunting for an element that isn't there.
-            if p.get("op") == "create":
+            is_create = p.get("op") == "create"
+            if is_create:
                 lead = f"+ create {p.get('shape', 'shape')} ->"
             else:
                 lead = "-"
             line = f"    {lead} {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]"
             media = p.get("media") or {}
             if media:
-                line += "  media: " + _media_summary(media)
+                # Every shape control is base-only in the Overlay, so a create patch
+                # has no way to record a band - one carrying `media` did not come from
+                # webtweak. Mark it rather than rendering it as an ordinary banded
+                # edit, or the two read identically and the anomaly passes unnoticed.
+                label = "media?!" if is_create else "media:"
+                line += f"  {label} " + _media_summary(media)
             print(line)
 
 
