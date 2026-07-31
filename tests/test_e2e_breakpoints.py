@@ -444,14 +444,13 @@ def test_the_scope_survives_selecting_another_element(served):
     assert note == f"p.lede at {BASE}"
 
 
-def test_picking_a_band_does_not_yet_change_what_is_recorded(served):
-    """Pins the transitional state deliberately, so it cannot be mistaken for done.
+def test_picking_a_band_now_changes_what_is_recorded(served):
+    """The opposite of the pin this issue shipped with, replaced rather than deleted
+    per that test's own instruction now that 0015 has landed.
 
-    This issue builds the target selector; issue 0015 makes edits preview and record
-    against it. Until that lands, an edit made with a band selected is still a base
-    change - which means THIS COMMIT MUST NOT SHIP ON ITS OWN: the bar would promise a
-    scope the patch does not carry. When 0015 lands, this test is replaced by its
-    opposite rather than deleted.
+    This issue built the target selector; 0015 makes edits preview and record
+    against it. An edit made with a band selected is now a banded change, not a base
+    one - the bar's promised scope and the patch now agree.
     """
     tmp, port = served
     with sync_playwright() as p:
@@ -462,11 +461,10 @@ def test_picking_a_band_does_not_yet_change_what_is_recorded(served):
         save(page)
         browser.close()
     patch = patches(tmp)[0]
-    assert patch["changes"]["font-size"] == "30px"
     # Asserted on the PATCH, not on `changes`: ADR-0004 puts `media` beside `changes`
-    # as a sibling key, never inside it - so checking `changes` would pass just as
-    # happily once 0015 lands, and this pin would never fire when it is meant to.
-    assert "media" not in patch
+    # as a sibling key, never inside it.
+    assert "font-size" not in patch.get("changes", {})
+    assert patch["media"]["(max-width: 600px)"]["font-size"] == "30px"
 
 
 def test_the_panel_reads_the_bands_own_values_with_no_extra_machinery(served):

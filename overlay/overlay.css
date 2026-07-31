@@ -53,7 +53,18 @@ html { user-select: none; }
   font-size: 12px;
 }
 .wt-crumb b { color: #e8eaed; }
-.wt-status { flex: 0 0 auto; color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right; }
+/* flex-shrink:1 (not 0 like every other control): status has nothing clickable in
+   it, so letting it shrink can never overlap a control the way the crumb comment
+   above warns about - and it has to shrink, or a long message (e.g. "reset - save
+   to drop these edits") holds the bar at its own unwrapped width and pushes Save
+   out past the right edge at a narrow window, which is exactly the width band
+   editing (0015) means to be worked at. The `min-width: 0` override at 820px below
+   only takes effect because of this - shrink is what lets the reserved width in
+   the comment there actually go away. */
+.wt-status {
+  flex: 0 1 auto; color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 /* Scoped to `.wt-bar >` rather than written bare, and that is load-bearing: the band
    picker also carries `.wt-suggest`, which is declared later in this file with the
    same specificity and sets `flex: 1`. Bare selectors lost the cascade to it, so the

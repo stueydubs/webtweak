@@ -17,6 +17,10 @@
 
   var CFG = window.__WEBTWEAK__ || {};
   var RESERVED = "/__webtweak__/";
+  // id of the Overlay's own injected banded-preview stylesheet (issue 0015) - excluded
+  // from pageConditions() the same way overlay.css is, so the picker never offers a
+  // condition the Overlay invented back to the user as one of the page's own.
+  var BAND_STYLE_ID = "wt-band-style";
 
   // Only activate on the target page (not on links the user follows away).
   var here = location.pathname.endsWith("/")
@@ -31,7 +35,9 @@
     ("s" + Math.random().toString(36).slice(2, 10));
   sessionStorage.setItem(SKEY, SESSION);
 
-  // el -> { changes, _x, _y, origStyle } for every selected/edited element.
+  // el -> { changes, media, _x, _y, origStyle, mqClass } for every selected/edited
+  // element. `changes` is a base declaration map, as before 0015; `media` adds one
+  // sibling declaration map per condition a band edit was made under.
   var edited = new Map();
   var selectedEl = null;
   var dirty = false;       // unsaved changes since the last successful save
@@ -63,28 +69,46 @@
     var e = edited.get(el);
     if (!e) {
       // origStyle captured on first contact = the authored baseline, used by reset.
-      e = { changes: {}, _x: 0, _y: 0, origStyle: el.getAttribute("style") };
+      e = { changes: {}, media: {}, _x: 0, _y: 0, origStyle: el.getAttribute("style") };
       edited.set(el, e);
     }
     return e;
   }
-  function record(el, prop, value) {
-    entry(el).changes[prop] = value;
+  // record() defaults every caller that doesn't pass `band` to base - which is every
+  // gesture path (drag-nudge, grip-resize, shape move). That is deliberate: banding
+  // is scoped to the panel-field path (commit(), below) for this release, so a drag
+  // performed while a band happens to be selected still records exactly as it did
+  // before 0015, with zero new behaviour to verify for the paths this release didn't
+  // touch.
+  function record(el, prop, value, band) {
+    band = band || "";
+    var e = entry(el);
+    if (band) {
+      ensureMqClass(e, el);
+      targetMap(e, band, true)[prop] = value;
+    } else {
+      e.changes[prop] = value;
+    }
     dirty = true;
     // The status line reports the most recent notable thing, and a successful edit
     // supersedes whatever it said - an "ignored invalid" warning has no timer, so
     // without this it sits there through every later edit, reading as current. Safe
-    // to clear here: restore() writes `changes` directly and never comes through
-    // record(), so its own "restored N of M" notice survives.
+    // to clear here: restore() writes `changes`/`media` directly and never comes
+    // through record(), so its own "restored N of M" notice survives.
     status("");
     refreshChanges();
   }
-  // True iff any edited element still holds real changes - the single source of
-  // truth for the unsaved-changes (beforeunload) guard, so resets that empty the
-  // map don't leave a stale dirty flag.
+  // True iff any edited element still holds real changes (base or banded) - the
+  // single source of truth for the unsaved-changes (beforeunload) guard, so resets
+  // that empty the map don't leave a stale dirty flag.
   function hasRealEdits() {
     var any = false;
-    edited.forEach(function (e) { if (Object.keys(e.changes).length) any = true; });
+    edited.forEach(function (e) {
+      if (Object.keys(e.changes).length) any = true;
+      Object.keys(e.media || {}).forEach(function (cond) {
+        if (Object.keys(e.media[cond]).length) any = true;
+      });
+    });
     return any;
   }
   // ---- undo / redo ----------------------------------------------------------
@@ -99,21 +123,26 @@
   // Push a panel-input undo step before mutating changes[prop].
   // Consecutive calls for the same el+prop collapse into one step so typing
   // into a field leaves a single undo step regardless of how many keystrokes.
-  function pushUndoWrite(el, prop) {
-    var ch = (edited.get(el) || {}).changes;
+  function pushUndoWrite(el, prop, band) {
+    band = band || "";
+    var ent = edited.get(el);
+    var ch = ent && targetMap(ent, band, false);
     var prev = ch ? ch[prop] : undefined;
     var top = undoStack[undoStack.length - 1];
-    // Only collapse consecutive PANEL writes of the same prop into one step. A gesture
-    // batch (a drag/resize, tagged below) must stay its own step, or a single-axis grip
-    // resize followed by typing the same prop would fuse into one undo.
+    // Only collapse consecutive PANEL writes of the same prop AND band into one step.
+    // A gesture batch (a drag/resize, tagged below) must stay its own step, or a
+    // single-axis grip resize followed by typing the same prop would fuse into one
+    // undo. Keying on band too keeps a base edit and a banded edit of the same
+    // property as two separate steps, never one collapsing into the other.
     // The redo branch dies either way: a collapsed keystroke is still a new edit, and
     // after an undo the step it collapses into is one the user has stepped back past.
-    if (top && !top.gesture && top.length === 1 && top[0].el === el && top[0].prop === prop) {
+    if (top && !top.gesture && top.length === 1 && top[0].el === el && top[0].prop === prop &&
+        (top[0].band || "") === band) {
       redoStack.length = 0;
       refreshHistory();
       return;
     }
-    pushUndo([{ el: el, prop: prop, prev: prev }]);
+    pushUndo([{ el: el, prop: prop, prev: prev, band: band }]);
   }
   // Gesture-batched undo: snapshot the props at gesture start, then at end push one
   // batch for those that actually changed. Shared by shape move + both resize paths.
@@ -170,15 +199,18 @@
         if (!document.contains(u.el)) return;      // element is gone; nothing to undo onto
         ent = entry(u.el);
       }
+      var band = u.band || "";
+      var map = targetMap(ent, band, true);
       // The value being replaced IS the inverse's `prev` - including undefined, which
-      // both directions read as "this property was not in changes".
-      inverse.push({ el: u.el, prop: u.prop, prev: ent.changes[u.prop] });
+      // both directions read as "this property was not in changes" for that band.
+      inverse.push({ el: u.el, prop: u.prop, prev: map[u.prop], band: band });
       if (u.prev === undefined) {
-        delete ent.changes[u.prop];
+        delete map[u.prop];
         // rebuildInline only seeds _x/_y when nudge IS in changes; reset manually here.
-        if (u.prop === "nudge") { ent._x = 0; ent._y = 0; }
+        if (!band && u.prop === "nudge") { ent._x = 0; ent._y = 0; }
       } else {
-        ent.changes[u.prop] = u.prev;
+        if (band) ensureMqClass(ent, u.el);   // redo can reintroduce a band write
+        map[u.prop] = u.prev;
       }
       if (els.indexOf(u.el) < 0) els.push(u.el);
     });
@@ -490,6 +522,11 @@
       // webtweak's own sheet has breakpoints (the bar collapses on a narrow window);
       // offering them would be the editor describing itself as the page.
       if ((sheet.href || "").indexOf(RESERVED) >= 0) return;
+      // The Overlay's OWN injected banded-preview sheet (0015) has no href to catch
+      // the check above - same reasoning, different disguise: without this, a
+      // session's own banded edits would start reappearing in the picker as though
+      // the page had declared them.
+      if (sheet.ownerNode && sheet.ownerNode.id === BAND_STYLE_ID) return;
       collectConditions(sheet, out);
     });
     return out;
@@ -592,6 +629,11 @@
     scope = b || null;
     watchScope();
     refreshScope();
+    // The panel populates per band for free (getComputedStyle already resolves the
+    // page's own media queries at the current width - ADR-0004), but only if
+    // something asks it to: a field left showing the PREVIOUS scope's value after
+    // the scope itself visibly moved would be its own small silent-failure mode.
+    if (selectedEl) populate(selectedEl);
   }
   // Watch the SCOPE'S OWN condition, not the window. The browser fires this exactly
   // when the condition stops (or starts) being true, with the new state already
@@ -714,6 +756,85 @@
     if (!bandMatches(b)) { status(resizeHint(b), false); return refreshScope(); }
     if (!known && manualBands.indexOf(b.condition) < 0) manualBands.push(b.condition);
     setScope(b);
+  }
+
+  // ---- per-band recording + preview (issue 0015) -----------------------------
+  // An inline style (how a base edit previews) cannot carry a media query, so a
+  // banded edit previews through one injected `<style>` holding real `@media`
+  // blocks instead, per ADR-0004. Every element that gets a banded edit is given a
+  // generated class to target - registered in WT_OWN_CLASSES so it can never reach
+  // a Fingerprint - and this stylesheet is rebuilt from `edited` whenever anything
+  // changes (see refreshChanges). Declarations are `!important`: the base edit they
+  // compete with is an inline style, which beats any class rule that isn't.
+  var bandStyleEl = null;   // assigned once the bar is mounted
+  var mqCounter = 0;
+
+  function currentBand() { return scope ? scope.condition : ""; }
+
+  function ensureMqClass(ent, el) {
+    if (!ent.mqClass) {
+      ent.mqClass = "wt-mq-" + (++mqCounter);
+      WT_OWN_CLASSES[ent.mqClass] = 1;
+    }
+    if (!el.classList.contains(ent.mqClass)) el.classList.add(ent.mqClass);
+    return ent.mqClass;
+  }
+
+  // Base changes live in `ent.changes`; a banded edit lives in `ent.media[band]`,
+  // created on first write. `create=false` reads without allocating an empty group
+  // that save() would otherwise have to filter back out as a phantom band.
+  function targetMap(ent, band, create) {
+    if (!band) return ent.changes;
+    var m = ent.media[band];
+    if (!m && create) m = ent.media[band] = {};
+    return m;
+  }
+
+  // Widest band first, narrowest last: at a window where two bands both match (the
+  // same overlap the picker itself declines to guess at - ADR-0004), the LATER rule
+  // in a stylesheet wins, so ordering narrowest-last makes it win here exactly the
+  // way it would in the page's own CSS.
+  function renderBandStyle() {
+    if (!bandStyleEl) return;
+    var groups = {};
+    edited.forEach(function (e) {
+      if (!e.mqClass || !e.media) return;
+      Object.keys(e.media).forEach(function (cond) {
+        var props = e.media[cond];
+        if (!props || !Object.keys(props).length) return;
+        (groups[cond] || (groups[cond] = [])).push({ cls: e.mqClass, props: props });
+      });
+    });
+    var conds = Object.keys(groups).sort(function (a, b) {
+      return makeBand(b).span - makeBand(a).span;
+    });
+    bandStyleEl.textContent = conds.map(function (cond) {
+      var body = groups[cond].map(function (g) {
+        var decls = Object.keys(g.props).map(function (p) {
+          return p + ": " + g.props[p] + " !important;";
+        }).join(" ");
+        return "." + g.cls + " { " + decls + " }";
+      }).join("\n  ");
+      return "@media " + cond + " {\n  " + body + "\n}";
+    }).join("\n");
+  }
+
+  // Read a control's value with THIS element's own override for `prop` at `band`
+  // removed, to recover the true authored baseline - the band equivalent of
+  // populate()'s inline-style peel for a base edit (see withTempStyle, below).
+  // Toggling the injected stylesheet, not `el.style`, is the only way to ask "what
+  // would this render without my override", because that is where the override
+  // itself lives.
+  function withTempBandRemoved(ent, band, prop, read) {
+    var map = ent.media[band];
+    if (!map || !Object.prototype.hasOwnProperty.call(map, prop)) return read();
+    var saved = map[prop];
+    delete map[prop];
+    renderBandStyle();
+    var result = read();
+    map[prop] = saved;
+    renderBandStyle();
+    return result;
   }
 
   // ---- shapes ---------------------------------------------------------------
@@ -897,6 +1018,14 @@
   // scale(...) }` (the A4/print layouts webtweak explicitly supports) would
   // render the whole Overlay scaled and anchored to the body box.
   document.documentElement.appendChild(root);
+
+  // The banded-preview stylesheet (0015). A real <style> so real @media rules can
+  // live in it - an inline style has no way to be conditional. Kept out of
+  // pageConditions() by id (see BAND_STYLE_ID) so the picker never offers a
+  // condition the Overlay put there itself.
+  bandStyleEl = document.createElement("style");
+  bandStyleEl.id = BAND_STYLE_ID;
+  document.head.appendChild(bandStyleEl);
 
   var hoverBox = document.getElementById("wt-hover");
   var selBox = document.getElementById("wt-selected");
@@ -1295,11 +1424,20 @@
   }
 
   // Build the opening tag from attributes (robust against '>' inside attribute
-  // values) and exclude the Overlay's injected inline `style`.
+  // values) and exclude the Overlay's injected inline `style`. `class` is rebuilt
+  // from nonWtClasses() rather than read verbatim: the raw attribute carries every
+  // class the Overlay itself added (`wt-shape`, and now a generated `wt-mq-N`), and
+  // openTag is part of the Fingerprint - the same identity `selector` already keeps
+  // clean, so this field must match it rather than leak the Overlay's own markers.
   function openTag(el) {
     var s = "<" + el.tagName.toLowerCase();
     Array.prototype.forEach.call(el.attributes, function (a) {
       if (a.name === "style") return;
+      if (a.name === "class") {
+        var cls = nonWtClasses(el).join(" ");
+        if (cls) s += ' class="' + cls.replace(/"/g, "&quot;") + '"';
+        return;
+      }
       s += " " + a.name + (a.value !== "" ? '="' + a.value.replace(/"/g, "&quot;") + '"' : "");
     });
     return (s + ">").slice(0, 300);
@@ -1412,13 +1550,22 @@
       return;
     }
     if (e) {
-      // Record every change being discarded so one Ctrl+Z brings them all back.
+      // Record every change being discarded, base AND banded, so one Ctrl+Z brings
+      // them all back - Reset now discards an element's bands along with it (a
+      // "reset" element that kept rendering a mobile-only override, with nothing on
+      // screen saying so, would be its own silent-failure mode).
       var steps = Object.keys(e.changes).map(function (p) {
-        return { el: el, prop: p, prev: e.changes[p] };
+        return { el: el, prop: p, prev: e.changes[p], band: "" };
+      });
+      Object.keys(e.media || {}).forEach(function (cond) {
+        Object.keys(e.media[cond]).forEach(function (p) {
+          steps.push({ el: el, prop: p, prev: e.media[cond][p], band: cond });
+        });
       });
       if (steps.length) pushUndo(steps);
       if (e.origStyle == null) el.removeAttribute("style");
       else el.setAttribute("style", e.origStyle);
+      if (e.mqClass) el.classList.remove(e.mqClass);
       edited.delete(el);
       dirty = hasRealEdits();  // don't leave a false 'unsaved changes' flag when nothing remains
     }
@@ -1441,6 +1588,11 @@
   function populate(el) {
     var cs = getComputedStyle(el);
     var ent = edited.get(el);
+    // The band being edited, if any - "" means base, and reads exactly as before
+    // 0015. Sides and border controls stay base-only in this release (see writeSides
+    // / writeBorder, untouched below); only the plain single-value controls this
+    // loop otherwise handles are band-aware.
+    var band = currentBand();
     baselines = {};
     closeAllSuggests();   // a list left open would hang over the repopulated fields
     // Before the reads: the border controls read (and write) whichever side they are
@@ -1460,12 +1612,20 @@
       if (c.kind === "sides") return populateSides(c, host, hcs, ent);
       var shown = c.read(hcs);            // current (possibly already-edited) value -> the panel
       var base = shown;
-      // After a reload+restore the override is applied inline, so computed == the
-      // edited value. Recover the true authored baseline by reading computed with
-      // just this property's override peeled off, so "revert to original" is still
-      // detected (and doesn't record a no-op patch setting a prop to its own origin).
+      // After a reload+restore (or simply re-selecting while the same band is still
+      // targeted) the override is already applied, so computed == the edited value.
+      // Recover the true authored baseline by reading computed with just this
+      // property's own override peeled off, so "revert to original" is still
+      // detected (and doesn't record a no-op patch setting a prop to its own value).
+      // A banded override lives in the injected stylesheet, not inline, so peeling
+      // it off means editing that stylesheet rather than `host.style` - see
+      // withTempBandRemoved.
       var prop = propOf(c);   // `border-bottom` for a one-sided rule, else c.prop
-      if (ent && ent.changes && prop && Object.prototype.hasOwnProperty.call(ent.changes, prop)) {
+      if (band && ent) {
+        base = withTempBandRemoved(ent, band, prop, function () {
+          return c.read(getComputedStyle(host));
+        });
+      } else if (ent && ent.changes && prop && Object.prototype.hasOwnProperty.call(ent.changes, prop)) {
         base = withTempStyle(host,
           function (s) { s.removeProperty(prop); },
           function () { return c.read(getComputedStyle(host)); });
@@ -1613,10 +1773,15 @@
   // authored inline style plus whatever other edits remain on the element.
   function revertControl(c) {
     var ent = edited.get(selectedEl);
+    var band = currentBand();
     var prop = propOf(c);
-    if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
-    if (ent) delete ent.changes[prop];
-    rebuildInline(selectedEl, ent);  // preserves coexisting authored longhands
+    var map = ent && targetMap(ent, band, false);
+    if (map && map[prop] !== undefined) pushUndoWrite(selectedEl, prop, band);
+    if (map) delete map[prop];
+    // Base reverts by rebuilding the inline style (preserves coexisting authored
+    // longhands); a banded revert has nothing inline to rebuild - refreshChanges()
+    // below regenerates the injected stylesheet without this declaration instead.
+    if (!band) rebuildInline(selectedEl, ent);
     dirty = hasRealEdits();          // reverting the last edit must clear the stale unsaved flag
     status("");                      // abandoning an edit supersedes a stale notice too
     refreshChanges();
@@ -1694,9 +1859,14 @@
   // path below both end here, so there is one place a Patch can be created.
   function commit(c, v) {
     var prop = propOf(c);
-    pushUndoWrite(selectedEl, prop);
-    applyChange(selectedEl, prop, v);    // routes rx to the child node; plain setProperty otherwise
-    record(selectedEl, prop, v);
+    var band = currentBand();
+    pushUndoWrite(selectedEl, prop, band);
+    // A base write previews inline (routes rx to the child node; plain setProperty
+    // otherwise). A banded write has no inline path - it previews through the
+    // injected stylesheet instead, rebuilt inside record() -> refreshChanges(), so
+    // the live change never leaks outside the band it was made in.
+    if (!band) applyChange(selectedEl, prop, v);
+    record(selectedEl, prop, v, band);
     positionBox(selBox, selectedEl);                        // any edit can reflow - always re-fit the box
   }
 
@@ -1728,7 +1898,8 @@
     return [propOf(c)];
   }
   function refreshRevertMarks() {
-    var ch = (selectedEl && (edited.get(selectedEl) || {}).changes) || {};
+    var ent = selectedEl && edited.get(selectedEl);
+    var ch = (ent && targetMap(ent, currentBand(), false)) || {};
     CONTROLS.forEach(function (c) {
       var mark = document.getElementById(c.id + "-revert");
       if (!mark) return;
@@ -1744,13 +1915,16 @@
     if (!selectedEl) return;
     var ent = edited.get(selectedEl);
     if (!ent) return;
+    var band = currentBand();
+    var map = targetMap(ent, band, false);
+    if (!map) return;
     var props = rowProps(c).filter(function (p) {
-      return Object.prototype.hasOwnProperty.call(ent.changes, p);
+      return Object.prototype.hasOwnProperty.call(map, p);
     });
     if (!props.length) return;
-    pushUndo(props.map(function (p) { return { el: selectedEl, prop: p, prev: ent.changes[p] }; }));
-    props.forEach(function (p) { delete ent.changes[p]; });
-    rebuildInline(selectedEl, ent);
+    pushUndo(props.map(function (p) { return { el: selectedEl, prop: p, prev: map[p], band: band }; }));
+    props.forEach(function (p) { delete map[p]; });
+    if (!band) rebuildInline(selectedEl, ent);
     dirty = hasRealEdits();
     status("");
     populate(selectedEl);          // every field back to what the element now renders
@@ -2447,8 +2621,21 @@
           fingerprint: fingerprint(el),
           changes: e.changes,
         });
-      } else if (Object.keys(e.changes).length) {
-        patches.push({ fingerprint: fingerprint(el), changes: e.changes });
+      } else {
+        // `media` rides beside `changes` as a sibling key (ADR-0004), and only when
+        // there is at least one non-empty group - a patch carrying no band must stay
+        // byte-identical to what every release before 0015 wrote, so existing edits
+        // files keep reconciling unchanged.
+        var media = {};
+        Object.keys(e.media || {}).forEach(function (cond) {
+          if (Object.keys(e.media[cond]).length) media[cond] = e.media[cond];
+        });
+        var hasMedia = Object.keys(media).length > 0;
+        if (Object.keys(e.changes).length || hasMedia) {
+          var patch = { fingerprint: fingerprint(el), changes: e.changes };
+          if (hasMedia) patch.media = media;
+          patches.push(patch);
+        }
       }
     });
     // Re-attach patches a partial restore couldn't re-locate, so saving the elements
@@ -2553,6 +2740,16 @@
             e.changes[prop] = v;
             if (prop === "nudge") { e._x = v.dx; e._y = v.dy; }  // also seed the interact offset
           });
+          // Banded groups restore into the injected stylesheet, never inline - an
+          // inline override has no way to stay conditional on width, and a mobile
+          // edit restored that way would appear at every width (ADR-0004).
+          Object.keys(p.media || {}).forEach(function (cond) {
+            var group = p.media[cond] || {};
+            Object.keys(group).forEach(function (prop) {
+              ensureMqClass(e, el);
+              targetMap(e, cond, true)[prop] = group[prop];
+            });
+          });
           n++;
         });
         refreshChanges();
@@ -2576,9 +2773,17 @@
   var changesSig = null;    // row signature, so an unchanged list is not rebuilt
 
   function changeSummary(e) {
-    return Object.keys(e.changes).map(function (p) {
+    var parts = Object.keys(e.changes).map(function (p) {
       return p === "nudge" ? "nudge " + e.changes[p].dx + "," + e.changes[p].dy : p;
-    }).join(", ");
+    });
+    // Named by the band's own readable form (`≤600px`) - the same label the picker
+    // shows - not the raw condition, so a session spanning two widths reads as one
+    // list rather than a puzzle of media-query strings.
+    Object.keys(e.media || {}).forEach(function (cond) {
+      var label = makeBand(cond).label;
+      Object.keys(e.media[cond]).forEach(function (p) { parts.push(p + " " + label); });
+    });
+    return parts.join(", ");
   }
 
   // record() fires per pointermove, so rebuilding on every one churned the whole
@@ -2587,11 +2792,15 @@
   function refreshChanges() {
     if (!changesBox) return;          // called before the overlay finished mounting
     if (interacting) return;
+    renderBandStyle();                // keep the injected @media rules in sync with `edited`
     repaintBadge();                   // the badge depends on hasRealEdits() too
     refreshRevertMarks();             // ...and so does each row's undo affordance
     var rows = [];
     edited.forEach(function (e, el) {
-      if (Object.keys(e.changes).length) rows.push({ el: el, e: e });
+      var hasMedia = Object.keys(e.media || {}).some(function (cond) {
+        return Object.keys(e.media[cond]).length > 0;
+      });
+      if (Object.keys(e.changes).length || hasMedia) rows.push({ el: el, e: e });
     });
     if (!rows.length) {
       changesBox.hidden = true;

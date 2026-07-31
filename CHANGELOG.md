@@ -19,8 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window. Conditions that cannot be previewed by resizing (`print`,
   `prefers-color-scheme`) are listed as unavailable with the reason, and a manual
   entry covers a stylesheet the browser will not let us read.
-  **Not yet reflected in what gets recorded** - every edit is still a base edit until
-  the recording half lands, so this is not released on its own.
+- **A banded edit now previews and records against the picker.** Pick a band, edit a
+  plain field (Type, Colour, Box), and the change applies only inside that band - drag
+  your window out of it and the page reverts to base, exactly as it will once
+  reconciled. The Patch gains a `media` map sibling to `changes`, one group per
+  condition; a patch carrying no band stays byte-identical to what every release
+  before this one wrote. Undo, the change list, and revert are all band-aware, so a
+  base edit and a banded edit of the same property never overwrite one another. See
+  ADR-0004. Border and per-side spacing controls stay base-only for now - a banded
+  border or padding is not yet expressible.
 
 ### Changed
 
@@ -38,6 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The browser test suite genuinely runs locally now. It had been skipping one line per
   module - which reads green - because Playwright was never installed. See the
   README's Development section, and check the skip count rather than the colour.
+- **A long status message could push Save off the right edge of the window at a
+  narrow width.** The status column never shrank (`flex-shrink: 0`, like every other
+  bar control, to stop it overlapping a clickable one) and never wrapped or
+  truncated either, so a message like "reset - save to drop these edits" held the
+  bar at its own full width and pushed later buttons past the viewport - at exactly
+  the widths band editing exists to be used at. Status has nothing clickable in it,
+  so it is now the one control that shrinks, with an ellipsis for whatever doesn't
+  fit; the `.wt-status { min-width: 0 }` narrow-window rule this reactivates had
+  been dead code since the flex-shrink hardening, doing nothing at any width.
+- **The opening tag in a Fingerprint could leak an Overlay-generated class.**
+  `openTag()` read `class` straight off the DOM instead of through `nonWtClasses()`
+  the way `selector` already does, so a shape's `wt-shape` class (and now a banded
+  edit's generated `wt-mq-N`) was reaching Claude as though the page had authored
+  it. Fixed to rebuild `class` the same way the rest of the Fingerprint does.
 
 ## [0.6.0] - 2026-07-30
 
