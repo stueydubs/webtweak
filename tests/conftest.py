@@ -89,6 +89,52 @@ def place_shape(page, kind="square", x=400, y=350):
     page.wait_for_selector("svg.wt-shape")
 
 
+def resize(page, width):
+    """Resize the window and let the page actually observe it.
+
+    `set_viewport_size` resolves before Chromium has necessarily dispatched the
+    resize and media-query-change tasks, so reading the scope straight afterwards
+    raced them and failed about one run in five. Waiting for `innerWidth` and then
+    firing one more resize mirrors what a real drag does - it sends a stream of them,
+    not a single event - rather than papering over the timing with a fixed pause.
+    """
+    page.set_viewport_size({"width": width, "height": 900})
+    page.wait_for_function("w => window.innerWidth === w", arg=width)
+    page.evaluate("() => window.dispatchEvent(new Event('resize'))")
+
+
+def pick(page, condition):
+    """Choose a band in the Scope picker, the way a user does."""
+    page.click("#wt-scope-toggle")
+    page.click(f'#wt-scope-list .wt-band[data-condition="{condition}"]')
+
+
+def rendered(page, selector, prop):
+    """What the page actually renders - the only honest test of a preview."""
+    return page.evaluate(
+        "([s, p]) => getComputedStyle(document.querySelector(s)).getPropertyValue(p)",
+        [selector, prop],
+    )
+
+
+def reload_and_restore(page):
+    """Reload and wait for restore() to have finished re-applying this session."""
+    page.reload()
+    page.wait_for_selector("#wt-root")
+    page.wait_for_function(
+        "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
+    )
+
+
+def seed_batch(edits_file, session, patch_list, viewport=1280):
+    """Write an edits file holding one pending batch for `session`."""
+    edits_file.write_text(json.dumps({
+        "target": "sample.html",
+        "batches": [{"sessionId": session, "savedAt": "2026-01-01T00:00:00",
+                     "viewport": viewport, "status": "pending", "patches": patch_list}],
+    }))
+
+
 def select_card(page):
     """Select div.card itself, not one of its children.
 

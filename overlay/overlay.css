@@ -19,12 +19,15 @@ html { user-select: none; }
   pointer-events: none; /* let the page receive picker events; UI re-enables locally */
   /* How tall the bar currently is. Everything that hangs below the bar reads this
      instead of repeating a number, because the bar wraps (see .wt-bar) and its
-     height is therefore a fact about the rendered content, not a constant - it
-     measured 44, 85 and 90px across the widths this is used at. The value here is
+     height is therefore a fact about the rendered content, not a constant - measured
+     across 320-1440px it takes 44px on one row, 56-70px on two, and 90 or 119px on
+     three and four in the worst states. The value here is
      only the one-row fallback; overlay.js measures the bar and writes the real
      height back onto this property, which is the one thing CSS cannot do for
-     itself. Two `top: 56px` rules and a `calc(100vh - 72px)` used to encode the
-     same guess in three places, none of which knew about the others. */
+     itself. Two `top: 56px` rules and two `calc(100vh - ...)` clearances used to
+     encode the same guess in four places, none of which knew about the others -
+     and the fourth (.wt-dock) was missed on the first pass, which is the argument
+     for having one name for it. */
   --wt-bar-h: 44px;
 }
 
@@ -39,7 +42,7 @@ html { user-select: none; }
    there was no shed left to make; and the overflow was never confined to narrow
    windows anyway - the longest badge text pushed Save out at 640px and 820px too.
    Wrapping ends the whole class instead of the latest instance, and it keeps the
-   rule the .wt-crumb comment states: a narrow window is not a reduced overlay. */
+   rule the 820px block's comment states: a narrow window is not a reduced overlay. */
 .wt-bar {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -49,7 +52,10 @@ html { user-select: none; }
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
-  padding: 0 14px;
+  /* Vertical padding at every width, not only where the narrow blocks set it: the bar
+     wraps above 620px too (the longest badge text is enough at 820), and with `0` the
+     second row sat flush against the bar's edge. */
+  padding: 4px 14px;
   background: #15171c;
   color: #e8eaed;
   font-size: 13px;
@@ -78,10 +84,9 @@ html { user-select: none; }
    above warns about - and it has to shrink, or a long message (e.g. "reset - save
    to drop these edits") holds the bar at its own unwrapped width. That used to push
    Save clean out of the window; now that the bar wraps it costs a row instead, which
-   is cheaper but still worth avoiding - see the flex-basis override at 620px, where
-   shrink alone stops being enough. The `min-width: 0` override at 820px below only
-   takes effect because of this - shrink is what lets the reserved width in the
-   comment there actually go away. */
+   is cheaper but still worth avoiding - see the flex-basis override at 820px, where
+   shrink alone stops being enough because basis is what wrapping is decided on. The
+   `min-width: 0` there only takes effect because of the shrink set here. */
 .wt-status {
   flex: 0 1 auto; color: #8ad18a; font-size: 12px; min-width: 90px; text-align: right;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -147,10 +152,17 @@ html { user-select: none; }
      width, so "Applies at:" becomes "At:" rather than disappearing. */
   .wt-scope-long { display: none; }
   .wt-scope-short { display: inline; }
-  .wt-status { min-width: 0; }
+  /* flex-basis 0, which is the point rather than a tidy-up: `auto` sizes the status
+     to its own text BEFORE wrapping is decided, so a long message (the partial-restore
+     report is 79 characters) never gets the chance to shrink - it claims a whole row
+     and crushes the crumb against it, measured at 4px wide at 700px, which is the
+     element's name gone. Basis 0 means it never widens a line: it fills what is left
+     of whichever row it lands on and ellipsises. Shrink alone is not enough here, and
+     `min-width: 0` is what lets the reserved 90px go away. */
+  .wt-status { min-width: 0; flex: 1 1 0; }
 }
 @media (max-width: 700px) {
-  .wt-bar { gap: 7px; padding: 0 8px; }
+  .wt-bar { gap: 7px; padding: 4px 8px; }
   .wt-logo { display: none; }
   .wt-bar .wt-btn { padding: 6px 9px; }
   .wt-scope { gap: 4px; }
@@ -175,13 +187,6 @@ html { user-select: none; }
      whole first row, so the controls beneath line up rather than sitting in a ragged
      column beside a stub of element name. */
   .wt-crumb { flex: 1 0 100%; }
-  /* flex-basis 0, which is the whole point rather than a tidy-up: `auto` sizes the
-     status to its own text before wrapping is decided, so a long message (the
-     partial-restore report is 76 characters) does not shrink - it claims an entire
-     row to itself and takes the bar to four. Basis 0 means it never widens a line,
-     so it fills what is left of whichever row it lands on and ellipsises. Nothing is
-     lost that was not already lost: shrink alone had it measuring 0px wide here. */
-  .wt-status { flex: 1 1 0; }
 }
 /* The hint is the one thing here that teaches rather than does, so it goes last. */
 @media (max-width: 640px) {
@@ -245,6 +250,18 @@ html { user-select: none; }
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
 }
 .wt-palette[hidden] { display: none; }
+/* On a wrapped bar the Shape button can sit on a middle row, and `top: 100%` then
+   drops the palette over the rows beneath it - it is absolutely positioned inside the
+   bar's own stacking context, so it does not merely overlap those controls, it takes
+   their clicks. Measured at 360px with the palette open: Reset all and Deselect were
+   unclickable. Below the whole bar instead, which is where a one-row bar was already
+   putting it. The class is set by overlay.js, because no media query can ask whether
+   a flex container wrapped. */
+.wt-bar-wrapped .wt-palette {
+  position: fixed;
+  top: calc(var(--wt-bar-h) + 8px);
+  right: 12px;   /* the properties panel's own gutter, so the two line up */
+}
 .wt-shape-item {
   width: 40px; height: 40px;
   display: flex; align-items: center; justify-content: center;
@@ -501,16 +518,20 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-block { width: 100%; margin-top: 4px; }
 .wt-note { color: #717784; font-size: 11px; line-height: 1.5; margin-top: 8px; }
 /* Bottom-left dock: the change list stacked above the hint.
-   Deliberately NOT the right column - the properties panel lives there
-   (top:56px, max-height:calc(100vh - 72px)) and a right-hand list overlapped it
-   on laptop-height windows, painting over Reset and making it unclickable.
-   One flow container rather than two fixed corners, so the two can never
-   overlap and swallow each other's clicks. */
+   Deliberately NOT the right column - the properties panel lives there and a
+   right-hand list overlapped it on laptop-height windows, painting over Reset and
+   making it unclickable. One flow container rather than two fixed corners, so the
+   two can never overlap and swallow each other's clicks.
+   The max-height clears the bar, and reads --wt-bar-h to do it. It used to hardcode
+   `calc(100vh - 68px)`, from back when the bar was always 44px: a fourth copy of the
+   same guess, and the one missed when the others were converted. On a wrapped bar it
+   left the change list's own collapse header underneath the bar - measured at
+   360x420 with a full list, clicking that header hit the bar instead. */
 .wt-dock {
   position: fixed;
   bottom: 12px; left: 12px;
   width: 320px;
-  max-height: calc(100vh - 68px);
+  max-height: calc(100vh - var(--wt-bar-h) - 24px);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;

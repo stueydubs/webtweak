@@ -14,7 +14,8 @@ to assume one value per element per property, and a banded edit that quietly
 overwrote a base one would still produce a valid-looking Patch.
 """
 
-from conftest import open_page, patches, place_shape, save, select_card, set_field
+from conftest import (open_page, patches, pick, place_shape, rendered, resize, save,
+                      select_card, set_field)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -23,26 +24,6 @@ NARROW = "(max-width: 600px)"
 
 def revert_shown(page, control):
     return page.eval_on_selector(f"#{control}-revert", "el => !el.hidden")
-
-
-def resize(page, width):
-    """Resize and let the page observe it (see test_e2e_breakpoints.resize)."""
-    page.set_viewport_size({"width": width, "height": 900})
-    page.wait_for_function("w => window.innerWidth === w", arg=width)
-    page.evaluate("() => window.dispatchEvent(new Event('resize'))")
-
-
-def pick(page, condition):
-    page.click("#wt-scope-toggle")
-    page.click(f'#wt-scope-list .wt-band[data-condition="{condition}"]')
-
-
-def rendered(page, selector, prop):
-    """What the page actually renders - the only honest test of a preview."""
-    return page.evaluate(
-        "([s, p]) => getComputedStyle(document.querySelector(s)).getPropertyValue(p)",
-        [selector, prop],
-    )
 
 
 def headline(page):

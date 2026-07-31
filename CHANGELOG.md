@@ -120,7 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   push Save past the right edge - 65px past, at 480px. It went unseen because the
   test guarding this had filtered out anything `hidden`, which the badge is until the
   moment it matters, and because no test had saved at a narrow width and then gone
-  back to the bar. The badge was not the real fault, though: the bar had been pushed
+  back to *Save* - one had gone back to the bar, but to a control sitting left of the
+  badge, where nothing was wrong. The badge was not the real fault: the bar had been pushed
   past its own width three times, each time answered by shortening a label, and by
   480px the eight controls needed 472 of the 480 before the badge had any width at
   all. There was no shed left to make, and the overflow was never confined to narrow
@@ -134,6 +135,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of claiming a whole one. Two tests now assert the invariants directly, at
   ten widths each, with the badge showing and every control live: nothing the bar
   shows may fall outside the bar's box, and the panel must clear the bar.
+- **A saved edit could be destroyed by editing the same element again.** When a
+  reload cannot confirm an element is the one a patch was recorded against - the
+  page's own copy changed, say - the patch is stranded and kept for reconcile rather
+  than mis-applied. If the user then edited that same element, `save()` dropped the
+  stranded patch entirely, on the rule that the fresh patch supersedes it. That is
+  true per declaration and false per patch: `changes` and `media` are independent
+  per-property maps, so everything the fresh patch happened not to set went with it,
+  silently, having just been reported as "kept for reconcile" in the status line. A
+  stranded colour and a whole banded group both vanished on one keystroke. Fresh
+  values still win; only the declarations nobody re-authored are carried over, into a
+  new map rather than into the session's own - `save()` passes those maps through by
+  reference, so merging in place would have left the session holding declarations that
+  were never applied to the page. This is the same wrong-granularity mistake
+  reconcile's step 6 made - anything that asks a question of a whole patch asks it
+  too coarsely.
+- **Both of the bar's dropdowns covered its controls once the bar wrapped.** The shape
+  palette and the band picker each hang off a button that, on a wrapped bar, can sit on
+  a middle row - and each is positioned inside the bar's own stacking context, so
+  neither merely overlapped the controls beneath it, they took their clicks. Measured at
+  360px: Reset all and Deselect could not be clicked while the palette was open. Both
+  now drop below the whole bar, which is where a one-row bar was already putting them.
+  Two fixes, because the palette is statically positioned and can be moved by a rule
+  while the picker's coordinates are inline styles no rule can beat - so the palette
+  moved in CSS and the picker in `placeSuggest`, which now anchors to the bar for any
+  toggle inside it. The picker was missed on the first pass and found only by asking
+  what else drops out of the bar; the regression test covers both, for that reason.
+- **The change list's own collapse header could sit under the bar.** `.wt-dock` was a
+  fourth place the 44px bar height was hardcoded, and the one missed when the panel
+  and the place-hint were converted to `--wt-bar-h`. On a short window with a full
+  list, the header rendered under a wrapped bar - visible, and unclickable.
 - **The opening tag in a Fingerprint could leak an Overlay-generated class.**
   `openTag()` read `class` straight off the DOM instead of through `nonWtClasses()`
   the way `selector` already does, so a shape's `wt-shape` class (and now a banded

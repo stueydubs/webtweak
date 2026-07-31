@@ -11,7 +11,8 @@ import shutil
 
 import pytest
 
-from conftest import edit, open_page, place_shape, select_card, set_field
+from conftest import (edit, open_page, place_shape, seed_batch, select_card,
+                      set_field)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -775,15 +776,6 @@ def test_edits_restored_after_reload(served):
     assert size == "60px"  # the edit was re-applied after reload
 
 
-def _seed_batch(edits_file, session, patches):
-    """Write an edits file holding one pending batch for `session`."""
-    edits_file.write_text(json.dumps({
-        "target": "sample.html",
-        "batches": [{"sessionId": session, "savedAt": "2026-01-01T00:00:00",
-                     "viewport": 1280, "status": "pending", "patches": patches}],
-    }))
-
-
 def test_partial_restore_preserves_unrelocated_patches(served):
     """If a reload can't re-locate some patched elements, the next save must NOT
     drop them - the un-relocated patches are preserved on disk (capture-intent)."""
@@ -797,7 +789,7 @@ def test_partial_restore_preserves_unrelocated_patches(served):
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
 
         # one locatable patch (headline) + one that no longer exists in source (ghost)
-        _seed_batch(edits_file, session, [
+        seed_batch(edits_file, session, [
             {"fingerprint": {"tag": "h1", "id": "headline", "classes": ["title"],
                              "text": "", "ownText": "", "selector": "#headline",
                              "siblingIndex": 0, "openTag": "<h1 id=\"headline\">"},
@@ -858,7 +850,15 @@ def test_revert_preserves_authored_inline_longhand(served):
 
 def test_missed_patch_superseded_by_fresh_edit(served):
     """A stranded (tag-guarded) patch must not produce a duplicate when the user edits
-    the same element this session - the fresh patch supersedes it."""
+    the same element this session - the fresh patch supersedes it.
+
+    "Supersedes" means per declaration, not per patch, and this test used to assert the
+    opposite: that the stranded patch's `color` was gone. That was the bug - everything
+    the fresh patch happened not to re-author was being destroyed silently, having just
+    been reported as "kept for reconcile". The invariant the test exists for is
+    unchanged and still asserted: ONE patch for the element, carrying the fingerprint of
+    what is actually on the page.
+    """
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
@@ -867,7 +867,7 @@ def test_missed_patch_superseded_by_fresh_edit(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
-        _seed_batch(edits_file, session, [
+        seed_batch(edits_file, session, [
             {"fingerprint": {"tag": "div", "id": "headline", "classes": [], "text": "",
                              "ownText": "", "selector": "#headline", "siblingIndex": 0,
                              "openTag": "<div id=\"headline\">"},
@@ -890,7 +890,8 @@ def test_missed_patch_superseded_by_fresh_edit(served):
     headline = [p for p in patches if p["fingerprint"]["id"] == "headline"]
     assert len(headline) == 1                     # not two conflicting patches
     assert headline[0]["fingerprint"]["tag"] == "h1"
-    assert headline[0]["changes"] == {"font-size": "55px"}
+    # The fresh edit, plus the stranded declaration nobody re-authored.
+    assert headline[0]["changes"] == {"font-size": "55px", "color": "#ff0000"}
 
 
 def test_restore_skips_owntext_mismatch(served):
@@ -904,7 +905,7 @@ def test_restore_skips_owntext_mismatch(served):
         page.goto(f"http://127.0.0.1:{port}/sample.html")
         page.wait_for_selector("#wt-root")
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
-        _seed_batch(edits_file, session, [
+        seed_batch(edits_file, session, [
             {"fingerprint": {"tag": "p", "id": "", "classes": [],
                              "text": "", "ownText": "Totally different text from another element",
                              "selector": "body > main.wrap > p:nth-of-type(3)",
@@ -935,7 +936,7 @@ def test_restore_skips_tag_mismatch(served):
         page.wait_for_selector("#wt-root")
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
         # patch claims tag 'div' but #headline is an <h1>
-        _seed_batch(edits_file, session, [
+        seed_batch(edits_file, session, [
             {"fingerprint": {"tag": "div", "id": "headline", "classes": [],
                              "text": "", "ownText": "", "selector": "#headline",
                              "siblingIndex": 0, "openTag": "<div id=\"headline\">"},
@@ -1165,9 +1166,12 @@ _WORST_CASE = """([status, badge]) => {
         .forEach(id => { const e = document.getElementById(id); if (e) e.disabled = false; });
 }"""
 
-# Every width the Overlay's own stylesheet changes behaviour at, plus one either side.
-# The overflow was never confined to narrow windows: the longest badge pushed Save out
-# at 640px and 820px as well, which a 480px-only test could not see.
+# The Overlay's own breakpoints (620/640/700/820), plus round widths spanning the range
+# it is used at. Not "one either side of each breakpoint" - these are the real widths a
+# window gets dragged to, and the breakpoints themselves are included so a rule that
+# only bites exactly at its own edge is covered. The overflow was never confined to
+# narrow windows: the longest badge pushed Save out at 640px and 820px as well, which a
+# 480px-only test could not see.
 BAR_WIDTHS = [360, 400, 480, 560, 620, 640, 700, 820, 900, 1280]
 
 
@@ -1220,12 +1224,114 @@ def test_the_panel_clears_the_bar_at_every_width(served, width):
         # A wait, not a bare read: the measurement rides a ResizeObserver, so it lands
         # a frame after the layout change rather than synchronously. Five seconds is
         # far more than a frame and keeps a real failure from costing 30.
+        # Bounded from BOTH sides. `panel.top >= bar.bottom` alone passes just as
+        # happily against a measurement that is far too large - a mutant adding 600px
+        # to the measured height left this assertion green while most of the panel was
+        # off the bottom of the window.
         page.wait_for_function(
             """() => {
                 const bar = document.querySelector('.wt-bar').getBoundingClientRect();
                 const panel = document.querySelector('.wt-panel').getBoundingClientRect();
-                return panel.top >= bar.bottom;
+                return panel.top >= bar.bottom && panel.top <= bar.bottom + 20;
             }""",
             timeout=5000,
         )
         browser.close()
+
+
+# Anything the bar drops below a control - the shape palette, the band picker - is
+# positioned inside the bar's own stacking context, so on a wrapped bar it does not
+# merely overlap the rows beneath it, it takes their clicks. The bar-box test above
+# cannot see this: both dropdowns are `hidden` until opened, and the controls they
+# cover are still inside the bar. Hit-testing is the only honest check.
+#
+# Parametrised over BOTH dropdowns deliberately. They are fixed by two different
+# mechanisms - the palette in CSS, the picker in placeSuggest, because the picker's
+# coordinates are inline styles no rule can beat - and only the palette was fixed
+# first. One test over both is what stops the next one being missed the same way.
+@pytest.mark.parametrize("width", [360, 400, 480, 620, 700, 1280])
+@pytest.mark.parametrize(
+    "opener,shown",
+    [("#wt-shape-btn", "#wt-palette"), ("#wt-scope-toggle", "#wt-scope-list")],
+)
+def test_an_open_bar_dropdown_covers_no_bar_control(served, width, opener, shown):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=width)
+        edit(page, "#headline", "#wt-fs", "70px")
+        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        page.click(opener)
+        page.wait_for_selector(f"{shown}:not([hidden])")
+        blocked = page.evaluate(
+            """(shown) => {
+                const ids = ['wt-shape-btn', 'wt-scope-toggle', 'wt-undo', 'wt-redo',
+                             'wt-reset-all', 'wt-deselect', 'wt-save', 'wt-badge'];
+                const list = document.querySelector(shown);
+                const out = [];
+                for (const id of ids) {
+                    const el = document.getElementById(id);
+                    // Skip the control that opened it: an open dropdown is allowed to
+                    // sit over its own toggle, and some do by design.
+                    if (!el || el.hidden || list.contains(el)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (!r.width) continue;
+                    const hit = document.elementFromPoint(r.left + r.width / 2,
+                                                          r.top + r.height / 2);
+                    if (hit !== el && !el.contains(hit) && !el.contains(hit?.parentElement))
+                        out.push(id);
+                }
+                return out;
+            }""",
+            shown,
+        )
+        browser.close()
+    assert blocked == [], f"{shown} covers these at {width}px: {blocked}"
+
+
+@pytest.mark.parametrize("width", [360, 480, 1280])
+def test_the_change_list_header_clears_the_bar_on_a_short_window(served, width):
+    """The dock's max-height has to clear the bar too. It was the fourth place the
+    44px bar height was hardcoded and the one missed when the others were converted,
+    which put the change list's own collapse header under a wrapped bar - visible,
+    and unclickable."""
+    tmp, port = served
+    with sync_playwright() as p:
+        # Authored wide and then shrunk to the size under test. At 360x420 the bar and
+        # the panel cover most of the fixture, so setup clicks would be fighting the
+        # very overlap being measured - and the recorded changes do not depend on the
+        # width they were made at.
+        browser, page = open_page(p, port, width=1280, height=900)
+        # DISTINCT elements: the change list has one row per element, so editing two
+        # of them a hundred times leaves a two-row list that never reaches the dock's
+        # max-height - and a test that never reaches it cannot see a wrong one. An
+        # earlier version did exactly that and passed against the hardcoded clearance.
+        page.evaluate(
+            """() => {
+                for (let i = 0; i < 14; i++) {
+                    const d = document.createElement('p');
+                    d.id = 'filler-' + i; d.textContent = 'filler ' + i;
+                    document.querySelector('main').appendChild(d);
+                }
+            }"""
+        )
+        for i in range(14):
+            edit(page, f"#filler-{i}", "#wt-fs", f"{20 + i}px")
+        page.click("#wt-changes-head")          # expand the list
+        page.set_viewport_size({"width": width, "height": 420})
+        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        page.wait_for_timeout(100)              # let the ResizeObserver settle
+        state = page.evaluate(
+            """() => {
+                const head = document.getElementById('wt-changes-head');
+                const r = head.getBoundingClientRect();
+                const hit = document.elementFromPoint(r.left + r.width / 2,
+                                                      r.top + r.height / 2);
+                return { barBottom: document.querySelector('.wt-bar').getBoundingClientRect().bottom,
+                         headTop: r.top, blocked: !(hit === head || head.contains(hit)) };
+            }"""
+        )
+        browser.close()
+    assert not state["blocked"], (
+        f"the change-list header is under the bar at {width}x420 "
+        f"(head top {state['headTop']}, bar bottom {state['barBottom']})"
+    )

@@ -35,28 +35,35 @@ Two existing behaviours need re-checking against the new shape, because both wer
 
 ## Outcome
 
-`restore()` already did the right thing - the six open criteria were all about
-proving it, and every one passed first time. The code that made them pass had been
-written alongside 0015, because restoring has to undo whatever `save()` did; what was
-missing was any test that a reload round-trip preserved a band, and an untested
-promise is not a kept one.
+Eight of the nine criteria were open, and seven of them turned out to need only a
+test: `restore()`'s banded path had been written alongside 0015, because restoring
+has to undo whatever `save()` did, and it was correct. What was missing was any proof
+that a reload round-trip preserved a band, and an untested promise is not a kept one.
 
 `tests/test_e2e_banded_reload.py` covers them: applies-inside/not-outside on a band
 the page declares (the hand-typed case was already covered in
 `test_e2e_banded_edits.py`), base-and-band on one element, the re-save round-trip,
-the stranded banded patch, and the revert-to-authored-value baseline. Each asserts at
-two widths, per the PRD's testing decision.
+the stranded banded patch, and the revert-to-baseline check. Each asserts at two
+widths, per the PRD's testing decision, and the first also asserts the condition the
+Overlay actually re-registered - two widths can bracket a band but cannot pin it, and
+a restore that widened `(max-width: 600px)` to 1100px passed everything until that
+assertion existed.
 
-**Writing them surfaced a real defect elsewhere**, which is the return on the work: three of the
-five timed out because Save was outside the viewport. The reconcile badge appears
-only after a save and takes 68px, which pushed Save 65px off a 480px window - and no
-test had ever saved at a narrow width and then gone back to the bar. The bar had been
-over its width three times before this, each time answered by shortening a label, and
-at 480px the eight controls needed 472 of the 480 before the badge had any width at
-all. It is fixed at the source: the bar wraps now, its height is measured and
-published as `--wt-bar-h` rather than guessed in three places, and two parametrised
-tests assert across ten widths that nothing falls outside the bar and that the panel
-clears it. See CHANGELOG.
+**The ninth criterion was genuinely not met**, and a QA round found it after the
+first pass had been committed as done. A stranded patch - one whose element could not
+be confirmed - was dropped whole when the user then edited an element with the same
+id, on the rule that a fresh patch supersedes it. True per declaration, false per
+patch: every property the fresh patch happened not to set went with it, silently,
+having just been reported as "kept for reconcile". The first test of this used
+`#ghost`, an id nothing on the page can match, so it proved only the half that could
+not collide. `save()` now carries stranded declarations over wherever the fresh patch
+has no value for that property and band - the same wrong-granularity fix reconcile's
+step 6 needed - with tests for both directions.
+
+**Writing the tests also surfaced a defect elsewhere**: three of the first five timed
+out because Save sat outside the viewport once anything had been saved. That, the
+shape palette covering bar controls once the bar wrapped, and the change-list header
+sliding under it are all recorded in CHANGELOG.
 
 ## Blocked by
 

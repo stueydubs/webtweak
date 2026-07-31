@@ -16,7 +16,7 @@ than reasoning about one:
     and - worse - record a change the page never showed.
 """
 
-from conftest import open_page, patches, save, set_field
+from conftest import open_page, patches, pick, resize, save, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -26,20 +26,6 @@ BASE = "all widths"
 def scope_shown(page):
     """What the bar says the scope is, without opening the picker."""
     return page.eval_on_selector("#wt-scope-input", "el => el.value")
-
-
-def resize(page, width):
-    """Resize the window and let the page actually observe it.
-
-    `set_viewport_size` resolves before Chromium has necessarily dispatched the
-    resize and media-query-change tasks, so reading the scope straight afterwards
-    raced them and failed about one run in five. Waiting for `innerWidth` and then
-    firing one more resize mirrors what a real drag does - it sends a stream of them,
-    not a single event - rather than papering over the timing with a fixed pause.
-    """
-    page.set_viewport_size({"width": width, "height": 900})
-    page.wait_for_function("w => window.innerWidth === w", arg=width)
-    page.evaluate("() => window.dispatchEvent(new Event('resize'))")
 
 
 def bands(page, reopen=True):
@@ -72,12 +58,6 @@ def band(page, condition, **kw):
         if row["condition"] == condition:
             return row
     raise AssertionError(f"no band row for {condition!r}")
-
-
-def pick(page, condition):
-    """Click a row the way a user does."""
-    page.click("#wt-scope-toggle")
-    page.click(f'#wt-scope-list .wt-band[data-condition="{condition}"]')
 
 
 def test_the_picker_lists_the_pages_own_width_queries(served):

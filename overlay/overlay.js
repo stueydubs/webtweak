@@ -1148,21 +1148,40 @@
   bandStyleEl.id = BAND_STYLE_ID;
   document.head.appendChild(bandStyleEl);
 
-  // Publish the bar's measured height as --wt-bar-h, which the panel and the
-  // place-hint position themselves against. The bar wraps, so its height is a fact
-  // about what is currently rendered - it measures 44px on one row and 85-90px on
-  // two, depending on how the controls fall - and it changes for reasons no media
-  // query can see: a badge appearing after a save is enough to wrap the row. The
-  // stylesheet carries the one-row value as a fallback, so nothing is unpositioned
-  // if this never runs. Two `top: 56px` rules and a `calc(100vh - 72px)` used to
-  // encode the same guess in three places, none of which knew about the others.
+  // Publish the bar's measured height as --wt-bar-h, which the panel, the dock and
+  // the place-hint position themselves against. Why the property exists at all, and
+  // what it replaced, is on its declaration in overlay.css; what belongs here is the
+  // part CSS cannot do - a wrapped bar's height is a fact about what is rendered, and
+  // it changes for reasons no media query can see (a badge appearing after a save is
+  // enough to take the bar to another row). The stylesheet's own value is the
+  // one-row fallback, so nothing is unpositioned if this never runs.
   var barEl = root.querySelector(".wt-bar");
   function measureBar() {
-    root.style.setProperty("--wt-bar-h", Math.round(barEl.getBoundingClientRect().height) + "px");
+    var h = Math.round(barEl.getBoundingClientRect().height);
+    root.style.setProperty("--wt-bar-h", h + "px");
+    // A dropdown anchored to a control drops clear of a one-row bar, but on a wrapped
+    // one the control it hangs from can be on a middle row - so it opens ON TOP of the
+    // rows below and takes their clicks. Measured with the palette open at 360px: Reset
+    // all and Deselect could not be clicked at all. CSS cannot ask whether a flex
+    // container wrapped, so the measurement that is already happening answers it.
+    // One row is whatever the stylesheet's own min-height says, read rather than
+    // repeated: writing 44 here would re-create in JS the exact duplication this
+    // property exists to remove. Read per call rather than hoisted so it stays right
+    // if min-height ever becomes responsive; measured at ~1.5us, on a callback that
+    // fires about once per user action. A non-numeric computed value (`auto`) means
+    // there is no row height to compare against, so nothing is claimed to have
+    // wrapped - defaulting to 0 instead would report EVERY bar as wrapped.
+    var oneRow = parseFloat(getComputedStyle(barEl).minHeight);
+    barEl.classList.toggle("wt-bar-wrapped", isFinite(oneRow) && h > oneRow);
   }
   measureBar();
-  if (window.ResizeObserver) new ResizeObserver(measureBar).observe(barEl);
-  else window.addEventListener("resize", measureBar);   // no RO: a resize is the common cause
+  // No feature test: ResizeObserver predates every browser this runs in, and the
+  // `resize` fallback that used to be here was worse than nothing - it fires only on
+  // width changes, so it missed the badge appearing, the status text, and the crumb
+  // changing on selection, which are precisely the causes a media query cannot see.
+  // It read as coverage while leaving the panel 22px under the bar for good. The 44px
+  // fallback in the stylesheet is the real degradation path.
+  new ResizeObserver(measureBar).observe(barEl);
 
   var hoverBox = document.getElementById("wt-hover");
   var selBox = document.getElementById("wt-selected");
@@ -2569,11 +2588,22 @@
   // and would otherwise clip it (Shadow is the last field of the last group). Drops
   // below its toggle, flipping above when the space below is too short - and its
   // right edge lines up with the toggle's, so it reads as belonging to that field.
+  // A toggle inside the bar drops from the BAR's bottom, not its own. The bar wraps,
+  // so a toggle can sit on a middle row, and dropping from there opens the list over
+  // the rows beneath it - where, being fixed inside the bar's own stacking context, it
+  // does not merely overlap those controls but takes their clicks. Same defect the
+  // shape palette had; that one is solved in CSS (`.wt-bar-wrapped .wt-palette`,
+  // overlay.css) because it is statically positioned, and this one has to be solved
+  // here because these coordinates are written as inline styles that no rule can beat.
+  // Outside the bar (the font picker, the shadow presets) there is nothing to clear
+  // and this resolves to the toggle's own bottom, exactly as before.
   function placeSuggest(list, toggle) {
     var r = toggle.getBoundingClientRect();
+    var bar = toggle.closest && toggle.closest(".wt-bar");
+    var dropFrom = bar ? bar.getBoundingClientRect().bottom : r.bottom;
     var h = list.offsetHeight, w = list.offsetWidth;
-    var roomBelow = window.innerHeight - r.bottom - 8;
-    var top = (roomBelow >= h || r.top < h + 8) ? r.bottom + 4 : r.top - h - 4;
+    var roomBelow = window.innerHeight - dropFrom - 8;
+    var top = (roomBelow >= h || r.top < h + 8) ? dropFrom + 4 : r.top - h - 4;
     list.style.top = Math.max(4, Math.min(top, window.innerHeight - h - 4)) + "px";
     list.style.left = Math.max(4, r.right - w) + "px";
   }
@@ -2967,13 +2997,48 @@
     });
     // Re-attach patches a partial restore couldn't re-locate, so saving the elements
     // that DID restore never silently drops the ones that didn't (apply_batch replaces
-    // this session's whole batch). Skip any whose element the user has since edited this
-    // session (same id/selector) - the fresh patch supersedes the stranded one, so we
-    // don't emit two conflicting patches for one element.
+    // this session's whole batch). Where the user HAS since edited an element with the
+    // same id/selector, the fresh patch supersedes the stranded one - but per
+    // declaration, not per patch. Skipping the whole stranded patch was the original
+    // rule, and it silently destroyed every property the fresh patch happened not to
+    // set: a stranded `media` group plus a base colour both vanished the moment the
+    // user touched that element again, while the status line had just promised they
+    // were "kept for reconcile". This is the same wrong-granularity mistake reconcile's
+    // step 6 made - `changes` and `media` are independent per-property maps, so
+    // anything asking a question of the whole patch asks it too coarsely. Fresh values
+    // still win; only the declarations nobody re-authored are carried over.
     var idKey = function (fp) { return fp.id ? "id:" + fp.id : (fp.selector ? "sel:" + fp.selector : null); };
     var covered = {};
-    patches.forEach(function (p) { var k = idKey(p.fingerprint || {}); if (k) covered[k] = true; });
-    missed.forEach(function (p) { var k = idKey(p.fingerprint || {}); if (!k || !covered[k]) patches.push(p); });
+    patches.forEach(function (p) { var k = idKey(p.fingerprint || {}); if (k) covered[k] = p; });
+    // Both maps on a fresh patch are LIVE references into `edited` (save() passes
+    // `e.changes` and each `e.media[cond]` straight through), so this merges into new
+    // objects rather than assigning into them. Writing in place would push the
+    // stranded patch's declarations back into the session entry - values that were
+    // never applied to the element, so the change list would list a colour the page
+    // is not rendering and the revert check would measure against it.
+    // `Object.assign` order is the rule itself: stranded first, fresh over the top.
+    var mergedOver = function (stranded, fresh) {
+      return Object.assign({}, stranded || {}, fresh || {});
+    };
+    missed.forEach(function (p) {
+      var key = idKey(p.fingerprint || {});
+      var fresh = key ? covered[key] : null;
+      // Nothing fresh for this element, or either side is a created shape (whose
+      // `changes` are seeded geometry, not the same kind of thing): keep the stranded
+      // patch whole and separate rather than merging two unlike patches.
+      if (!fresh || fresh.op || p.op) { patches.push(p); return; }
+      fresh.changes = mergedOver(p.changes, fresh.changes);
+      // Both sides go through mergedOver, so every group in the result is a new object
+      // - including one only the stranded patch had, which a plain copy would have
+      // aliased straight back into the map this is careful not to write into.
+      var media = {};
+      [p.media, fresh.media].forEach(function (src) {
+        Object.keys(src || {}).forEach(function (cond) {
+          media[cond] = mergedOver(media[cond], src[cond]);
+        });
+      });
+      if (Object.keys(media).length) fresh.media = media;
+    });
     // No patches AND nothing on disk for this session: genuinely nothing to do.
     // No patches but a batch IS persisted (edits saved then all reverted): fall
     // through so the empty save clears that stale batch on disk.
