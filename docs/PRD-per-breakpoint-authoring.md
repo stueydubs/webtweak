@@ -63,6 +63,14 @@ The rest was cleanup with one latent bug in it: six helpers duplicated two or th
 
 Full suite after all of it: **387 passed, 0 skipped.**
 
+**A workflow-backed `/code-review` at high effort (four finder angles, 23 candidates, an independent verifier per location - 19 kept, 4 refuted, deduped to 10).** It found more than the three prior rounds combined, and the pattern in what it found is the useful part: **every one of the five substantive defects lives in a state transition, and every test written for this work constructs an end state.** The dropdown tests force the worst-case bar and then open a dropdown, so nothing could see a bar that grows *while* one is open - which is what happens the moment a source-change raises the reconcile badge. Same shape as the earlier miss where the bar-fit test filtered out `hidden` elements and so never saw the badge at all.
+
+Fixed: a `create` patch whose shape is already in source (reconcile writes source first, marks second) was counted as restored and recorded nowhere, so the next save erased the only description of the shape; stranded patches were invisible and undiscardable, so reconcile could write a value the user never saw and had no way to remove - they are now listed in the change list and dropped by Reset all; an open bar dropdown was never repositioned when the bar grew for a non-resize reason; `placeSuggest`'s flip-above branch and viewport clamp still read the toggle's rect, so a short window put the picker across the bar's rows; and `conftest.save()`'s substring wait was satisfied by "reverted - cleared saved edits", meaning a whole class of save regression would have passed green at ~25 call sites.
+
+Two findings turned on their own fix: the merge guard's `p.op` branch was reported unreachable, and the `create`-patch fix made it reachable, so it stayed with a comment saying why. And the bar covering up to 119px of the target page is **recorded as a limitation rather than fixed** - three rows at 480px is structural (eight controls need ~425px before the badge has any width), so the honest options all change the design rather than fix a defect. It is now in CONTEXT.md with the reasoning and the workaround.
+
+Every fix mutation-tested. One of those mutation runs mattered more than the fix: the first version of the grew-while-open test used 360px, where the bar is already at its full height, so nothing grew and the mutant walked straight through it twice before the test was retargeted at the widths where the bar actually changes size.
+
 Nothing in this epic has been pushed.
 
 ## Problem

@@ -1167,12 +1167,22 @@
     // One row is whatever the stylesheet's own min-height says, read rather than
     // repeated: writing 44 here would re-create in JS the exact duplication this
     // property exists to remove. Read per call rather than hoisted so it stays right
-    // if min-height ever becomes responsive; measured at ~1.5us, on a callback that
-    // fires about once per user action. A non-numeric computed value (`auto`) means
-    // there is no row height to compare against, so nothing is claimed to have
-    // wrapped - defaulting to 0 instead would report EVERY bar as wrapped.
-    var oneRow = parseFloat(getComputedStyle(barEl).minHeight);
-    barEl.classList.toggle("wt-bar-wrapped", isFinite(oneRow) && h > oneRow);
+    // if min-height ever becomes responsive; the whole callback measures ~3us and
+    // fires once per layout change (verified by counting, palette open and closed).
+    // This does depend on `.wt-bar` keeping a min-height: without one the computed
+    // value resolves to 0px on a fixed-position block, every bar compares as taller,
+    // and the class would go on permanently. The 360px palette hit-test is what
+    // notices if that ever happens.
+    barEl.classList.toggle(
+      "wt-bar-wrapped", h > parseFloat(getComputedStyle(barEl).minHeight));
+    // An open dropdown anchored to the bar was placed against the OLD height, and the
+    // bar grows for reasons that are neither a scroll nor a resize - the reconcile
+    // badge appearing on a source-change event is enough. Without this the list keeps
+    // its old `top` and ends up over the row that just appeared beneath it, taking
+    // its clicks: the exact defect placeSuggest's bar-anchoring was added to remove,
+    // reached by growing the bar while the list is already open. This is the only
+    // code that knows the height changed, so it is the only place that can say so.
+    repositionSuggests();
   }
   measureBar();
   // No feature test: ResizeObserver predates every browser this runs in, and the
@@ -1779,7 +1789,10 @@
   }
   function refreshResetAll() {
     var btn = document.getElementById("wt-reset-all");
-    if (btn) btn.disabled = !resettable().length;
+    // `missed` counts: those patches are still headed for the next save, so a button
+    // titled "Discard every edit this session" has something to do even when no live
+    // element does.
+    if (btn) btn.disabled = !resettable().length && !missed.length;
   }
 
   // Discard the whole session in one step. Deliberately no confirm dialog: the
@@ -1787,7 +1800,18 @@
   // Overlay event until it was dismissed.
   function resetAll() {
     var live = resettable();
-    if (!live.length) { status("nothing to reset"); return; }
+    if (!live.length && !missed.length) { status("nothing to reset"); return; }
+    // Stranded patches go too. They are not in `edited` - nothing on the page carries
+    // them, which is why they were stranded - so every per-element reset walks past
+    // them, and until this they could only leave the edits file by being overwritten.
+    // A button that says "Discard every edit this session" has to mean it, and these
+    // are the edits the user can least see: they are not applied, not in the panel,
+    // and reach reconcile by being merged into whatever patch is saved next.
+    // Deliberately NOT undoable - the undo batch below replays DOM state, and these
+    // have none. Dropping them is the one part of a reset that a Cmd+Z will not
+    // bring back, which the status line says out loud.
+    var strandedCount = missed.length;
+    missed = [];
     var batch = [];
     live.forEach(function (el) {
       batch.push.apply(batch, resetSteps(el, edited.get(el)));
@@ -1803,7 +1827,8 @@
     }
     refreshChanges();
     status("reset " + live.length + " element" + (live.length === 1 ? "" : "s") +
-      " - Cmd/Ctrl+Z to undo");
+      (strandedCount ? "; dropped " + strandedCount + " kept for reconcile" : "") +
+      " - Cmd/Ctrl+Z to undo" + (strandedCount ? " (elements only)" : ""));
   }
 
   // Replaced (and replaced-like) inline elements that DO honour width/height and
@@ -2592,19 +2617,34 @@
   // so a toggle can sit on a middle row, and dropping from there opens the list over
   // the rows beneath it - where, being fixed inside the bar's own stacking context, it
   // does not merely overlap those controls but takes their clicks. Same defect the
-  // shape palette had; that one is solved in CSS (`.wt-bar-wrapped .wt-palette`,
-  // overlay.css) because it is statically positioned, and this one has to be solved
-  // here because these coordinates are written as inline styles that no rule can beat.
+  // shape palette had, and it is fixed separately (`.wt-bar-wrapped .wt-palette`,
+  // overlay.css) for a reason worth stating properly: not that the palette happens to
+  // be statically positioned - that could be changed - but that it is not a
+  // `.wt-suggest` at all. It has its own open/close lifecycle and is deliberately not
+  // swept by closeAllSuggests, Esc, outside-click or repositionSuggests, so moving it
+  // onto this path would mean adopting all four behaviours at once.
   // Outside the bar (the font picker, the shadow presets) there is nothing to clear
   // and this resolves to the toggle's own bottom, exactly as before.
   function placeSuggest(list, toggle) {
     var r = toggle.getBoundingClientRect();
-    var bar = toggle.closest && toggle.closest(".wt-bar");
-    var dropFrom = bar ? bar.getBoundingClientRect().bottom : r.bottom;
+    var inBar = barEl.contains(toggle);
+    var dropFrom = inBar ? barEl.getBoundingClientRect().bottom : r.bottom;
+    // Nothing may be placed above this. For a toggle in the bar that is the bar's own
+    // bottom, and it binds the two escapes `dropFrom` alone did not cover: the
+    // flip-above branch below reads the TOGGLE's top, and the viewport clamp can pull
+    // even a drop-below result back up. On a short window either one put the list
+    // across the bar's own rows, where - fixed, inside the bar's stacking context -
+    // it wins the hit test and swallows the clicks meant for the controls under it.
+    var floor = inBar ? dropFrom + 4 : 4;
     var h = list.offsetHeight, w = list.offsetWidth;
     var roomBelow = window.innerHeight - dropFrom - 8;
     var top = (roomBelow >= h || r.top < h + 8) ? dropFrom + 4 : r.top - h - 4;
-    list.style.top = Math.max(4, Math.min(top, window.innerHeight - h - 4)) + "px";
+    top = Math.max(floor, Math.min(top, window.innerHeight - h - 4));
+    // Clamped to the floor rather than flipped, a tall list can now run off the
+    // bottom instead. It already scrolls (`.wt-suggest-list` is overflow-y: auto), so
+    // cap it to what is left rather than letting its last rows be unreachable.
+    list.style.maxHeight = Math.max(60, window.innerHeight - top - 8) + "px";
+    list.style.top = top + "px";
     list.style.left = Math.max(4, r.right - w) + "px";
   }
   function closeSuggest(list, toggle) {
@@ -3007,6 +3047,18 @@
     // step 6 made - `changes` and `media` are independent per-property maps, so
     // anything asking a question of the whole patch asks it too coarsely. Fresh values
     // still win; only the declarations nobody re-authored are carried over.
+    // Known and deliberate: this does not ask WHY the patch stranded. An ownText
+    // mismatch means the same element with edited copy, where carrying over is plainly
+    // right; a tag mismatch means something else may have inherited the id, and
+    // merging then hands reconcile a <div>'s declarations to write onto an <h1>.
+    // The tag half is cheap to fix and does NOT need restore() to carry a reason
+    // through - both fingerprints are right here, so `p.fingerprint.tag !==
+    // fresh.fingerprint.tag` would do it, keeping the two patches separate rather
+    // than merging. It is left undone because it changes what reconcile receives,
+    // which wants its own change rather than a cleanup pass. Worth knowing: there is
+    // no later chance to catch it - the stranded fingerprint is discarded here, so
+    // reconcile sees an ordinary patch with nothing anomalous in it, and none of
+    // wtreconcile.py's flags (`media?!` and friends) can fire.
     var idKey = function (fp) { return fp.id ? "id:" + fp.id : (fp.selector ? "sel:" + fp.selector : null); };
     var covered = {};
     patches.forEach(function (p) { var k = idKey(p.fingerprint || {}); if (k) covered[k] = p; });
@@ -3018,14 +3070,17 @@
     // is not rendering and the revert check would measure against it.
     // `Object.assign` order is the rule itself: stranded first, fresh over the top.
     var mergedOver = function (stranded, fresh) {
-      return Object.assign({}, stranded || {}, fresh || {});
+      return Object.assign({}, stranded, fresh);   // Object.assign skips null sources
     };
     missed.forEach(function (p) {
       var key = idKey(p.fingerprint || {});
       var fresh = key ? covered[key] : null;
       // Nothing fresh for this element, or either side is a created shape (whose
       // `changes` are seeded geometry, not the same kind of thing): keep the stranded
-      // patch whole and separate rather than merging two unlike patches.
+      // patch whole and separate rather than merging two unlike patches. `p.op` is a
+      // real case, not defensive padding - restore() strands a create patch whose
+      // shape is already in source, so a shape reconcile has written but not yet
+      // marked arrives here.
       if (!fresh || fresh.op || p.op) { patches.push(p); return; }
       fresh.changes = mergedOver(p.changes, fresh.changes);
       // Both sides go through mergedOver, so every group in the result is a new object
@@ -3034,7 +3089,13 @@
       var media = {};
       [p.media, fresh.media].forEach(function (src) {
         Object.keys(src || {}).forEach(function (cond) {
-          media[cond] = mergedOver(media[cond], src[cond]);
+          var group = mergedOver(media[cond], src[cond]);
+          // Empty groups are dropped here for the same reason save() drops them when
+          // it builds a fresh patch: a band with no declarations in it is a block for
+          // reconcile to fold into source that says nothing. Filtering only the fresh
+          // side left this path able to carry one in from disk, where an older
+          // release or a hand-edited file can have put it.
+          if (Object.keys(group).length) media[cond] = group;
         });
       });
       if (Object.keys(media).length) fresh.media = media;
@@ -3104,7 +3165,20 @@
           if (p.op === "create") {
             var cfp = p.fingerprint || {};
             var cid = cfp.id || randId("wt-shape-", 6);
-            if (document.getElementById(cid)) { n++; return; }  // already on the page
+            if (document.getElementById(cid)) {
+              // Already on the page, which means reconcile has written the shape into
+              // source but has not marked the batch yet (it writes source first, marks
+              // second - SKILL.md steps 7 then 8). Do NOT re-inject it, or the page
+              // gets two. Do keep the patch: a save replaces this session's whole
+              // batch, so returning without recording it anywhere - the one path that
+              // did - erased the only description of the shape from the edits file
+              // while the status line reported a clean save. It counts as restored
+              // because it IS on the page; `missed` is about what the next save must
+              // still write, not about what failed.
+              missed.push(p);
+              n++;
+              return;
+            }
             var cch = p.changes || {};
             makeShape(p.shape, parseFloat(cch.left) || 0, parseFloat(cch.top) || 0,
               { id: cid, restore: true, geometry: p.geometry, changes: Object.assign({}, cch) });
@@ -3170,6 +3244,17 @@
   var changesOpen = false;
   var changesSig = null;    // row signature, so an unchanged list is not rebuilt
 
+  // What a change-list row is called. A shape's id is a throwaway overlay handle
+  // (wt-shape-<rand>) that reconcile strips, so name the kind the user actually drew;
+  // a stranded patch has no element to describe, so fall back to its own fingerprint.
+  function rowName(row) {
+    if (row.missed) {
+      var fp = row.missed.fingerprint || {};
+      return (fp.selector || fp.tag || "?") + " (kept for reconcile)";
+    }
+    return row.e.shape ? "shape: " + (row.e.shape.kind || "shape") : describe(row.el);
+  }
+
   function changeSummary(e) {
     var parts = Object.keys(e.changes).map(function (p) {
       return p === "nudge" ? "nudge " + e.changes[p].dx + "," + e.changes[p].dy : p;
@@ -3198,6 +3283,15 @@
     edited.forEach(function (e, el) {
       if (entryHasEdits(e)) rows.push({ el: el, e: e });
     });
+    // Stranded patches are listed too, and they are the rows that most need listing:
+    // nothing on the page shows them (restore() deliberately does not apply a patch it
+    // could not confirm), so before this the only edits the user could not see were
+    // the only ones they had no way to review. They still reach reconcile - merged
+    // into a fresh patch for the same element, or re-emitted whole - so a change list
+    // that omitted them was under-reporting what Save was about to write.
+    missed.forEach(function (p) {
+      rows.push({ missed: p, e: { changes: p.changes || {}, media: p.media || {} } });
+    });
     if (!rows.length) {
       changesBox.hidden = true;
       changesList.textContent = "";   // drop element refs held by stale rows
@@ -3216,7 +3310,7 @@
     // typing in a panel field, both call in here - tearing down every row for
     // those made the list flicker and reset its scroll position mid-review.
     var sig = rows.map(function (r) {
-      return (r.e.shape ? "shape:" + r.e.shape.kind : describe(r.el)) + "|" + changeSummary(r.e);
+      return rowName(r) + "|" + changeSummary(r.e);
     }).join("\n");
     if (sig === changesSig) return paintSelection(rows);
     changesSig = sig;
@@ -3231,21 +3325,29 @@
       // markup (tag, id, class names) and must never be parsed as HTML.
       var name = document.createElement("span");
       name.className = "wt-change-el";
-      // A shape's id is a throwaway overlay handle (wt-shape-<rand>) that
-      // reconcile strips, so name the kind the user actually drew instead.
-      name.textContent = row.e.shape
-        ? "shape: " + (row.e.shape.kind || "shape")
-        : describe(row.el);
+      name.textContent = rowName(row);
       var props = document.createElement("span");
       props.className = "wt-change-props";
       props.textContent = changeSummary(row.e);
       btn.appendChild(name);
       btn.appendChild(props);
-      btn.addEventListener("click", function () {
-        if (!document.contains(row.el)) { status("that element is no longer on the page", false); return; }
-        selectEl(row.el);
-        row.el.scrollIntoView({ block: "center", behavior: "smooth" });
-      });
+      if (row.missed) {
+        // Nothing to select: the whole reason this patch is here is that its element
+        // could not be confirmed on the page. Say so rather than fail silently, and
+        // name the one control that can discard it.
+        btn.classList.add("wt-change-missed");
+        btn.title = "Kept for reconcile - its element could not be found on this page. "
+          + "Reset all discards it.";
+        btn.addEventListener("click", function () {
+          status("kept for reconcile - not on this page; Reset all discards it", false);
+        });
+      } else {
+        btn.addEventListener("click", function () {
+          if (!document.contains(row.el)) { status("that element is no longer on the page", false); return; }
+          selectEl(row.el);
+          row.el.scrollIntoView({ block: "center", behavior: "smooth" });
+        });
+      }
       li.appendChild(btn);
       changesList.appendChild(li);
     });
@@ -3256,7 +3358,9 @@
   // in place rather than rebuilding the list around it.
   function paintSelection() {
     Array.prototype.forEach.call(changesList.querySelectorAll(".wt-change"), function (btn) {
-      btn.classList.toggle("on", btn.__wtEl === selectedEl);
+      // `&& btn.__wtEl` because a stranded row has no element: without it two rows
+      // with nothing selected would both match on undefined and paint as selected.
+      btn.classList.toggle("on", !!btn.__wtEl && btn.__wtEl === selectedEl);
     });
   }
 

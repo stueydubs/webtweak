@@ -150,6 +150,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were never applied to the page. This is the same wrong-granularity mistake
   reconcile's step 6 made - anything that asks a question of a whole patch asks it
   too coarsely.
+- **A created shape could be erased from the edits file by a reload.** Reconcile writes
+  source first and marks the batch second, so there is a window where the shape is
+  already in the served page while the batch is still pending. Reload in it and
+  `restore()` found the id present, correctly declined to inject a second copy - and
+  then recorded the patch nowhere. A save replaces this session's whole batch, so the
+  next one dropped the only description of the shape, its geometry and its style, while
+  reporting a clean save. It is now kept for the next save, like every other patch
+  restore cannot re-apply.
+- **Edits kept for reconcile are visible, and Reset all discards them.** A patch whose
+  element cannot be confirmed after a reload is preserved rather than mis-applied - but
+  it is deliberately not applied to the page either, so nothing showed it: not the page,
+  not the panel, not the change list. It still reached reconcile, merged into whatever
+  patch was saved next for the same element. They now appear in the change list as their
+  own dimmed rows, marked "kept for reconcile", and **Reset all** drops them - the only
+  control that can, since a patch with no element on the page is one every per-element
+  revert walks straight past. That part of a reset is not undoable and the status line
+  says so.
+- **An open bar dropdown could be left behind when the bar grew.** The shape palette and
+  the band picker are positioned against the bar's bottom, which was computed once when
+  they opened and refreshed only on scroll or resize. The bar also grows for reasons
+  that are neither - the reconcile badge appearing on a source-change event is enough -
+  leaving the dropdown over the row that had just appeared beneath it, taking its
+  clicks. The measurement that notices the height changed now says so.
+- **On a short window a dropdown could still be pulled up over the bar.** Anchoring to
+  the bar's bottom only fed the drop-below branch; the flip-above fallback and the
+  viewport clamp both still read the toggle's own rect, so at 360x280 the band picker
+  landed across the bar's own rows. Nothing in the bar may now be placed above the
+  bar's bottom, and a list with no room below scrolls instead of flipping.
 - **Both of the bar's dropdowns covered its controls once the bar wrapped.** The shape
   palette and the band picker each hang off a button that, on a wrapped bar, can sit on
   a middle row - and each is positioned inside the bar's own stacking context, so

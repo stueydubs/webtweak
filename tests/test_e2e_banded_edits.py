@@ -14,8 +14,8 @@ to assume one value per element per property, and a banded edit that quietly
 overwrote a base one would still produce a valid-looking Patch.
 """
 
-from conftest import (open_page, patches, pick, place_shape, rendered, resize, save,
-                      select_card, set_field)
+from conftest import (headline, open_page, patches, pick, place_shape, rendered,
+                      resize, save, select_card, set_field)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -24,10 +24,6 @@ NARROW = "(max-width: 600px)"
 
 def revert_shown(page, control):
     return page.eval_on_selector(f"#{control}-revert", "el => !el.hidden")
-
-
-def headline(page):
-    page.click("#headline", position={"x": 8, "y": 8})
 
 
 def band_edit(page, value="30px", condition=NARROW):

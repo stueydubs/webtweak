@@ -253,10 +253,15 @@ html { user-select: none; }
 /* On a wrapped bar the Shape button can sit on a middle row, and `top: 100%` then
    drops the palette over the rows beneath it - it is absolutely positioned inside the
    bar's own stacking context, so it does not merely overlap those controls, it takes
-   their clicks. Measured at 360px with the palette open: Reset all and Deselect were
-   unclickable. Below the whole bar instead, which is where a one-row bar was already
+   their clicks. Below the whole bar instead, which is where a one-row bar was already
    putting it. The class is set by overlay.js, because no media query can ask whether
-   a flex container wrapped. */
+   a flex container wrapped.
+   Scoped to the wrapped case rather than applied always - which would work, and would
+   let the two-line class toggle in measureBar go - only to keep the one-row placement:
+   `right: 0` on .wt-shapes puts the palette directly under the Shape button, and a
+   viewport-gutter version detaches it from the control it belongs to at every desktop
+   width. placeSuggest keeps the band picker's `left` anchored to its own toggle for
+   exactly the same reason; only the vertical drop moves to the bar. */
 .wt-bar-wrapped .wt-palette {
   position: fixed;
   top: calc(var(--wt-bar-h) + 8px);
@@ -592,6 +597,12 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-change.on   { border-color: #ffd479; background: #23262e; }
 .wt-change-el    { color: #e8eaed; }
 .wt-change-props { color: #8f96a3; font-size: 11px; }
+/* A patch kept for reconcile: real, headed for the next save, but not applied to
+   anything on this page - so it has to read as a different kind of row from the edits
+   the user can see and click. Dimmed rather than hidden; the whole point of listing
+   it is that it was previously invisible. */
+.wt-change-missed              { cursor: not-allowed; opacity: 0.6; }
+.wt-change-missed .wt-change-el { color: #c7a86a; font-style: italic; }
 
 .wt-hint {
   background: #15171c; color: #aab0bb;

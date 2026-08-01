@@ -20,8 +20,9 @@ import json
 
 import pytest
 
-from conftest import (open_page, patches, pick, reload_and_restore, rendered, resize,
-                      save, seed_batch, set_field)
+from conftest import (headline, open_page, patches, pick, place_shape,
+                      reload_and_restore, rendered, resize, save, seed_batch,
+                      set_field)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -39,10 +40,6 @@ STRANDED_HEADLINE_FP = {
     "ownText": "some earlier wording", "selector": "#headline", "siblingIndex": 0,
     "openTag": '<h1 class="title" id="headline">',
 }
-
-
-def headline(page):
-    page.click("#headline", position={"x": 8, "y": 8})
 
 
 def previewed_conditions(page):
@@ -161,7 +158,7 @@ def test_an_unrelocatable_banded_patch_is_preserved_whole(served):
     with sync_playwright() as p:
         browser, page = open_page(p, port, width=480)
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
-        seed_batch(edits_file, session, [ghost])
+        seed_batch(edits_file, session, [ghost], viewport=480)
 
         reload_and_restore(page)
         # A real edit on a locatable element, so the save has something of its own to
@@ -200,7 +197,7 @@ def test_a_stranded_banded_patch_survives_editing_the_same_element(served):
             "fingerprint": STRANDED_HEADLINE_FP,
             "changes": {"color": "#cc2222"},
             "media": {NARROW: {"letter-spacing": "2px"}},
-        }])
+        }], viewport=480)
         reload_and_restore(page)
         pick(page, NARROW)
         headline(page)
@@ -227,7 +224,7 @@ def test_a_fresh_edit_still_wins_over_a_stranded_one(served):
             "fingerprint": STRANDED_HEADLINE_FP,
             "changes": {},
             "media": {NARROW: {"font-size": "99px"}},   # the SAME property, same band
-        }])
+        }], viewport=480)
         reload_and_restore(page)
         pick(page, NARROW)
         headline(page)
@@ -266,16 +263,26 @@ def test_merging_a_stranded_patch_does_not_pollute_the_session(served):
         save(page)
         page.click("#wt-changes-head")     # open the list, then force a repaint
         set_field(page, "#wt-fs", "31px")
-        summary = page.eval_on_selector_all(
-            "#wt-changes-list .wt-change-props", "els => els.map(e => e.textContent)"
+        rows = page.evaluate(
+            """() => [...document.querySelectorAll('#wt-changes-list .wt-change')]
+                .map(b => ({
+                    stranded: b.classList.contains('wt-change-missed'),
+                    props: b.querySelector('.wt-change-props').textContent,
+                }))"""
         )
         browser.close()
 
-    joined = " ".join(summary)
-    assert "font-size" in joined, f"the list did not repaint as expected: {summary}"
-    assert "letter-spacing" not in joined, (
-        "the stranded patch's declarations were written into the live session entry: "
-        + joined
+    live = [r["props"] for r in rows if not r["stranded"]]
+    stranded = [r["props"] for r in rows if r["stranded"]]
+    assert any("font-size" in x for x in live), f"the list did not repaint: {rows}"
+    # Row-aware, because the stranded declaration is now legitimately ON the list as
+    # its own row. What must not happen is it appearing on the ELEMENT's row, which is
+    # what an in-place merge into the live entry would produce.
+    assert not any("letter-spacing" in x for x in live), (
+        "the stranded declaration was written into the live session entry: " + str(rows)
+    )
+    assert any("letter-spacing" in x for x in stranded), (
+        "the stranded declaration is invisible - it still reaches reconcile: " + str(rows)
     )
 
 
@@ -303,10 +310,7 @@ def test_reverting_a_restored_banded_edit_clears_the_batch(served):
         set_field(page, "#wt-fs", AUTHORED_NARROW)   # back to what the page authors
         # Not save(): reverting the session's only edit reports "reverted - cleared
         # saved edits", which is the outcome under test and does not start with "saved".
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('cleared') !== -1"
-        )
+        save(page, expect="reverted")
         narrow = rendered(page, "#headline", "font-size")
         browser.close()
 
@@ -366,3 +370,80 @@ def test_a_bands_baseline_is_the_base_edit_not_the_pages_css(served, typed, expe
     else:
         assert "media" not in patch, "the band survived its own revert"
         assert narrow == "40px"   # the base edit governs here now, the band having gone
+
+
+def test_a_stranded_patch_is_listed_and_reset_all_discards_it(served):
+    """A stranded patch is real work headed for the next save, and until it was listed
+    it was the only kind of edit the user could not see: restore() deliberately does
+    not apply a patch it could not confirm, so nothing on the page shows it and no
+    panel field carries it. It still reaches reconcile. So it gets a change-list row,
+    and Reset all - which promises to discard every edit this session - drops it.
+
+    Reset all is the only control that can: the patch has no element, so every
+    per-element revert walks straight past it.
+    """
+    tmp, port = served
+    edits_file = tmp / "sample.webtweak.json"
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=1280)
+        session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
+        seed_batch(edits_file, session, [{
+            "fingerprint": STRANDED_HEADLINE_FP,
+            "changes": {"letter-spacing": "3px"},
+            "media": {},
+        }])
+        reload_and_restore(page)
+        page.click("#wt-changes-head")
+        listed = page.evaluate(
+            """() => [...document.querySelectorAll('#wt-changes-list .wt-change-missed')]
+                .map(b => b.textContent)"""
+        )
+        # Armed with no live edit at all: the stranded patch is the only thing to drop.
+        armed = not page.eval_on_selector("#wt-reset-all", "el => el.disabled")
+        page.click("#wt-reset-all")
+        page.click("#headline", position={"x": 8, "y": 8})
+        set_field(page, "#wt-fs", "30px")
+        save(page)
+        browser.close()
+
+    assert listed and "letter-spacing" in listed[0], f"not listed: {listed}"
+    assert armed, "Reset all was disabled with a stranded patch still headed for disk"
+    patch = patches(tmp)[0]
+    assert "letter-spacing" not in patch["changes"], \
+        "Reset all left the stranded declaration to be merged into the next save"
+    assert patch["changes"]["font-size"] == "30px"
+
+
+def test_a_create_patch_already_in_source_is_not_dropped(served):
+    """Reconcile writes source first and marks the batch second. Reload in that window
+    and the shape is already on the page, so restore() must not re-inject it - but it
+    must not forget it either: a save replaces this session's whole batch, so returning
+    without recording the patch anywhere erased the only description of the shape while
+    the status line reported a clean save."""
+    tmp, port = served
+    edits_file = tmp / "sample.webtweak.json"
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=1280)
+        place_shape(page, "star", 420, 320)
+        save(page)
+        create = next(q for q in patches(tmp) if q.get("op") == "create")
+        shape_id = create["fingerprint"]["id"]
+
+        # Write the shape into the SERVED SOURCE, which is what reconcile does - a DOM
+        # mutation would not survive the reload this test is about.
+        src = tmp / "sample.html"
+        src.write_text(src.read_text().replace(
+            "</body>", f'<svg id="{shape_id}" width="40" height="40"></svg>\n</body>'))
+        reload_and_restore(page)
+        shapes = page.eval_on_selector_all(
+            'svg[id^="wt-shape-"]', "els => els.length")
+        page.click("#headline", position={"x": 8, "y": 8})
+        set_field(page, "#wt-fs", "30px")
+        save(page)
+        browser.close()
+
+    saved = patches(tmp)
+    kept = [q for q in saved if q.get("op") == "create"]
+    assert shapes == 1, "the shape was injected a second time"
+    assert len(kept) == 1, "the create patch was dropped once its shape reached source"
+    assert kept[0] == create, "the create patch came back changed"

@@ -61,11 +61,22 @@ def set_field(page, field, value):
     )
 
 
-def save(page):
-    """Click Save and wait for the write to land."""
+def save(page, expect="saved"):
+    """Click Save and wait for the write to land.
+
+    `expect` is matched against the START of the status, not anywhere in it, and that
+    is load-bearing: the batch-clearing message is "reverted - cleared saved edits",
+    which CONTAINS "saved". Under a substring test every ordinary `save(page)` in the
+    suite would be satisfied by a save that emitted no patches and wiped the pending
+    batch - the failure would surface later as an opaque IndexError in whichever test
+    happened to read patches()[0], or not at all.
+
+    Pass expect="reverted" for the save that clears a session's last edit.
+    """
     page.click("#wt-save")
     page.wait_for_function(
-        "document.getElementById('wt-status').textContent.startsWith('saved')"
+        "e => document.getElementById('wt-status').textContent.startsWith(e)",
+        arg=expect,
     )
 
 
@@ -89,7 +100,7 @@ def place_shape(page, kind="square", x=400, y=350):
     page.wait_for_selector("svg.wt-shape")
 
 
-def resize(page, width):
+def resize(page, width, height=900):
     """Resize the window and let the page actually observe it.
 
     `set_viewport_size` resolves before Chromium has necessarily dispatched the
@@ -98,7 +109,7 @@ def resize(page, width):
     firing one more resize mirrors what a real drag does - it sends a stream of them,
     not a single event - rather than papering over the timing with a fixed pause.
     """
-    page.set_viewport_size({"width": width, "height": 900})
+    page.set_viewport_size({"width": width, "height": height})
     page.wait_for_function("w => window.innerWidth === w", arg=width)
     page.evaluate("() => window.dispatchEvent(new Event('resize'))")
 
@@ -133,6 +144,18 @@ def seed_batch(edits_file, session, patch_list, viewport=1280):
         "batches": [{"sessionId": session, "savedAt": "2026-01-01T00:00:00",
                      "viewport": viewport, "status": "pending", "patches": patch_list}],
     }))
+
+
+def headline(page):
+    """Select the fixture's h1.
+
+    A helper exists here for an element only when clicking it needs care, which is
+    the rule that keeps this file from growing one function per fixture element.
+    The corner click is convention shared with select_card rather than a hazard of
+    its own - `#headline` holds a bare text node, so its centre hits the h1 too -
+    but it is the shape that stays correct if the heading ever gains a child.
+    """
+    page.click("#headline", position={"x": 8, "y": 8})
 
 
 def select_card(page):

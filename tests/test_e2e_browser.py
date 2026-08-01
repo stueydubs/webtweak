@@ -7,12 +7,11 @@ also verified interactively during development via the Playwright MCP.
 """
 
 import json
-import shutil
 
 import pytest
 
-from conftest import (edit, open_page, place_shape, seed_batch, select_card,
-                      set_field)
+from conftest import (edit, open_page, place_shape, reload_and_restore, resize,
+                      save, seed_batch, select_card, set_field)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -37,10 +36,7 @@ def test_hover_recovers_after_escape_during_drag(served):
     must still reset `interacting` so the hover box keeps working afterwards."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         select_card(page)
         box = _box(page, ".card")
         # start a drag and press Esc before releasing (interact.unset, no 'end' fires)
@@ -63,10 +59,7 @@ def test_hover_recovers_after_escape_during_drag(served):
 def test_select_edit_nudge_resize_save_loop(served):
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
 
         # --- select + property change ---
         page.click("#headline")
@@ -90,11 +83,7 @@ def test_select_edit_nudge_resize_save_loop(served):
                         cardbox["y"] + cardbox["height"] + 20, steps=8)
         page.mouse.up()
 
-        # --- save ---
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
 
     edits = json.loads((tmp / "sample.webtweak.json").read_text())
@@ -121,10 +110,7 @@ def test_create_shape_change_fill_save(served):
     carrying the shape kind, geometry, anchor, and a self-contained changes snapshot."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
 
         place_shape(page, "triangle", 400, 350)
         # the dropped <svg> is selected, and the panel shows Shape / hides Type
@@ -145,10 +131,7 @@ def test_create_shape_change_fill_save(served):
         assert page.eval_on_selector("svg.wt-shape polygon",
                                      "el => getComputedStyle(el).fill") == "rgb(51, 102, 204)"
 
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
 
     batch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]
@@ -170,10 +153,7 @@ def test_created_shape_restored_after_reload(served):
     """A created shape re-injects via restore() after a reload, with its edits intact."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
 
         place_shape(page, "star", 500, 300)
         page.evaluate("""() => {
@@ -181,16 +161,9 @@ def test_created_shape_restored_after_reload(served):
             f.value = '#11aa55';
             f.dispatchEvent(new Event('input', { bubbles: true }));
         }""")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
 
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         state = page.evaluate("""() => {
             const svg = document.querySelector('svg.wt-shape');
             return svg ? {
@@ -209,10 +182,7 @@ def test_shape_resizes_via_grip(served):
     that users kept missing)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
 
         place_shape(page, "circle", 400, 350)   # circle: transparent corners, worst case
         before = page.eval_on_selector("svg.wt-shape",
@@ -239,10 +209,7 @@ def test_shape_drag_and_drop_from_palette(served):
     to click-to-place)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
 
         page.click("#wt-shape-btn")              # open the palette
         # native HTML5 drag-and-drop: dragstart on the item, drop on the page at (560, 420)
@@ -282,10 +249,7 @@ def test_palette_items_are_clickable_with_an_element_selected(served):
     """
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.click("#headline")                  # panel open, over the palette's column
         page.click("#wt-shape-btn")
         # the 3rd item of a 3-column grid: the far right of the palette, deepest
@@ -303,10 +267,7 @@ def test_shape_stroke_width_one_and_black_border_record(served):
     default the baseline peel resolves to, which would silently drop it from the patch."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         place_shape(page, "square", 400, 350)
         page.evaluate("""() => {
             const sw = document.getElementById('wt-sw');
@@ -314,10 +275,7 @@ def test_shape_stroke_width_one_and_black_border_record(served):
             const st = document.getElementById('wt-stroke');
             st.value = '#000000'; st.dispatchEvent(new Event('input', { bubbles: true }));
         }""")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
     create = next(p for p in json.loads((tmp / "sample.webtweak.json").read_text())
                   ["batches"][0]["patches"] if p.get("op") == "create")
@@ -330,10 +288,7 @@ def test_shape_rx_radius_routes_to_child_and_patch(served):
     shows only for rect/square, and the value lands in the create patch."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         place_shape(page, "square", 400, 350)
         radius_shown = page.eval_on_selector("#wt-rx", "el => !el.closest('.wt-field').hidden")
         page.evaluate("""() => {
@@ -341,10 +296,7 @@ def test_shape_rx_radius_routes_to_child_and_patch(served):
             r.value = '14'; r.dispatchEvent(new Event('input', { bubbles: true }));
         }""")
         child_rx = page.eval_on_selector("svg.wt-shape rect", "el => getComputedStyle(el).rx")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
     assert radius_shown is True
     assert child_rx == "14px"                            # applied to the child <rect>
@@ -361,10 +313,7 @@ def test_number_floors_differ_by_what_zero_means(served):
     """
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         shape_mins = page.evaluate("""() => ({
             sw: document.getElementById('wt-sw').getAttribute('min'),
             rx: document.getElementById('wt-rx').getAttribute('min'),
@@ -386,10 +335,7 @@ def test_grip_resize_and_panel_edit_are_separate_undo_steps(served):
     distinct undo steps: one Cmd+Z reverts only the panel edit, leaving the resize."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         place_shape(page, "square", 400, 350)
         out = page.evaluate("""() => {
             const svg = document.querySelector('svg.wt-shape');
@@ -415,10 +361,7 @@ def test_shape_lands_at_cursor_under_transform_scale(served):
     scaled) so the shape lands at the click point, not overshot by the scale factor."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.evaluate("""() => {
             document.body.style.transform = 'scale(0.5)';
             document.body.style.transformOrigin = 'top left';
@@ -439,10 +382,7 @@ def test_undo_removes_a_created_shape(served):
     """Cmd/Ctrl+Z right after placing a shape removes it and deselects (ADR-0002)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         place_shape(page, "triangle", 400, 350)
         assert page.eval_on_selector_all("svg.wt-shape", "els => els.length") == 1
         page.evaluate(
@@ -461,10 +401,7 @@ def test_shape_margin_reverts_but_seeded_props_persist(served):
     not leave a stale no-op margin in the create patch."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         place_shape(page, "square", 400, 350)
         orig = page.eval_on_selector("#wt-margin-top", "el => el.value")
         page.evaluate("""(orig) => {
@@ -474,10 +411,7 @@ def test_shape_margin_reverts_but_seeded_props_persist(served):
             const sw = document.getElementById('wt-sw');           // a seeded prop still records
             sw.value = '1'; sw.dispatchEvent(new Event('input', { bubbles: true }));
         }""", orig)
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
     create = next(p for p in json.loads((tmp / "sample.webtweak.json").read_text())
                   ["batches"][0]["patches"] if p.get("op") == "create")
@@ -490,10 +424,7 @@ def test_shape_lands_at_cursor_on_positioned_body(served):
     absolute child) so the shape lands at the click point, not shifted by the offset."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.evaluate("""() => {
             document.body.style.position = 'relative';
             document.body.style.margin = '40px';
@@ -515,17 +446,11 @@ def test_idless_sibling_fingerprint(served):
     """Select the 2nd .section-title (no id) and assert its fingerprint disambiguates."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.eval_on_selector_all(".section-title", "els => els[1].click()")
         page.fill("#wt-fs", "30")
         page.dispatch_event("#wt-fs", "input")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
 
     fp = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]["patches"][0]["fingerprint"]
@@ -539,10 +464,7 @@ def test_selection_box_tracks_a_reflowing_edit(served):
     """Changing font-size (not width/height) must re-fit the selection box."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         edit(page, "#headline", "#wt-fs", "80")
         tracks = page.evaluate("""() => {
             const el = document.getElementById('headline').getBoundingClientRect();
@@ -557,10 +479,7 @@ def test_reset_clears_unsaved_state(served):
     """Editing then resetting the only element leaves nothing to save (no false dirty)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         edit(page, "#headline", "#wt-fs", "70")
         page.click("#wt-reset")
         page.click("#wt-save")
@@ -573,10 +492,7 @@ def test_width_height_disabled_on_inline_element(served):
     """Box controls are disabled for inline elements where width/height are inert."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.click("code")  # an inline element
         disabled = page.evaluate(
             "() => document.getElementById('wt-w').disabled && document.getElementById('wt-h').disabled"
@@ -589,19 +505,13 @@ def test_invalid_freetext_value_is_not_recorded(served):
     """A typo in a free-text field (rejected by the browser) must not become a patch."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.click("#headline")
         page.fill("#wt-margin-top", "banana")      # invalid - browser drops it
         page.dispatch_event("#wt-margin-top", "input")
         page.fill("#wt-fs", "52")                  # a real edit so there is something to save
         page.dispatch_event("#wt-fs", "input")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
 
     patch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]["patches"][0]
@@ -693,30 +603,17 @@ def test_revert_to_original_after_reload_clears_the_batch(served):
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         original_fs = page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize")
         edit(page, "#headline", "#wt-fs", "72")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         assert len(json.loads(edits_file.read_text())["batches"]) == 1
 
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         page.click("#headline")
         page.fill("#wt-fs", str(int(float(original_fs[:-2]))))  # back to the authored size
         page.dispatch_event("#wt-fs", "input")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('cleared') !== -1"
-        )
+        save(page, expect="reverted")
         browser.close()
 
     # the revert is persisted: the pending batch is gone, not a no-op patch on disk
@@ -728,10 +625,7 @@ def test_inline_replaced_element_keeps_size_controls(served):
     height and transform, so its size controls must stay enabled (unlike <code>)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         # inject a bare inline image and select it
         page.evaluate("""() => {
             const img = document.createElement('img');
@@ -755,21 +649,11 @@ def test_edits_restored_after_reload(served):
     """An edit survives a reload via restore() (session persisted in sessionStorage)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         edit(page, "#headline", "#wt-fs", "60")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
 
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         size = page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize")
         browser.close()
 
@@ -782,10 +666,7 @@ def test_partial_restore_preserves_unrelocated_patches(served):
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
 
         # one locatable patch (headline) + one that no longer exists in source (ghost)
@@ -799,17 +680,10 @@ def test_partial_restore_preserves_unrelocated_patches(served):
                              "siblingIndex": 0, "openTag": "<span id=\"ghost\">"},
              "changes": {"font-size": "99px"}},
         ])
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         # make a real edit on the relocatable element and save
         edit(page, "#headline", "#wt-fs", "50")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
 
     patches = json.loads(edits_file.read_text())["batches"][0]["patches"]
@@ -824,10 +698,7 @@ def test_revert_preserves_authored_inline_longhand(served):
     must restore the element's inline style verbatim, not strip the longhand."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         page.evaluate("""() => {
             const box = document.createElement('div');
             box.id = 'lh-box';
@@ -862,10 +733,7 @@ def test_missed_patch_superseded_by_fresh_edit(served):
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
         seed_batch(edits_file, session, [
             {"fingerprint": {"tag": "div", "id": "headline", "classes": [], "text": "",
@@ -873,18 +741,11 @@ def test_missed_patch_superseded_by_fresh_edit(served):
                              "openTag": "<div id=\"headline\">"},
              "changes": {"color": "#ff0000"}},   # tag mismatch -> stranded in missed[]
         ])
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         page.click("#headline")                  # edit the same element (an h1)
         page.fill("#wt-fs", "55")
         page.dispatch_event("#wt-fs", "input")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
     patches = json.loads(edits_file.read_text())["batches"][0]["patches"]
     headline = [p for p in patches if p["fingerprint"]["id"] == "headline"]
@@ -900,10 +761,7 @@ def test_restore_skips_owntext_mismatch(served):
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
         seed_batch(edits_file, session, [
             {"fingerprint": {"tag": "p", "id": "", "classes": [],
@@ -912,11 +770,7 @@ def test_restore_skips_owntext_mismatch(served):
                              "siblingIndex": 0, "openTag": "<p>"},
              "changes": {"color": "#ff0000"}},
         ])
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         color = page.evaluate(
             "() => getComputedStyle(document.querySelectorAll('main p')[2]).color"
         )
@@ -930,10 +784,7 @@ def test_restore_skips_tag_mismatch(served):
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         session = page.evaluate("() => sessionStorage.getItem('wt-session-sample.html')")
         # patch claims tag 'div' but #headline is an <h1>
         seed_batch(edits_file, session, [
@@ -942,11 +793,7 @@ def test_restore_skips_tag_mismatch(served):
                              "siblingIndex": 0, "openTag": "<div id=\"headline\">"},
              "changes": {"color": "#0000ff"}},
         ])
-        page.reload()
-        page.wait_for_selector("#wt-root")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('restored') !== -1"
-        )
+        reload_and_restore(page)
         color = page.eval_on_selector("#headline", "el => getComputedStyle(el).color")
         browser.close()
     assert color != "rgb(0, 0, 255)"   # the mismatched patch was not applied
@@ -958,24 +805,15 @@ def test_in_session_save_then_revert_all_clears_batch(served):
     tmp, port = served
     edits_file = tmp / "sample.webtweak.json"
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         original_fs = page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize")
         edit(page, "#headline", "#wt-fs", "72")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         assert len(json.loads(edits_file.read_text())["batches"]) == 1
         # revert in the same session - no reload, so persisted must have been set by save()
         page.fill("#wt-fs", str(int(float(original_fs[:-2]))))
         page.dispatch_event("#wt-fs", "input")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.indexOf('cleared') !== -1"
-        )
+        save(page, expect="reverted")
         browser.close()
     assert json.loads(edits_file.read_text())["batches"] == []
 
@@ -985,17 +823,11 @@ def test_box_control_width_entry_is_recorded(served):
     CSS.supports gate - this guards that exemption)."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         select_card(page)                # block element, width controls enabled
         page.fill("#wt-w", "350")
         page.dispatch_event("#wt-w", "input")
-        page.click("#wt-save")
-        page.wait_for_function(
-            "document.getElementById('wt-status').textContent.startsWith('saved')"
-        )
+        save(page)
         browser.close()
     patch = json.loads((tmp / "sample.webtweak.json").read_text())["batches"][0]["patches"][0]
     assert patch["changes"].get("width") == "350px"
@@ -1006,10 +838,7 @@ def test_cleared_field_records_no_patch(served):
     where parseInt('') would otherwise floor to 1px."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         select_card(page)
         for field in ("#wt-fs", "#wt-w"):
             page.fill(field, "120")
@@ -1028,10 +857,7 @@ def test_shorthand_spacing_revert_records_nothing(served):
     through the element, records no patch."""
     tmp, port = served
     with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.goto(f"http://127.0.0.1:{port}/sample.html")
-        page.wait_for_selector("#wt-root")
+        browser, page = open_page(p, port)
         select_card(page)                     # .card { padding: 24px } - equal all round
         page.click("#wt-padding-link")        # link: one value, all four sides
         page.fill("#wt-padding-top", "24px")  # == the computed baseline
@@ -1172,20 +998,39 @@ _WORST_CASE = """([status, badge]) => {
 # only bites exactly at its own edge is covered. The overflow was never confined to
 # narrow windows: the longest badge pushed Save out at 640px and 820px as well, which a
 # 480px-only test could not see.
+# Which bar controls the named open dropdown is covering. Shared by every dropdown
+# test: the steady-state one, the grew-while-open one, and the short-window one.
+_COVERED_BAR_CONTROLS = """(shown) => {
+    const ids = ['wt-shape-btn', 'wt-scope-toggle', 'wt-undo', 'wt-redo',
+                 'wt-reset-all', 'wt-deselect', 'wt-save', 'wt-badge'];
+    const list = document.querySelector(shown);
+    const out = [];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        // Skip the control that opened it: an open dropdown is allowed to sit over
+        // its own toggle, and some do by design.
+        if (!el || el.hidden || list.contains(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width) continue;
+        const hit = document.elementFromPoint(r.left + r.width / 2,
+                                              r.top + r.height / 2);
+        // `contains` is true for the node itself, so this covers both "the dropdown
+        // is on top" and "the hit landed on a child".
+        if (!el.contains(hit)) out.push(id);
+    }
+    return out;
+}"""
+
+
 BAR_WIDTHS = [360, 400, 480, 560, 620, 640, 700, 820, 900, 1280]
 
 
 @pytest.mark.parametrize("width", BAR_WIDTHS)
 def test_every_bar_control_stays_inside_the_bar(served, width):
-    """The bar has been pushed past its own width three times - a long status message,
-    Reset all as an eleventh control, then the reconcile badge appearing after a save.
-    Each was fixed by shortening a label, which buys back only what that one addition
-    cost; the bar now wraps instead, so this asserts the invariant that actually
-    matters rather than the width of one row: nothing the bar shows may fall outside
-    the bar's own box, at any width, in the worst state the bar can be in.
-
-    A control outside that box is not merely ugly - it is unclickable, and Save was
-    the one that kept landing there.
+    """Nothing the bar shows may fall outside the bar's own box, at any width, in
+    the worst state the bar can be in - a control outside it is not merely ugly, it is
+    unclickable, and Save was the one that kept landing there. Why the bar wraps rather
+    than shedding another label is on the `.wt-bar` rule in overlay.css.
     """
     tmp, port = served
     with sync_playwright() as p:
@@ -1249,7 +1094,13 @@ def test_the_panel_clears_the_bar_at_every_width(served, width):
 # mechanisms - the palette in CSS, the picker in placeSuggest, because the picker's
 # coordinates are inline styles no rule can beat - and only the palette was fixed
 # first. One test over both is what stops the next one being missed the same way.
-@pytest.mark.parametrize("width", [360, 400, 480, 620, 700, 1280])
+# One width per distinct bar geometry, which is what the assertion actually depends
+# on: narrow-wrapped (360), two-row (620), NOT wrapped - the palette's `absolute`
+# path, and the only case that exercises it (700), and wide-wrapped (1280). Stated as
+# the classification rather than as the widths, because the widths are a sample of it:
+# 400 and 480 were measured identical to 360 and dropped, and if the CSS moves, the
+# rule for re-deriving this list is one width per class, not these four numbers.
+@pytest.mark.parametrize("width", [360, 620, 700, 1280])
 @pytest.mark.parametrize(
     "opener,shown",
     [("#wt-shape-btn", "#wt-palette"), ("#wt-scope-toggle", "#wt-scope-list")],
@@ -1262,33 +1113,14 @@ def test_an_open_bar_dropdown_covers_no_bar_control(served, width, opener, shown
         page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
         page.click(opener)
         page.wait_for_selector(f"{shown}:not([hidden])")
-        blocked = page.evaluate(
-            """(shown) => {
-                const ids = ['wt-shape-btn', 'wt-scope-toggle', 'wt-undo', 'wt-redo',
-                             'wt-reset-all', 'wt-deselect', 'wt-save', 'wt-badge'];
-                const list = document.querySelector(shown);
-                const out = [];
-                for (const id of ids) {
-                    const el = document.getElementById(id);
-                    // Skip the control that opened it: an open dropdown is allowed to
-                    // sit over its own toggle, and some do by design.
-                    if (!el || el.hidden || list.contains(el)) continue;
-                    const r = el.getBoundingClientRect();
-                    if (!r.width) continue;
-                    const hit = document.elementFromPoint(r.left + r.width / 2,
-                                                          r.top + r.height / 2);
-                    if (hit !== el && !el.contains(hit) && !el.contains(hit?.parentElement))
-                        out.push(id);
-                }
-                return out;
-            }""",
-            shown,
-        )
+        blocked = page.evaluate(_COVERED_BAR_CONTROLS, shown)
         browser.close()
     assert blocked == [], f"{shown} covers these at {width}px: {blocked}"
 
 
-@pytest.mark.parametrize("width", [360, 480, 1280])
+# Wrapped and not-wrapped, which is the whole of what the dock has to clear. 480
+# was dropped as a second wrapped case measuring identical to 360.
+@pytest.mark.parametrize("width", [360, 1280])
 def test_the_change_list_header_clears_the_bar_on_a_short_window(served, width):
     """The dock's max-height has to clear the bar too. It was the fourth place the
     44px bar height was hardcoded and the one missed when the others were converted,
@@ -1317,9 +1149,20 @@ def test_the_change_list_header_clears_the_bar_on_a_short_window(served, width):
         for i in range(14):
             edit(page, f"#filler-{i}", "#wt-fs", f"{20 + i}px")
         page.click("#wt-changes-head")          # expand the list
-        page.set_viewport_size({"width": width, "height": 420})
+        resize(page, width, height=420)
         page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
-        page.wait_for_timeout(100)              # let the ResizeObserver settle
+        # Wait on the thing the assertion depends on, not a fixed pause: the dock's
+        # max-height rides --wt-bar-h, which a ResizeObserver publishes a frame after
+        # the layout change. A flat sleep reads a layout that may not exist yet and
+        # fails - or passes - for reasons that have nothing to do with the defect.
+        page.wait_for_function(
+            """() => {
+                const bar = document.querySelector('.wt-bar').getBoundingClientRect();
+                const dock = document.querySelector('.wt-dock').getBoundingClientRect();
+                return dock.top >= bar.bottom;
+            }""",
+            timeout=5000,
+        )
         state = page.evaluate(
             """() => {
                 const head = document.getElementById('wt-changes-head');
@@ -1335,3 +1178,77 @@ def test_the_change_list_header_clears_the_bar_on_a_short_window(served, width):
         f"the change-list header is under the bar at {width}x420 "
         f"(head top {state['headTop']}, bar bottom {state['barBottom']})"
     )
+
+
+# Widths where the worst-case state actually makes the bar TALLER than it already is:
+# measured 56->90 at 480 and 44->78 at 1280. At 360 the bar is 90px before the badge
+# ever appears, so nothing grows and the test proves nothing - which is exactly what
+# the first version of it did, and a mutant removing the fix walked straight through.
+@pytest.mark.parametrize("width", [480, 1280])
+@pytest.mark.parametrize(
+    "opener,shown",
+    [("#wt-shape-btn", "#wt-palette"), ("#wt-scope-toggle", "#wt-scope-list")],
+)
+def test_a_bar_dropdown_open_when_the_bar_grows_still_covers_nothing(
+        served, opener, shown, width):
+    """The bar grows for reasons that are neither a scroll nor a resize - the reconcile
+    badge appearing on a source-change event is enough - and a dropdown placed against
+    the old height then sits over the row that just appeared beneath it.
+
+    The sibling test forces the worst-case bar state BEFORE opening the dropdown, so it
+    can only see the steady state. This one opens first and grows after, which is the
+    order a real session produces and the order that was broken.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=width)
+        edit(page, "#headline", "#wt-fs", "70px")
+        page.click(opener)
+        page.wait_for_selector(f"{shown}:not([hidden])")
+        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])   # bar grows now
+        page.wait_for_timeout(150)          # let the ResizeObserver land
+        blocked = page.evaluate(_COVERED_BAR_CONTROLS, shown)
+        clears = page.evaluate(
+            """(shown) => {
+                const bar = document.querySelector('.wt-bar').getBoundingClientRect();
+                const list = document.querySelector(shown).getBoundingClientRect();
+                return { top: Math.round(list.top), barBottom: Math.round(bar.bottom) };
+            }""",
+            shown,
+        )
+        browser.close()
+    assert blocked == [], f"{shown} covers these at {width}px after the bar grew: {blocked}"
+    # The invariant, asserted directly rather than only through a hit test. A stale
+    # position does not always land on one of the named controls - at these widths it
+    # overlapped bar space instead, so a hit test alone passed against a dropdown that
+    # had not moved at all. What must hold is that an in-bar dropdown starts below the
+    # bar, whatever the bar has just done.
+    assert clears["top"] >= clears["barBottom"], (
+        f"{shown} kept its pre-growth position at {width}px: {clears}"
+    )
+
+
+@pytest.mark.parametrize("height", [280, 320, 420])
+def test_a_bar_dropdown_on_a_short_window_covers_nothing(served, height):
+    """placeSuggest's flip-above branch and its viewport clamp both read the toggle's
+    own rect, so on a short window either could pull an in-bar list back up across the
+    bar's rows - where, fixed inside the bar's stacking context, it takes their clicks.
+    The other dropdown tests all run at height 900, where there is always room below."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=360, height=height)
+        edit(page, "#headline", "#wt-fs", "70px")
+        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        page.click("#wt-scope-toggle")
+        page.wait_for_selector("#wt-scope-list:not([hidden])")
+        blocked = page.evaluate(_COVERED_BAR_CONTROLS, "#wt-scope-list")
+        top_ok = page.evaluate(
+            """() => {
+                const bar = document.querySelector('.wt-bar').getBoundingClientRect();
+                const list = document.querySelector('#wt-scope-list').getBoundingClientRect();
+                return list.top >= bar.bottom;
+            }"""
+        )
+        browser.close()
+    assert blocked == [], f"the picker covers these at 360x{height}: {blocked}"
+    assert top_ok, f"the picker was placed above the bar's bottom at 360x{height}"
