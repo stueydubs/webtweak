@@ -85,14 +85,19 @@ function tokJSON(line: string): Tok[] {
 }
 
 function tokCSS(line: string): Tok[] {
+  // Indentation is preserved rather than trimmed away, because reconcile's output is
+  // now nested: a banded edit goes inside the page's own @media block, and a flattened
+  // rule would not read as being inside anything.
+  const indent = (line.match(/^\s*/) ?? [""])[0];
   if (line.includes("{")) {
     const sel = line.replace("{", "").trim();
     return [
+      { t: indent, c: C.text },
       { t: sel + " ", c: C.gold },
       { t: "{", c: C.dim },
     ];
   }
-  if (line.trim() === "}") return [{ t: "}", c: C.dim }];
+  if (line.trim() === "}") return [{ t: indent, c: C.text }, { t: "}", c: C.dim }];
   const m = line.match(/^(\s*)([\w-]+)(:\s*)(.+?)(;?)$/);
   if (!m) return [{ t: line, c: C.text }];
   return [
@@ -111,10 +116,11 @@ const JSON_LINES = [
   `    "patches": [{`,
   `      "fingerprint": {`,
   `        "tag": "h1", "classes": ["title"] },`,
-  `      "changes": {`,
-  `        "width": "940px", "color": "#7a5c3e",`,
-  `        "font-size": "64px",`,
-  `        "nudge": { "dx": 0, "dy": 16 } }`,
+  `      "changes": { "width": "940px",`,
+  `        "color": "#7a5c3e", "font-size": "64px",`,
+  `        "nudge": { "dx": 0, "dy": 16 } },`,
+  `      "media": { "(max-width: 600px)": {`,
+  `        "font-size": "32px" } }`,
   `    }] }]`,
   `}`,
 ].map((l): Line => ({ toks: tokJSON(l) }));
@@ -125,6 +131,11 @@ const CSS_LINES = [
   `  margin-top: 16px;`,
   `  color: #7a5c3e;`,
   `  font-size: 64px;`,
+  `}`,
+  `@media (max-width: 600px) {`,
+  `  h1.title {`,
+  `    font-size: 32px;`,
+  `  }`,
   `}`,
 ].map((l): Line => ({ toks: tokCSS(l) }));
 
@@ -160,6 +171,14 @@ export const WebtweakDemo: React.FC = () => {
   const panelMounted = f >= 268;
   const panelX = ip(f, [272, 300], [380, 0], true);
   const panelOp = ip(f, [524, 546], [1, 0]);
+
+  // The Scope picker. Base ("all widths") for every edit the video actually shows -
+  // those are the ones you can watch land on the page - then a band for the last beat
+  // before Save, which is where the mobile-only font-size in the recorded JSON comes
+  // from. Nothing on screen changes when it is picked, and that is correct rather than
+  // a missing animation: a (max-width: 600px) edit does not apply at this window's
+  // 1728px. The payoff is the @media block Claude writes in the CSS pane at the end.
+  const scope = f >= 440 ? "≤600px" : "all widths";
 
   // save
   const saveActive = f >= 460 && f < 474;
@@ -228,7 +247,13 @@ export const WebtweakDemo: React.FC = () => {
       {/* webtweak top bar */}
       <AbsoluteFill style={{ opacity: barOp }}>
         <div style={{ transform: `translateY(${barDrop}px)` }}>
-          <TopBar crumb={crumb} status={status} saveActive={saveActive} hasEdits={f >= 178} />
+          <TopBar
+            crumb={crumb}
+            status={status}
+            saveActive={saveActive}
+            hasEdits={f >= 178}
+            scope={scope}
+          />
         </div>
       </AbsoluteFill>
 

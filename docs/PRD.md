@@ -66,7 +66,7 @@ A tiny local tool - `webtweak <page.html>` - that opens my actual source page in
 
 - **Structural DOM reordering** ("move this section above that one") - requires rewriting hand-formatted source; deferred to v2.
 - **Editing text copy** - copy changes are spoken to Claude, not done in the Overlay.
-- **Per-breakpoint authoring / writing media queries** - v1 is single-viewport (base styles), with a viewport stamp so Claude can warn about mobile breakage; deliberate breakpoint editing is v2.
+- ~~**Per-breakpoint authoring / writing media queries**~~ - **shipped in 0.7.0.** v1 was single-viewport, with a viewport stamp so Claude could warn about mobile breakage. The Overlay now discovers the page's own media queries, a Scope picker chooses the Band an edit applies at, the edit previews only inside it, and the Patch carries a `media` map that reconcile merges into the stylesheet's existing `@media` block. See [PRD: per-breakpoint authoring](./PRD-per-breakpoint-authoring.md) and [ADR-0004](./adr/0004-breakpoint-scoped-patches.md).
 - **Borders, box-shadow, flex/grid alignment editors, hover/focus states, pseudo-elements** - excluded from the v1 property set.
 - **Live-URL editing** - v1 operates on local source files only.
 - **The reconcile step itself** - performed by Claude (future companion skill), not part of this codebase.
@@ -76,5 +76,5 @@ A tiny local tool - `webtweak <page.html>` - that opens my actual source page in
 
 - The whole design leans on the human-plus-Claude loop: because Claude reconciles, the editor can be "dumb" and only capture intent. This is the keystone decision (ADR-0001) and the reason a tool that would otherwise rival Pinegrow fits in a single Python file plus a browser overlay.
 - A companion reconcile skill (read `*.webtweak.json`, locate elements by fingerprint, write clean CSS, flag ambiguous/systemic changes, mark batches reconciled, push) is the natural follow-up once v1 earns its keep.
-- v2 candidates, in rough priority: structural reordering, per-breakpoint authoring, and a font-family dropdown populated from the site's actual `@font-face`/stack declarations.
+- v2 candidates, in rough priority: structural reordering, and a font-family dropdown populated from the site's actual `@font-face`/stack declarations. (Per-breakpoint authoring was the third and shipped in 0.7.0.)
 - **Shipped (post-v1): shape creation** - drawing decorative shapes (square/rectangle/circle/ellipse/triangle/star/diamond/pentagon/hexagon) onto the page, the tool's first element-creation feature. Delivered via a new `op: "create"` Patch and an inline-SVG renderer with free absolute placement; the reconcile skill gained an insert path. The v1 "appearance + layout only, no DOM creation" scope is correspondingly narrowed (created shapes carry `fill`/`stroke`/`stroke-width`/`rx`, unlike the v1 *editing* set which still excludes borders on existing elements). See [ADR-0002](./adr/0002-shape-creation.md).

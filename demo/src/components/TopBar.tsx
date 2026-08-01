@@ -1,14 +1,18 @@
 import React from "react";
 import { C, FONT_MONO, FONT_UI, VIEW, WT_BAR_H } from "../tokens";
 
-// Recreation of overlay's .wt-bar — the dark top bar with gold logo,
-// monospace breadcrumb, status, and the Deselect / Save buttons.
+// Recreation of overlay's .wt-bar — gold logo, monospace breadcrumb, the Scope
+// picker, status, and the Shape / Undo / Redo / Reset all / Deselect / Save controls.
+// Kept in step with overlay/overlay.css by hand: this is a re-creation, not a capture,
+// so a control added to the real bar has to be added here or the demo quietly goes a
+// release out of date - which is exactly what happened before this one.
 export const TopBar: React.FC<{
   crumb?: React.ReactNode;
   status?: string;
   saveActive?: boolean; // cursor pressing Save
   hasEdits?: boolean;   // lights Undo, as the real bar does
-}> = ({ crumb, status, saveActive, hasEdits }) => {
+  scope?: string;       // the Scope picker's current band
+}> = ({ crumb, status, saveActive, hasEdits, scope }) => {
   return (
     <div
       style={{
@@ -46,6 +50,30 @@ export const TopBar: React.FC<{
       >
         {crumb ?? "click an element to select"}
       </span>
+      {/* The Scope picker (0014). "Applies at" and never "Editing": the element is
+          the subject, the band is only the condition. */}
+      <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ color: C.dim, fontSize: 12, whiteSpace: "nowrap" }}>
+          Applies at:
+        </span>
+        <span
+          style={{
+            display: "flex",
+            alignItems: "center",
+            background: C.field,
+            border: `1px solid ${C.border}`,
+            borderRadius: 5,
+            color: C.text,
+            fontFamily: FONT_MONO,
+            fontSize: 13,
+            padding: "5px 7px",
+            gap: 8,
+          }}
+        >
+          {scope ?? "all widths"}
+          <span style={{ color: C.dim, fontSize: 11 }}>▾</span>
+        </span>
+      </span>
       <span
         style={{
           color: C.green,
@@ -56,6 +84,19 @@ export const TopBar: React.FC<{
       >
         {status ?? ""}
       </span>
+      <button
+        style={{
+          border: `1px solid ${C.btnBorder}`,
+          background: C.btn,
+          color: C.text,
+          padding: "7px 13px",
+          borderRadius: 6,
+          fontSize: 14,
+          fontFamily: FONT_UI,
+        }}
+      >
+        Shape ▾
+      </button>
       {/* Undo / Redo, dimming when their stack is empty - the only place history is
           visible in the real bar, so the demo would look a version behind without it.
           Redo is dim here because nothing has been undone yet. */}
@@ -79,19 +120,25 @@ export const TopBar: React.FC<{
           {label}
         </button>
       ))}
-      <button
-        style={{
-          border: `1px solid ${C.btnBorder}`,
-          background: C.btn,
-          color: C.text,
-          padding: "7px 15px",
-          borderRadius: 6,
-          fontSize: 14,
-          fontFamily: FONT_UI,
-        }}
-      >
-        Deselect
-      </button>
+      {["Reset all", "Deselect"].map((label) => (
+        <button
+          key={label}
+          style={{
+            border: `1px solid ${C.btnBorder}`,
+            background: C.btn,
+            color: C.text,
+            padding: "7px 15px",
+            borderRadius: 6,
+            fontSize: 14,
+            fontFamily: FONT_UI,
+            // Reset all is disabled until there is something to discard, exactly as
+            // the shipped button is.
+            opacity: label === "Reset all" && !hasEdits ? 0.35 : 1,
+          }}
+        >
+          {label}
+        </button>
+      ))}
       <button
         style={{
           border: `1px solid ${C.gold}`,

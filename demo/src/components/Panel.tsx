@@ -256,6 +256,34 @@ export const Panel: React.FC<{
           <span style={inputBox}>normal</span>
           <Chevron />
         </Field>
+        {/* Four words in one row, sharing the narrow label column the spacing rows
+            use. They read as words rather than L C R J because an abbreviation you
+            have to decode is not a control - see overlay.css .wt-align. */}
+        <Field label="Align" wide>
+          <span style={{ display: "flex", flex: 1, gap: 3 }}>
+            {["Left", "Centre", "Right", "Justify"].map((a) => (
+              <span
+                key={a}
+                style={{
+                  flex: "1 1 0",
+                  minWidth: 0,
+                  textAlign: "center",
+                  background: a === "Left" ? C.gold : C.field,
+                  color: a === "Left" ? C.goldInk : C.text,
+                  border: `1px solid ${a === "Left" ? C.gold : C.border}`,
+                  borderRadius: 5,
+                  padding: "4px 1px",
+                  fontSize: 11,
+                  fontFamily: FONT_UI,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                }}
+              >
+                {a}
+              </span>
+            ))}
+          </span>
+        </Field>
       </div>
 
       <div style={{ marginBottom: 16 }}>

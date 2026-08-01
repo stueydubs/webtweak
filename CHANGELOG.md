@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-01
+
+**Per-breakpoint authoring.** webtweak reads the media queries your page already
+declares, lets you choose which one an edit applies at, previews the edit only inside
+that band, and records it so Claude can merge it into the `@media` block your
+stylesheet already has. Minor, not patch: the Patch contract gains a dimension.
+
+**The Patch contract changed, and the reconcile skill must be reinstalled.** An edits
+file written by this release can carry a `media` map alongside `changes`, and only a
+skill from this release knows how to fold it into source. An older edits file has no
+`media` key and reconciles exactly as before - the change is additive, so nothing
+already on disk breaks.
+
+**Still true, and worth saying:** you author at widths your own screen can show (there
+is no device frame - you resize your window), and webtweak only ever offers the
+breakpoints your page already declares, plus a condition you type by hand. It does not
+invent a breakpoint your site does not have. Border, per-side spacing and every shape
+control remain base-only whatever band is picked; the panel says so rather than
+quietly ignoring your choice.
+
+
 ### Added
 
 - **Shapes turn in 45° steps.** A new Rotate control in the Shape group offers the
@@ -613,7 +634,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/stueydubs/webtweak/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/stueydubs/webtweak/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/stueydubs/webtweak/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/stueydubs/webtweak/compare/v0.3.0...v0.4.0
