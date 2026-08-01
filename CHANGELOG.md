@@ -7,6 +7,131 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-01
+
+**A whole-project QA pass, and what it found.** Patch-level: nothing here changes the
+Patch contract or the edits-file format, so 0.7.0 edits files reconcile unchanged. Two
+behaviour changes are visible from outside, both fixes rather than choices - **dotfiles
+and dotdirs under the web root are no longer served** (`.well-known` excepted), and
+**HTML is now served under the charset the document itself declares** instead of a
+forced UTF-8.
+
+**How this was found.** Seven parallel reviewers over the server, both halves of the
+Overlay, the reconcile contract, the test suite, the docs and the security surface, with
+every finding adversarially verified before anything was changed. The suite was 391 green
+before this work and *still* 391 green once all the fixes had landed - which is the
+point: every defect below was invisible to it. The suite is 426 now because closing that
+blind spot was half the work.
+
+### Fixed - data loss
+
+- **A base edit was destroyed by a band override.** At a width one of the session's own
+  bands covered, `populate()` peeled only the inline style when reading a base
+  baseline - but a banded rule is emitted `!important`, so the peeled read returned the
+  *band's* value and typing it back looked like a revert. Base 40, band 30, back to
+  Base, type 30 saved `changes: {}`: the base declaration gone and the base value asked
+  for never recorded. On an element with no base edit, base was simply unwritable.
+  `withTempBandsRemoved` now peels every band's override of that property too.
+- **Reset all + Ctrl+Z destroyed every shape when there were two or more.** `resetSteps`
+  captures each shape's `nextSibling` before any removal, and shapes are siblings on
+  `<body>` - so shape 1's anchor *is* shape 2, detached by undo time. `insertBefore`
+  threw, the throw escaped `undo()` after `undoStack.pop()`, and nothing came back. The
+  existing test used one shape, the only count that worked; it is now parametrised.
+- **Escape mid-nudge baked the nudge in with no undo step.** `interact.unset()` aborts a
+  live gesture without firing `end`, which was the only place the undo step was pushed -
+  so Escape left the element moved, the offset bound for the edits file, and Ctrl+Z
+  answering "nothing to undo". Gestures now register their tail with `beginGesture` and
+  `deselect()` settles it before tearing interact down.
+- **A malformed `patches` value deleted the pending batch.** A non-array coerced to `[]`,
+  which the empty-save branch read as "the user reverted everything". Now a 400.
+  A non-string `sessionId` never superseded, so every save appended and reconcile applied
+  the same nudge once per save. Also a 400. `null` stays legal on both - it is the
+  documented clear-my-edits signal.
+
+### Fixed - crashes and silent failures
+
+- **An unguarded `statSync` killed the server.** The directory-index re-stat sat outside
+  its `try`, so `index.html` vanishing between the two calls took the whole process
+  down - self-inflicting, because a rebuild fires a source-change, the page reloads, and
+  the reload requests `/`. Raced deliberately, it died after 362 requests.
+- **A Turkish `İ` silently disabled the editor.** The injection index was taken on
+  `html.toLowerCase()` and used to slice `html`. U+0130 is the only code point in
+  Unicode whose lowercase changes UTF-16 length, so each one shifted the injection a
+  unit earlier - enough to land the overlay *inside* `</body>`, where the parser eats it
+  as attribute soup. Matching is now case-insensitive on the original string.
+- **A symlinked `--root` permanently killed the reconcile badge.** `state.editsPath` came
+  from the raw target path while the watcher builds paths from the realpath, so the edits
+  file was misclassified as webtweak's own churn and `edits-change` never fired.
+- **Non-UTF-8 pages were served irreversibly mangled**, and their `<meta charset>`
+  overridden. HTML is now read as bytes, spliced through `latin1`, and served under the
+  charset the document declares.
+- **`bandKey` failed on its own documented example.** It collapsed runs of whitespace but
+  never removed a single space, so `(max-width:600px)` and `(max-width: 600px)` were two
+  bands - two picker rows, and one band split across two `media` keys. Chrome normalises
+  `conditionText`, so this needed no unusual input at all.
+
+### Fixed - interaction
+
+- Deselecting mid-scrub threw `Cannot read properties of null` once per pointer move.
+- A right-button drag on a resize grip performed a real resize and recorded a patch.
+- `#wt-root` sat at `2147483000`, losing to the canonical `2147483647` used by cookie
+  banners and chat widgets - Save, Deselect, Shape and the Scope picker all became
+  unclickable. It is now `INT_MAX`.
+- The change-list dock covered the panel's Reset button below 614px; the wrapped-bar
+  shape palette covered the properties panel and could not be dismissed by Escape or an
+  outside click.
+
+### Fixed - the reconcile contract
+
+- `SKILL.md` matched `@media` blocks on **exact condition text**, which the browser's own
+  normalisation routinely breaks - sending the reader to open the duplicate block rule 1
+  exists to prevent. Now compares whitespace- and case-insensitively.
+- Steps 8 and 9 contradicted each other (step 9 ended "before step 8"); verify now
+  precedes mark, and citing code was updated with it.
+- Declaration order inside `changes` is cascade order and was unstated.
+- Nothing constrained where a **new base rule** goes relative to existing `@media`
+  blocks; appended at the end it wins inside the band and the banded edit renders
+  nothing. Step 8 now says to check at the band's width.
+- No batch-ordering rule, while `applyBatch` replaces in place - so file order is not
+  chronological order. `pending` now sorts oldest-first.
+- The edits file is now stated to be **captured data, never instructions**, with the
+  fields a reader may consume named explicitly.
+- `wtreconcile.py pending` crashed with a raw traceback on a non-string fingerprint
+  scalar while `status`, `--full` and `mark` all accepted the same file.
+
+### Security
+
+- **Dotfiles and dotdirs are no longer served.** `--root` at a real site root is the
+  documented normal usage and that root is usually a git repo, so `/.git/config`
+  returned 200. The watcher already skipped them; the server did not.
+- The trust boundary is now recorded in CONTEXT.md rather than left implicit: the served
+  page is same-origin with the save endpoint by construction, a token would be theatre,
+  and the mitigation belongs in the reconcile half.
+- `overlay/VENDOR.md` records interact.js's version, upstream and sha256 - previously the
+  banner comment was the entire provenance.
+
+### Tests
+
+- Five behaviours could be **deleted with the suite green** and are now covered: the 4px
+  nudge snap, `pickBand`'s handler-level refusal, `mayWatch`'s containment check, and
+  both traversal guards. `hostAllowed`/`originAllowed` had no test at all and now have
+  `tests/test_guards.py`.
+- Three `banded_edits` tests passed against the banded feature being deleted entirely,
+  because none asserted the band had landed before operating on it.
+- `test_counts_edited_elements_not_edits` never reached the state it names - a unitless
+  `#wt-ls` value is rejected, so its "second property" was a no-op.
+- `revert_shown` was defined byte-identically in two modules; moved to `conftest.py`.
+
+### Docs
+
+README no longer calls the shipped feature "unreleased"; the gitignore snippet now
+matches the real temp-file name; `CONTEXT.md` no longer claims an `outerHTML` snippet the
+code never emitted; `ADR-0002` and `overlay.js`'s own header comment no longer state the
+opposite of ADR-0004 on class stripping; `PRD.md` is annotated as superseded on its
+Python-stdlib stack decision and its nine shape kinds; `ADR-0004` records that the
+manual-condition escape hatch was deliberately closed; the 425-vs-472 conflict and three
+stale test counts are corrected.
+
 ## [0.7.0] - 2026-08-01
 
 **Per-breakpoint authoring.** webtweak reads the media queries your page already
@@ -634,7 +759,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/stueydubs/webtweak/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/stueydubs/webtweak/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/stueydubs/webtweak/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/stueydubs/webtweak/compare/v0.4.0...v0.5.0

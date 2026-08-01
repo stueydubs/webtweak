@@ -428,3 +428,54 @@ def test_mark_leaves_file_untouched_on_failure(tmp_path):
     run("mark", str(f), "nope")
     assert f.read_text() == before
     assert not list(tmp_path.glob("*.tmp"))
+
+
+# --- robustness of the summary path against a hand-edited file -----------------
+# The edits file lives in the user's own site repo: hand-editable, merge-conflict
+# prone. `_load`'s guards check container shapes, not the scalars inside a
+# fingerprint, so a non-string `id` or `ownText` used to make `pending` print its
+# batch header and then die with a raw traceback - exactly the failure `_load`'s
+# guard comment says it exists to prevent - while `status`, `--full` and `mark` all
+# accepted the same file. A user whose `pending` crashed could still retire the batch.
+
+@pytest.mark.parametrize("fp", [
+    {"tag": "h1", "id": 123},
+    {"tag": "h1", "ownText": 42},
+    {"tag": 7, "classes": [99]},
+    {"tag": "h1", "id": None, "text": ["a"]},
+])
+def test_pending_survives_a_non_string_fingerprint_scalar(tmp_path, fp):
+    f = write(tmp_path, {"target": "p.html", "batches": [
+        batch(patches=[{"fingerprint": fp, "changes": {"color": "red"}}])]})
+    out = run("pending", str(f))
+    assert out.returncode == 0, out.stderr
+    assert "session=s1" in out.stdout
+
+
+def test_every_subcommand_agrees_a_scalar_heavy_file_is_readable(tmp_path):
+    f = write(tmp_path, {"target": "p.html", "batches": [
+        batch(patches=[{"fingerprint": {"tag": "h1", "id": 123},
+                        "changes": {"color": "red"}}])]})
+    for argv in (["pending", str(f)], ["pending", str(f), "--full"], ["status", str(f)]):
+        assert run(*argv).returncode == 0, argv
+
+
+def test_pending_lists_oldest_first_regardless_of_file_order(tmp_path):
+    """File order is not chronological order.
+
+    applyBatch replaces a session's pending batch IN PLACE, so a session that saves, is
+    overtaken by a second session, then saves again leaves the NEWEST batch at the
+    lowest index. A reader working down the raw file would apply the newer value for a
+    property and then overwrite it with the older one.
+    """
+    newest = batch(session="sA")
+    newest["savedAt"] = "2026-07-31T18:00:00"
+    oldest = batch(session="sB")
+    oldest["savedAt"] = "2026-07-30T09:00:00"
+    f = write(tmp_path, {"target": "p.html", "batches": [newest, oldest]})
+    out = run("pending", str(f))
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.index("session=sB") < out.stdout.index("session=sA")
+    # The printed index still means "position in the file"; only the order changes.
+    assert "[1] session=sB" in out.stdout
+    assert "[0] session=sA" in out.stdout

@@ -71,7 +71,10 @@ def test_select_edit_nudge_resize_save_loop(served):
         # --- nudge: drag the card interior leftward ---
         select_card(page)
         cardbox = _box(page, ".card")
-        _drag(page, cardbox, -24, 0)
+        # -26, deliberately NOT a multiple of 4: the old -24 satisfied `% 4 == 0`
+        # whether or not the snap existed, so deleting the documented 4px grid left
+        # the whole suite green.
+        _drag(page, cardbox, -26, 0)
 
         # --- resize: drag the bottom-right grip outward ---
         # Re-read the box: the nudge above moved the card, so the pre-drag
@@ -101,7 +104,10 @@ def test_select_edit_nudge_resize_save_loop(served):
     # not a descendant whose positional selector also contains "card".
     card = next(p for k, p in patches.items() if k.endswith("div.card"))
     assert "nudge" in card["changes"]
-    assert card["changes"]["nudge"]["dx"] % 4 == 0
+    # The exact snapped value, not just "divisible by 4": -26 snaps to -24 (JS rounds
+    # a .5 toward +Infinity). Without the snap this reads -26, so the assertion can
+    # actually fail - the old `% 4 == 0` on a -24 drag held either way.
+    assert card["changes"]["nudge"]["dx"] == -24
     assert "width" in card["changes"] and "height" in card["changes"]
 
 
@@ -201,7 +207,10 @@ def test_shape_resizes_via_grip(served):
         browser.close()
 
     assert before == {"w": "80px", "h": "80px"}
-    assert int(after["w"][:-2]) > 80 and int(after["h"][:-2]) > 80  # grew via the grip
+    # The expected size, not merely "bigger": a grip delta scaled to 4% still grew
+    # 80 -> 82 and satisfied `> 80`.
+    assert abs(int(after["w"][:-2]) - 130) <= 2
+    assert abs(int(after["h"][:-2]) - 115) <= 2
 
 
 def test_shape_drag_and_drop_from_palette(served):
@@ -415,7 +424,9 @@ def test_shape_margin_reverts_but_seeded_props_persist(served):
         browser.close()
     create = next(p for p in json.loads((tmp / "sample.webtweak.json").read_text())
                   ["batches"][0]["patches"] if p.get("op") == "create")
-    assert "margin" not in create["changes"]             # reverted margin dropped, not stale
+    # Prefix, not exact key: the unlinked write path records `margin-top`, which
+    # `"margin" not in changes` accepts however broken revert detection is.
+    assert [k for k in create["changes"] if k.startswith("margin")] == []
     assert create["changes"]["stroke-width"] == "1px"    # seeded prop still recorded
 
 
@@ -944,20 +955,34 @@ def test_reset_all_is_one_undo_step(served):
     assert restored == ["70px", "70px"]
 
 
-def test_reset_all_removes_a_drawn_shape_and_one_undo_brings_it_back(served):
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_reset_all_removes_drawn_shapes_and_one_undo_brings_them_back(served, count):
     """A created shape has no authored baseline, so resetting it is a deletion -
-    the destructive case the single undo step most has to cover."""
+    the destructive case the single undo step most has to cover.
+
+    Parametrised on the COUNT, because one shape was the only count that worked. Shapes
+    are appended as siblings on <body> and resetSteps captures each one's `nextSibling`
+    before any of them are removed, so shape 1's recorded anchor IS shape 2 - by undo
+    time, detached. insertBefore then threw, and because the throw escaped undo() after
+    undoStack.pop() the batch was gone: both shapes destroyed, permanently, with the
+    Undo button left stale-enabled and the status line still offering Ctrl+Z.
+    """
     tmp, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        place_shape(page)
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        for i, kind in enumerate(["square", "circle", "triangle"][:count]):
+            place_shape(page, kind, x=260 + i * 150, y=350)
+        assert page.evaluate("document.querySelectorAll('svg.wt-shape').length") == count
         page.click("#wt-reset-all")
         gone = page.evaluate("document.querySelectorAll('svg.wt-shape').length")
         page.keyboard.press("Control+z")
         back = page.evaluate("document.querySelectorAll('svg.wt-shape').length")
         browser.close()
+    assert errors == []          # an escaping DOMException is how the batch was lost
     assert gone == 0
-    assert back == 1
+    assert back == count
 
 
 def test_reset_all_leaves_nothing_to_save(served):
@@ -1252,3 +1277,106 @@ def test_a_bar_dropdown_on_a_short_window_covers_nothing(served, height):
         browser.close()
     assert blocked == [], f"the picker covers these at 360x{height}: {blocked}"
     assert top_ok, f"the picker was placed above the bar's bottom at 360x{height}"
+
+
+def test_escape_mid_nudge_leaves_an_undoable_edit(served):
+    """Escape mid-drag must not strand a recorded nudge with no way back.
+
+    interact's unset() - which deselect() calls - aborts a live gesture WITHOUT firing
+    its 'end' listener, and 'end' was the only place the nudge pushed its undo step. So
+    Escape left the element exactly where the drag had put it, the offset already
+    recorded by every 'move' and bound for the edits file, and the Undo button disabled:
+    Ctrl+Z answered "nothing to undo" and the only way out was Reset. Escape reads to a
+    user as cancel; it did the opposite of cancel.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        box = _box(page, ".card")
+        cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        page.mouse.move(cx + 36, cy + 24, steps=8)
+        page.keyboard.press("Escape")
+        page.mouse.up()
+        moved = page.eval_on_selector(
+            ".card", "el => getComputedStyle(el).transform") != "none"
+        undo_disabled = page.get_attribute("#wt-undo", "disabled") is not None
+        page.keyboard.press("Control+z")
+        after = page.eval_on_selector(".card", "el => getComputedStyle(el).transform")
+        browser.close()
+    # Whatever Escape does with the gesture, the two must agree: an edit that was
+    # recorded is undoable, and an edit that was undone is not still on the page.
+    assert not (moved and undo_disabled), "nudge recorded with no undo step"
+    assert after == "none", "Ctrl+Z did not put the card back"
+
+
+def test_deselecting_mid_scrub_does_not_throw(served):
+    """The scrub keeps receiving pointermove after a deselect, because the pointer is
+    captured on the input - so it has to re-check the selection, the way the grip path
+    always has. Without it, writeSides dereferenced a null selectedEl once per move."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        select_card(page)
+        box = page.locator("#wt-margin-top").bounding_box()
+        cx, cy = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        page.mouse.move(cx, cy)
+        page.mouse.down()
+        page.mouse.move(cx, cy - 12)          # past SCRUB_SLOP: the scrub is armed
+        page.keyboard.press("Escape")         # deselect with the button still down
+        page.mouse.move(cx, cy - 24)
+        page.mouse.move(cx, cy - 36)
+        page.mouse.up()
+        browser.close()
+    assert errors == []
+
+
+def test_a_right_button_drag_on_a_grip_does_not_resize(served):
+    """Primary button only, matching the scrub path. A right-button drag performed a
+    real resize and recorded a patch while the context menu opened over the top - and
+    the menu can swallow the pointerup, leaving `interacting` true, which silently
+    disables the change list and live reload for the rest of the session."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        before = page.eval_on_selector(".card", "el => getComputedStyle(el).width")
+        box = _box(page, ".card")
+        page.mouse.move(box["x"] + box["width"] - 3, box["y"] + box["height"] - 3)
+        page.mouse.down(button="right")
+        page.mouse.move(box["x"] + box["width"] + 60, box["y"] + box["height"] + 20, steps=8)
+        page.mouse.up(button="right")
+        after = page.eval_on_selector(".card", "el => getComputedStyle(el).width")
+        head = page.inner_text("#wt-changes-head")
+        browser.close()
+    assert after == before
+    assert "0 element" in head or "element" not in head
+
+
+def test_the_overlay_outranks_a_page_element_at_max_z_index(served):
+    """2147483647 is the canonical always-on-top value (cookie banners, chat widgets).
+    #wt-root is mounted on <html>, so such an element shares its stacking context - and
+    at 2147483000 the overlay lost, making Save, Deselect, Shape and the Scope picker
+    unclickable. Ctrl+S still saved; the other three have no keyboard equivalent."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.evaluate("""() => {
+            const d = document.createElement('div');
+            d.id = 'hostile-bar';
+            d.style.cssText = 'position:fixed;top:0;left:0;right:0;height:60px;' +
+                              'background:#c00;z-index:2147483647';
+            document.body.appendChild(d);
+        }""")
+        covered = page.evaluate("""() => ['wt-save', 'wt-deselect', 'wt-shape-btn']
+            .filter(id => {
+                const r = document.getElementById(id).getBoundingClientRect();
+                const t = document.elementFromPoint(r.left + r.width/2, r.top + r.height/2);
+                return t && t.id === 'hostile-bar';
+            })""")
+        browser.close()
+    assert covered == []

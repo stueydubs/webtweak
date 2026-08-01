@@ -42,7 +42,10 @@ def test_counts_edited_elements_not_edits(served):
         assert hidden(page) is False
         assert "1 element changed" in head(page)
 
-        page.fill("#wt-ls", "2")                # second property, same element
+        # "2px", not "2": #wt-ls declares no unit, so a bare number fails
+        # CSS.supports and is rejected - the second property was never recorded and
+        # this assertion merely restated the one above it.
+        page.fill("#wt-ls", "2px")              # second property, same element
         page.dispatch_event("#wt-ls", "input")
         assert "1 element changed" in head(page)
 

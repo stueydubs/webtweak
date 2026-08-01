@@ -9,7 +9,7 @@ __pycache__/
 # but ignore the recovery backups and atomic-write temp files there too.
 *.webtweak.json
 *.webtweak.json*.bak
-*.webtweak.json.tmp
+*.webtweak.json.*.tmp
 
 # local dev virtualenv (see README Development / requirements-dev.txt)
 .venv/

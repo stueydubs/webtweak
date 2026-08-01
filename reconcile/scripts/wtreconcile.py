@@ -132,13 +132,28 @@ def _unbanded_summary(changes: dict, media: dict) -> str:
     return _changes_summary({k: v for k, v in changes.items() if k not in banded})
 
 
+def _str(v) -> str:
+    """A fingerprint scalar as text, whatever type it actually arrived as.
+
+    `_load`'s guards check container shapes, not the scalars inside a fingerprint, and
+    the edits file is committed in the user's own site repo - so it is hand-editable and
+    merge-conflict-prone. A `"id": 123` or `"ownText": 42` used to reach `_describe` and
+    raise mid-listing (`TypeError: can only concatenate str`), which is exactly the
+    "printed a partial listing and then died with a raw traceback" failure the guard
+    comment in `_load` says it exists to prevent. Worse, `status`, `pending --full` and
+    `mark` all accepted the same file, so `mark` could retire a batch whose `pending`
+    had crashed. Coercing keeps every subcommand's verdict on a given file the same.
+    """
+    return v if isinstance(v, str) else ("" if v is None else str(v))
+
+
 def _describe(fp: dict) -> str:
-    s = fp.get("tag", "?")
+    s = _str(fp.get("tag")) or "?"
     if fp.get("id"):
-        s += "#" + fp["id"]
-    elif fp.get("classes"):
-        s += "." + fp["classes"][0]
-    text = (fp.get("ownText") or fp.get("text") or "").strip()
+        s += "#" + _str(fp["id"])
+    elif isinstance(fp.get("classes"), list) and fp["classes"]:
+        s += "." + _str(fp["classes"][0])
+    text = (_str(fp.get("ownText")) or _str(fp.get("text"))).strip()
     if text:
         s += f' "{text[:40]}"'
     return s
@@ -165,6 +180,15 @@ def pending(args) -> None:
     doc = _load(args.file)
     pend = [(i, b) for i, b in enumerate(doc.get("batches", []))
             if b.get("status") == "pending"]
+    # Listed OLDEST FIRST, which is the order they must be applied in - not file order.
+    # `applyBatch` replaces a session's pending batch IN PLACE rather than appending, so
+    # a session that saves, is overtaken by a second session, then saves again leaves
+    # the newest batch at the LOWEST index. A reader working down the listing would then
+    # apply the newer value for a property and overwrite it with the older one. The
+    # index is still printed so `[n]` keeps meaning "position in the file"; only the
+    # order of presentation changes. Sorting here rather than only documenting it in
+    # SKILL.md means the safe order is the one that costs no thought.
+    pend.sort(key=lambda pair: (pair[1].get("savedAt") or "", pair[0]))
     _warn_impossible_media(pend)
 
     if args.full:  # full patch JSON (fingerprints + changes) for deep work
@@ -214,6 +238,18 @@ def pending(args) -> None:
 
 
 def mark(args) -> None:
+    """Flip a pending batch to reconciled. ALWAYS run this AFTER writing source.
+
+    The order is a cross-component coupling, not a preference, and this is the end of
+    the wire that can break it. The Overlay's restore() re-applies a batch that is still
+    `pending`, and the live-reload guard uses the mark to know the batch is settled - so
+    marking BEFORE the CSS is written opens a window where a reload finds a reconciled
+    batch and freshly-unwritten source, or (worse) writes land after a restore has
+    already re-applied the same patches and the nudge is doubled. CONTEXT.md records
+    this as a named coupling ("SKILL.md steps 7 then 9") and overlay.js's restore()
+    depends on it in two places; nothing enforces it in code, which is why it is stated
+    at both ends rather than assumed.
+    """
     doc = _load(args.file)
     now = datetime.now().isoformat(timespec="seconds")
     candidates = [

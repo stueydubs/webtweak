@@ -169,3 +169,13 @@ def select_card(page):
     """
     page.click(".card", position={"x": 8, "y": 8})
     assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "div.card"
+
+
+def revert_shown(page, control):
+    """Whether a control's revert dot is showing.
+
+    Lived byte-identically in test_e2e_panel and test_e2e_banded_edits. Two copies is
+    how one of them ends up subtly different, which is the reason this module's
+    docstring gives for existing.
+    """
+    return page.eval_on_selector(f"#{control}-revert", "el => !el.hidden")

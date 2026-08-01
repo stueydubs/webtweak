@@ -71,8 +71,18 @@ const MIME = {
 // --- pure functions (no I/O) -----------------------------------------------
 
 function overlayMarkup(targetName) {
-  // Use ': ' separator to match Python's json.dumps format (tests rely on this).
-  const cfg = '{"target": ' + JSON.stringify(targetName) + '}';
+  // The ': ' separator is asserted by test_loop.py, so it is a fixed part of the
+  // markup rather than incidental formatting. (It originally matched Python's
+  // json.dumps, from the pre-0.2.0 Python implementation deleted at 8a98316; the
+  // constraint outlived its reason.)
+  //
+  // `<` is escaped because this string goes inside an inline <script>: a target
+  // filename containing `</script>` would otherwise close the tag early, leaving
+  // window.__WEBTWEAK__ unassigned and the rest of the filename as live markup.
+  // The filename comes from the operator's own CLI argument, so this is
+  // correctness rather than a reachable attack - but a page that silently fails
+  // to boot the overlay is the worst kind of bug to diagnose.
+  const cfg = '{"target": ' + JSON.stringify(targetName).replace(/</g, '\\u003c') + '}';
   return (
     '\n<!-- webtweak overlay (injected, not part of source) -->\n' +
     `<script>window.__WEBTWEAK__ = ${cfg};</script>\n` +
@@ -84,7 +94,18 @@ function overlayMarkup(targetName) {
 
 function injectOverlay(html, targetName) {
   const markup = overlayMarkup(targetName);
-  const idx = html.toLowerCase().lastIndexOf('</body>');
+  // Match case-insensitively on the ORIGINAL string. The previous form took the
+  // index from `html.toLowerCase()` and used it to slice `html`, which assumes case
+  // folding is length-preserving. It is not: U+0130 (LATIN CAPITAL LETTER I WITH
+  // DOT ABOVE, Turkish `İ`) is the only code point in the whole of Unicode whose
+  // lowercase is a different number of UTF-16 units, and every one appearing before
+  // the closing tag shifted the injection point one unit earlier. A Turkish page
+  // with eight of them landed the markup *inside* `</body>`, where the parser eats
+  // all four overlay tags as attribute soup - the editor simply never appeared, with
+  // no error anywhere.
+  let idx = -1;
+  const re = /<\/body>/gi;
+  for (let m; (m = re.exec(html)); ) idx = m.index;
   if (idx === -1) return html + markup;
   return html.slice(0, idx) + markup + html.slice(idx);
 }
@@ -97,6 +118,24 @@ function applyBatch(doc, payload, now) {
   }
   if (!doc.target && payload.target) doc.target = payload.target;
 
+  // Both guards below are about NOT mistaking malformed input for a deliberate
+  // signal. A non-array `patches` used to coerce to `[]`, which the empty-save
+  // branch then read as "the user reverted everything" and deleted their pending
+  // batch - silent data loss from a payload that should never have been accepted.
+  // A non-string `sessionId` never compared equal to the stored one, so every save
+  // appended a fresh batch instead of superseding, and reconcile applied the same
+  // nudge once per save. Neither is reachable from the Overlay (it always sends a
+  // string SESSION and an array), so this is robustness at the trust boundary.
+  // `null`/absent stay legal on both: a null `patches` is the documented "clear my
+  // edits" signal (see test_empty_save_is_noop_when_nothing_pending) and a null
+  // `sessionId` falls back to 'unknown'. Only a present, non-null value of the wrong
+  // TYPE is rejected - that is the case that used to be silently misread.
+  if (payload.patches != null && !Array.isArray(payload.patches)) {
+    throw new TypeError('patches must be an array');
+  }
+  if (payload.sessionId != null && typeof payload.sessionId !== 'string') {
+    throw new TypeError('sessionId must be a string');
+  }
   const patches = Array.isArray(payload.patches) ? payload.patches : [];
   const session = payload.sessionId || 'unknown';
   const batches = doc.batches.slice();
@@ -155,7 +194,7 @@ function writeJsonAtomic(filePath, doc) {
     const fd = fs.openSync(tmp, 'w');
     try {
       fs.writeFileSync(fd, body, 'utf8');
-      fs.fsyncSync(fd);            // durability parity with the reference implementation
+      fs.fsyncSync(fd);            // rename alone orders the metadata, not the data
     } finally { fs.closeSync(fd); }
     fs.renameSync(tmp, filePath);
     return body;
@@ -373,15 +412,52 @@ function contained(p, root) {
   return p === root || p.startsWith(root + path.sep);
 }
 
+// Any `.`-prefixed segment in a request path. Checked on the DECODED path, so
+// `%2e git/config` styles cannot slip past, and per segment rather than by substring
+// so an ordinary `my.folder/app.js` is untouched. Deliberately narrower than the
+// watcher's isSkippedDir, which also skips node_modules: a page can legitimately
+// reference an asset out of node_modules, but nothing legitimately references a dotfile.
+//
+// `.well-known` is the one exception, and it is a real one: it is the single
+// standardised dot-path on the web (RFC 8615), so a page under test can legitimately
+// reference something under it. Blocking it was a regression this guard introduced,
+// caught by asking what a *page* might actually want rather than only what an attacker
+// would. It holds no secrets by convention, which is the whole point of the namespace.
+function dotSegment(urlPath) {
+  return urlPath.split('/').some(seg =>
+    seg.startsWith('.') && seg !== '.' && seg !== '..' && seg !== '.well-known');
+}
+
 // `transform`, when given, runs on the file's contents before it is sent (used to
 // inject the overlay into the target page); any other HTML is served as-is, so
 // following a nav link out of the target gives you the real page rather than a
 // mis-aimed overlay.
+// The document's own declared encoding, or null. Only the head is scanned because
+// that is the only place the declaration is honoured.
+function charsetOf(bytes) {
+  const m = /<meta[^>]+charset\s*=\s*["']?\s*([\w-]+)/i.exec(bytes.slice(0, 2048).toString('latin1'));
+  return m ? m[1].toLowerCase() : null;
+}
+
+// Read HTML as BYTES, not as a UTF-8 string. `readFileSync(p, 'utf8')` decodes with
+// U+FFFD replacement and `send` re-encodes as UTF-8, so a hand-coded windows-1252
+// page had `café` (byte 0xE9) rewritten to EF BF BD before it left the server -
+// unrecoverable, and the page's own <meta charset> could not undo it because the
+// original byte was already gone. That matters more here than in an ordinary static
+// server: the Overlay fingerprints elements on their text, so every Patch on such an
+// element carried the replacement character and reconcile could never match it back
+// to the real source.
+//
+// latin1 is byte-transparent (one byte, one code unit, no replacement), so decoding
+// for the injection splice and re-encoding round-trips the file exactly. The injected
+// markup is pure ASCII, valid in every encoding a hand-coded page realistically uses.
 function serveHtml(filePath, method, res, transform) {
-  let html;
-  try { html = fs.readFileSync(filePath, 'utf8'); }
+  let bytes;
+  try { bytes = fs.readFileSync(filePath); }
   catch (e) { return sendError(res, 500, 'Read error'); }
-  send(res, 200, transform ? transform(html) : html, 'text/html; charset=utf-8', method);
+  const cs = charsetOf(bytes) || 'utf-8';
+  if (transform) bytes = Buffer.from(transform(bytes.toString('latin1')), 'latin1');
+  send(res, 200, bytes, `text/html; charset=${cs}`, method);
 }
 
 // Stream rather than readFileSync: this server is single-threaded, so slurping a
@@ -458,7 +534,12 @@ function handleSave(body, targetName, editsPath, state, res) {
 
   if (!payload.target) payload = Object.assign({ target: targetName }, payload);
   const now = new Date().toISOString().slice(0, 19);
-  doc = applyBatch(doc, payload, now);
+  // A malformed payload is a 400, never a write. Before applyBatch validated its
+  // input, a non-array `patches` reached the empty-save branch and wiped the
+  // caller's pending batch; answering 400 here is what makes that guard useful
+  // rather than merely an exception.
+  try { doc = applyBatch(doc, payload, now); }
+  catch (e) { return sendError(res, 400, `Bad payload: ${e.message}`); }
   let written;
   try { written = writeJsonAtomic(editsPath, doc); }
   catch (e) {
@@ -545,6 +626,16 @@ function createHandler(targetPath, serveRoot, state) {
     let local = path.resolve(serveRoot, decoded.replace(/^\/+/, ''));
     if (!contained(local, serveRoot)) return sendError(res, 403, 'Forbidden');
 
+    // Dotfiles and dotdirs are never served. The containment guard above is about
+    // staying inside the root; this is about what inside the root is anybody's
+    // business. `--root` at a real site root is the documented normal usage and that
+    // root is almost always a git repo, so `/.git/config` and friends sat one plain
+    // GET away. Cross-origin pages cannot read them (CORS), which leaves exactly one
+    // reader: a script in the served page itself - i.e. the untrusted page this tool
+    // exists to open. The watcher already skipped these (isSkippedDir); the server
+    // did not, and that asymmetry inside one file was the whole bug.
+    if (dotSegment(decoded)) return sendError(res, 404, 'Not found');
+
     let stat;
     try { stat = fs.statSync(local); }
     catch (_) { return sendError(res, 404, 'Not found'); }
@@ -553,11 +644,18 @@ function createHandler(targetPath, serveRoot, state) {
     // without this, every root-relative nav link on the page dead-ends.
     if (stat.isDirectory()) {
       const index = path.join(local, 'index.html');
+      // Both stats are guarded, and deliberately so. The second one used to sit
+      // bare: if index.html vanished between the two calls the exception escaped
+      // the request handler and killed the whole process. That is not a theoretical
+      // race - it is self-inflicting. A rebuild (`rm -rf dist && build`, a
+      // `git checkout`, an `rsync --delete`) fires a source-change event, the page
+      // reloads itself, the reload requests `/`, and index.html is momentarily gone.
+      // Raced deliberately, the server died after 362 requests.
       try {
         if (!fs.statSync(index).isFile()) throw new Error('not a file');
+        local = index;
+        stat  = fs.statSync(local);
       } catch (_) { return sendError(res, 404, 'No listing'); }
-      local = index;
-      stat  = fs.statSync(local);
     }
 
     // path.resolve does not follow symlinks, so a link inside the served
@@ -613,7 +711,16 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     port:       port,
     realRoot:   fs.realpathSync(serveRoot),
     realTarget: fs.realpathSync(targetPath),
-    editsPath:  editsPathFor(targetPath),
+    // Derived from the REAL target path, to match what the watcher will see. The
+    // watcher walks serveRoot and builds each changed path from the directory it is
+    // watching, so with a symlinked --root (`--root /link` where /link -> /real/site)
+    // a path built from the raw target never `===` this one. classify() then fell
+    // through to the EDITS_SUFFIX test, decided the edits file was webtweak's own
+    // churn, and dropped it - so marking a batch reconciled fired no edits-change and
+    // the badge stayed at "N pending" for the rest of the session. Serving worked
+    // throughout, because both containment checks already used realpaths; this was
+    // the one place that did not.
+    editsPath:  editsPathFor(fs.realpathSync(targetPath)),
     clients:    new Set(),          // open SSE streams
     lastSelfWrite: null,            // exact bytes we last wrote to the edits file
   };

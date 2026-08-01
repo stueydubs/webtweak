@@ -62,8 +62,20 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_overlay_asset_traversal_blocked(self):
-        status, _, _ = self._get("/__webtweak__/../webtweak")
-        self.assertIn(status, (400, 404))  # never serves the script itself
+        # Traverse to a name that IS in the OVERLAY_ASSETS allowlist. The old probe
+        # asked for `../webtweak`, which the allowlist rejects on its own - so the test
+        # could not tell the containment guard from the name check, and deleting the
+        # guard left it green. `overlay.js` is allowlisted, so only `contained()` can
+        # refuse this one, and the assertion is on the BODY as well as the status: the
+        # failure that matters is the file being handed out, not the code that says so.
+        for path in ("/__webtweak__/../overlay/overlay.js",
+                     "/__webtweak__/../../etc/passwd",
+                     "/__webtweak__/..%2foverlay%2foverlay.js"):
+            with self.subTest(path=path):
+                status, body, _ = self._get(path)
+                self.assertIn(status, (400, 403, 404))
+                self.assertNotIn(b"wt-root", body)   # overlay.js's own marker
+                self.assertNotIn(b"root:x:", body)
 
     # --- save loop ---------------------------------------------------------
     def _save_payload(self):

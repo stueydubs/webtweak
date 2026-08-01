@@ -64,10 +64,24 @@ def test_root_serves_the_asset_and_the_page(site):
 
 
 def test_root_still_contains_traversal(site):
-    """A wider root must not mean a weaker containment guard."""
+    """A wider root must not mean a weaker containment guard.
+
+    Note what this does and does not prove. The OUTCOME is defended twice - by
+    `contained(local, serveRoot)` and again by the realpath check - so deleting either
+    one alone leaves this green. That is defence in depth working, not a gap; the test
+    is deliberately on the outcome, because the outcome is the thing that must hold.
+    Asserting the body as well as the status is what makes it about the file rather
+    than about which branch produced the refusal.
+    """
     proc, port = start(site / "blog" / "post.html", root=site)
     try:
-        assert status(port, "/../../etc/passwd") in (403, 404)
+        for path in ("/../../etc/passwd", "/..%2f..%2fetc%2fpasswd", "/blog/../../etc/passwd"):
+            try:
+                code, body = get(port, path)
+            except urllib.error.HTTPError as e:
+                code, body = e.code, e.read().decode("utf-8", "replace")
+            assert code in (400, 403, 404), (path, code)
+            assert "root:x:" not in body, path
     finally:
         stop(proc)
 

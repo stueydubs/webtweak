@@ -16,7 +16,8 @@ than reasoning about one:
     and - worse - record a change the page never showed.
 """
 
-from conftest import open_page, patches, pick, resize, save, set_field
+from conftest import (headline, open_page, patches, pick, resize, save,
+                      set_field)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -462,3 +463,55 @@ def test_the_panel_reads_the_bands_own_values_with_no_extra_machinery(served):
         browser.close()
     assert wide == "44px"
     assert narrow == "32px"
+
+
+def test_a_condition_spelled_without_a_space_is_the_same_band(served):
+    """`(max-width:600px)` and `(max-width: 600px)` are one band, not two.
+
+    bandKey collapsed runs of whitespace but never removed a single space, so it failed
+    on the exact pair its own doc comment gives as the case it handles. The picker then
+    listed two rows with identical labels, and - worse than cosmetic - the two spellings
+    became two `media` keys on one patch, which reconcile folds into the same @media
+    block twice. The browser makes this reachable without anyone typing anything odd:
+    CSSMediaRule.conditionText normalises `@media (max-width:600px)` to
+    `(max-width: 600px)`, so the two spellings meet whenever a stylesheet omits the space.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        before = page.eval_on_selector_all("#wt-scope-list .wt-band", "els => els.length")
+        page.fill("#wt-scope-input", "(max-width:600px)")
+        page.press("#wt-scope-input", "Enter")
+        after = page.eval_on_selector_all("#wt-scope-list .wt-band", "els => els.length")
+        headline(page)
+        set_field(page, "#wt-fs", "31px")
+        save(page)
+        browser.close()
+    assert after == before, "the typed spelling added a duplicate band row"
+    # And the emitted key is the page's own condition text, so reconcile finds the
+    # block that already exists instead of opening a second one.
+    assert list(patches(tmp)[0]["media"].keys()) == ["(max-width: 600px)"]
+
+
+def test_the_band_refusal_is_on_the_handler_not_just_the_disabled_attribute(served):
+    """Driving pickBand directly must still refuse a band the window is not inside.
+
+    The sibling test above clicks the row with force=True, but a `disabled` button never
+    dispatches a click at all - so `after == BASE` was entailed by the disabled check and
+    the handler's own guard was never reached. Calling it directly is what makes the
+    guard, rather than its styling, the thing under test.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=1280)
+        # Re-enable the row in the DOM, then click it for real. No production test
+        # hook: the point is to reach the handler the way a stale-open list could, not
+        # to call an exported function the app does not otherwise have.
+        page.click("#wt-scope-toggle")
+        page.evaluate("""() => document
+            .querySelector('#wt-scope-list .wt-band[data-condition="(max-width: 600px)"]')
+            .removeAttribute('disabled')""")
+        page.click('#wt-scope-list .wt-band[data-condition="(max-width: 600px)"]')
+        after = scope_shown(page)
+        browser.close()
+    assert after == BASE

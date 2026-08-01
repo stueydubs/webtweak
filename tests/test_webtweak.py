@@ -183,3 +183,39 @@ class ApplyBatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InjectOverlayEncodingTests(unittest.TestCase):
+    """Case-insensitive matching must not assume case folding preserves length."""
+
+    def test_a_turkish_capital_i_does_not_shift_the_injection_point(self):
+        # U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) is the ONLY code point in the
+        # whole of Unicode whose lowercase is a different number of UTF-16 units. The
+        # index used to be taken on html.toLowerCase() and then used to slice `html`,
+        # so every one of these before the closing tag shifted the injection one unit
+        # earlier - and with eight of them the markup landed INSIDE `</body>`, where the
+        # parser eats all four overlay tags as attribute soup. The editor simply never
+        # appeared, with no error anywhere.
+        for n in (0, 1, 3, 8):
+            with self.subTest(count=n):
+                html = "<html><body>" + ("İ" * n) + "</body></html>"
+                out = wt.inject_overlay(html, "p.html")
+                self.assertIn("__WEBTWEAK__", out)
+                # The markup sits before the closing tag, and the closing tag survives
+                # whole - that is what "before the last </body>" has to mean.
+                self.assertLess(out.index("__WEBTWEAK__"), out.index("</body>"))
+                self.assertEqual(out.count("</body>"), 1)
+                self.assertTrue(out.endswith("</body></html>"))
+
+    def test_an_uppercase_closing_tag_is_still_matched(self):
+        out = wt.inject_overlay("<html><BODY>x</BODY></html>", "p.html")
+        self.assertIn("__WEBTWEAK__", out)
+        self.assertLess(out.index("__WEBTWEAK__"), out.index("</BODY>"))
+
+    def test_a_target_name_cannot_close_the_inline_script(self):
+        # The name comes from the operator's own CLI argument, so this is correctness
+        # rather than a reachable attack - but an overlay that silently fails to boot
+        # is the worst kind to diagnose.
+        out = wt.overlay_markup('a</script><img src=x onerror=BOOM>.html')
+        self.assertNotIn("</script><img", out)
+        self.assertIn("\\u003c", out)

@@ -15,15 +15,11 @@ overwrote a base one would still produce a valid-looking Patch.
 """
 
 from conftest import (headline, open_page, patches, pick, place_shape, rendered,
-                      resize, save, select_card, set_field)
+                      resize, save, select_card, set_field, revert_shown)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
 NARROW = "(max-width: 600px)"
-
-
-def revert_shown(page, control):
-    return page.eval_on_selector(f"#{control}-revert", "el => !el.hidden")
 
 
 def band_edit(page, value="30px", condition=NARROW):
@@ -159,6 +155,11 @@ def test_clearing_a_banded_field_reverts_only_that_band(served):
         set_field(page, "#wt-fs", "40px")
         pick(page, NARROW)
         set_field(page, "#wt-fs", "30px")
+        # Confirm the banded edit actually landed before abandoning it. Without this
+        # the test passed against targetMap() writing every band into a throwaway
+        # object - i.e. against the feature not existing at all, since 40px is also
+        # what a session with no banded edit renders here.
+        assert rendered(page, "#headline", "font-size") == "30px"
         set_field(page, "#wt-fs", "")       # abandon the banded edit
         narrow = rendered(page, "#headline", "font-size")
         save(page)
@@ -180,6 +181,10 @@ def test_undo_steps_back_through_a_banded_edit_without_touching_the_base_one(ser
         set_field(page, "#wt-fs", "40px")
         pick(page, NARROW)
         set_field(page, "#wt-fs", "30px")
+        # The banded edit has to exist before undo can be shown not to disturb the base
+        # one. 40px is also what a session with no banded edit renders, so without this
+        # both closing assertions held against the feature being absent.
+        assert rendered(page, "#headline", "font-size") == "30px"
         page.click("#wt-undo")
         narrow = rendered(page, "#headline", "font-size")
         resize(page, 1280)
@@ -229,6 +234,9 @@ def test_reset_clears_a_banded_edit_too(served):
     with sync_playwright() as p:
         browser, page = open_page(p, port, width=480)
         band_edit(page)
+        # Same reason as the two above: 32px is the fixture's own banded value, so the
+        # closing assertion could not tell a cleared band from one never recorded.
+        assert rendered(page, "#headline", "font-size") == "30px"
         page.click("#wt-reset")
         after = rendered(page, "#headline", "font-size")
         page.click("#wt-save")
@@ -497,3 +505,52 @@ def test_a_hand_typed_band_is_still_offered_after_a_reload(served):
     assert typed in listed, "the restored edit's band dropped out of the picker"
     assert inside == "31px"
     assert outside != "31px", "restored as a base edit - it applies at every width"
+
+
+def test_a_base_edit_is_recorded_at_a_width_a_band_already_covers(served):
+    """The base value must be writable, and survivable, at a width one of this
+    session's own bands covers.
+
+    A banded override is emitted `!important`, so inside its band it beats the inline
+    style a base edit uses. populate() peeled only the inline half when reading a base
+    baseline, so it read the BAND's value back as "what this element authors" - and
+    typing that value looked like a revert. The result was silent data loss: the base
+    40px already recorded was dropped and the base 30px asked for was never written,
+    leaving `changes: {}`.
+    """
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)   # inside (max-width: 600px)
+        pick(page, "")
+        headline(page)
+        set_field(page, "#wt-fs", "40px")
+        pick(page, NARROW)
+        set_field(page, "#wt-fs", "30px")
+        assert rendered(page, "#headline", "font-size") == "30px"
+        pick(page, "")
+        # The field still shows what the page RENDERS here (30px - the band is winning
+        # at this width), which is correct and is exactly how a user is led to type it.
+        # What must not happen is that value being mistaken for the base baseline.
+        set_field(page, "#wt-fs", "30px")       # base 30 as well, deliberately
+        save(page)
+        browser.close()
+    patch = patches(tmp)[0]
+    assert patch["changes"]["font-size"] == "30px"          # base recorded, not dropped
+    assert patch["media"][NARROW]["font-size"] == "30px"    # band still its own
+
+
+def test_a_base_edit_on_an_untouched_element_is_recorded_inside_a_band(served):
+    """The same misread with no prior base edit: base was simply unwritable at any
+    width one of the session's bands covered."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port, width=480)
+        pick(page, NARROW)
+        headline(page)
+        set_field(page, "#wt-fs", "30px")
+        pick(page, "")
+        set_field(page, "#wt-fs", "30px")
+        save(page)
+        browser.close()
+    patch = patches(tmp)[0]
+    assert patch["changes"].get("font-size") == "30px"

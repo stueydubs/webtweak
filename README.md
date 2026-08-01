@@ -95,7 +95,7 @@ Your source is never touched until that reconcile step - running webtweak is con
 **Add these to your site's `.gitignore`** if you don't want the artefacts tracked (though the edits file makes a decent visual changelog if you do):
 
 ```gitignore
-*.webtweak.json.tmp
+*.webtweak.json.*.tmp
 *.webtweak.json.*.bak
 ```
 
@@ -128,7 +128,7 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 
 - **No structural reordering.** Moving an element above another (rewriting the DOM order in source) is deferred. Today it is resize, restyle, and nudge.
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
-- **Per-breakpoint editing is partial, and unreleased.** Type, colour and box changes can be scoped to a breakpoint your page already declares - they preview only inside it, and Claude merges them into the `@media` block your stylesheet already has rather than adding a second one. But border, per-side spacing and every shape control stay base-only whatever you pick; the panel says so rather than quietly ignoring the scope you chose. There is no device frame either: you resize your own window, so you can only author at widths your screen can actually show. Shipped in **0.7.0**; if you are upgrading, reinstall the bundled reconcile skill, because an edits file carrying a `media` map needs a skill from this release to fold it into source. Edits files written before it have no `media` key and reconcile exactly as they always did.
+- **Per-breakpoint editing is partial.** Type, colour and box changes can be scoped to a breakpoint your page already declares - they preview only inside it, and Claude merges them into the `@media` block your stylesheet already has rather than adding a second one. But border, per-side spacing and every shape control stay base-only whatever you pick, and so does every gesture edit - a drag-nudge, a grip-resize or a shape move always records at base regardless of the scope shown; the panel says so rather than quietly ignoring the scope you chose. There is no device frame either: you resize your own window, so you can only author at widths your screen can actually show. The bar also grows to two or three rows at narrow widths and covers up to 119px of the top of your page; widening the window shortens it. Shipped in **0.7.0**; if you are upgrading, reinstall the bundled reconcile skill, because an edits file carrying a `media` map needs a skill from this release to fold it into source. Edits files written before it have no `media` key and reconcile exactly as they always did.
 - **Limited property set.** Flex/grid alignment editors and hover/focus states are out of the panel. Borders and shadows are in as of 0.4.0, but not per-side border controls or per-corner radii - and in both cases the overlay *declines* rather than flattens: an element whose sides carry different borders, or whose corners carry different radii, has those controls switched off with an explanation, so a deliberate design can't be silently replaced with a box.
 - **Serves one directory as web root.** By default that is the page's own folder, so a page in a subfolder referencing site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 them. Pass `--root` at the real site root to fix it. Pages needing a build step (Tailwind compile, server-side partials) still won't render identically to production.
 
@@ -168,4 +168,4 @@ No runtime dependencies. interact.js is vendored under `overlay/` for the drag/r
 
 MIT — see [LICENSE](LICENSE).
 
-`overlay/interact.min.js` is [interact.js](https://interactjs.io) by Taye Adeyemi, also MIT.
+`overlay/interact.min.js` is [interact.js](https://interactjs.io) by Taye Adeyemi, also MIT. Version, upstream and checksum are recorded in [overlay/VENDOR.md](overlay/VENDOR.md).

@@ -6,7 +6,7 @@ one you are. And undoing a single property meant knowing to clear its field, whi
 nothing on screen suggests - Reset discards the whole element instead.
 """
 
-from conftest import changes, open_page, save, select_card, set_field
+from conftest import changes, open_page, save, select_card, set_field, revert_shown
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -23,10 +23,6 @@ def group_open(page, group="Type"):
         }""",
         group,
     )
-
-
-def revert_shown(page, control):
-    return page.eval_on_selector(f"#{control}-revert", "el => !el.hidden")
 
 
 def test_a_group_collapses_and_keeps_its_legend(served):

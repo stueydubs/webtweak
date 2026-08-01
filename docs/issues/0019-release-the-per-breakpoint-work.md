@@ -33,6 +33,7 @@ The release, plus the documentation that ships false the moment the code lands -
 
 - [x] `CONTEXT.md`'s single-viewport decision is rewritten, and Band is in the glossary as distinct from the viewport stamp
 - [x] The README no longer says webtweak is not a responsive-design tool, and its limitations list describes the real remaining limits
+  - *Corrected after release.* The first half was met; the second was not. The bullet still opened "Per-breakpoint editing is partial, and **unreleased**" while ending "Shipped in 0.7.0", and it omitted two limits the PRD itself records - gesture edits staying base-only, and the bar covering up to 119px. All three fixed in the QA pass. Same failure mode as 0017's ninth criterion: a box ticked on the half of the sentence that was done.
 - [x] `docs/PRD.md`'s deferred list reflects that per-breakpoint authoring has shipped
 - [x] CHANGELOG has a section for this release covering discovery, the picker, scoped preview and recording, reconcile's media merging, and restore, with its compare links extended
 - [x] The release notes state the Patch contract change, that older edits files are unaffected, and that the skill must be reinstalled

@@ -15,7 +15,14 @@ html { user-select: none; }
 #wt-root {
   position: fixed;
   inset: 0;
-  z-index: 2147483000;
+  /* INT_MAX. Not "high enough" - the actual ceiling. 2147483647 is the canonical
+     always-on-top value, used by cookie banners, chat widgets and sticky headers, and
+     #wt-root is mounted on <html> so such an element shares its stacking context and
+     simply won. With one on the page, Save, Deselect, Shape and the Scope picker all
+     failed their hit-tests; Ctrl+S still saved but the other three have no keyboard
+     equivalent, so per-breakpoint editing was unusable. Ties break on document order
+     and the overlay is injected last, so equal is enough to win. */
+  z-index: 2147483647;
   pointer-events: none; /* let the page receive picker events; UI re-enables locally */
   /* How tall the bar currently is. Everything that hangs below the bar reads this
      instead of repeating a number, because the bar wraps (see .wt-bar) and its
@@ -108,7 +115,7 @@ html { user-select: none; }
 .wt-scope { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
 .wt-scope-label { color: #717784; font-size: 11px; white-space: nowrap; }
 .wt-scope-short { display: none; }
-.wt-reset-short { display: none; }   /* swapped in below 600px; see the media block */
+.wt-reset-short { display: none; }   /* swapped in below 620px; see the media block */
 #wt-scope-input {
   width: 92px;
   background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
@@ -262,10 +269,26 @@ html { user-select: none; }
    viewport-gutter version detaches it from the control it belongs to at every desktop
    width. placeSuggest keeps the band picker's `left` anchored to its own toggle for
    exactly the same reason; only the vertical drop moves to the bar. */
+/* Below ~614px the dock's 320px and the panel's 270px no longer both fit between the
+   gutters, and the dock - a later sibling in #wt-root - hit-tested on top of the
+   panel's bottom-most control. Clicking "Reset this element" re-selected whatever
+   change-list row was underneath instead, which is the exact defect moving the dock
+   bottom-left was supposed to have designed away. Cap the dock against the panel's
+   left edge (100vw - 282) with the same 12px gutter, rather than letting it keep a
+   fixed width it no longer has room for. */
+@media (max-width: 613px) {
+  .wt-dock { width: auto; right: 294px; }
+}
+
 .wt-bar-wrapped .wt-palette {
   position: fixed;
   top: calc(var(--wt-bar-h) + 8px);
-  right: 12px;   /* the properties panel's own gutter, so the two line up */
+  /* LEFT gutter, not right: right: 12px is the properties panel's own anchor, so on a
+     wrapped bar the palette landed on top of the panel 4px higher and ate its clicks -
+     and the shape cells sat over the Type legend, so aiming there armed a shape and
+     hid the panel via enterPlaceMode's deselect(). The two only ever collide when the
+     bar wraps, which is also the only time this rule applies. */
+  left: 12px;
 }
 .wt-shape-item {
   width: 40px; height: 40px;

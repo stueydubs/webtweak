@@ -4,9 +4,11 @@
  * writes them to <page>.webtweak.json for Claude to reconcile. The Overlay only
  * captures *intent* - it never rewrites source. See CONTEXT.md / ADR-0001.
  *
- * Note: the `wt-` class prefix is load-bearing - fingerprint() strips classes
- * starting with `wt-`, so the Overlay must never add a non-`wt-` class to a page
- * element or it would pollute the captured identity.
+ * Note: a class the Overlay adds to a page element must be registered in
+ * WT_OWN_CLASSES, or it pollutes the captured identity. nonWtClasses strips only
+ * those EXACT names - deliberately not a `wt-` prefix match, which would erase a
+ * page's own `wt-` design-system classes from its Fingerprint (ADR-0004). This note
+ * previously claimed the opposite, which is the first thing a reader met.
  */
 (function () {
   "use strict";
@@ -61,6 +63,41 @@
     interacting = false;
     gestureEndedAt = Date.now();
     refreshChanges();   // refreshes skipped during the gesture land here
+  }
+  // The tail of an in-flight gesture, or null: the undo step it still owes. Registered
+  // by beginGesture, run and cleared by finishGesture.
+  //
+  // This exists because interact's `unset()` - which deselect() and selectEl() call -
+  // aborts a live gesture WITHOUT firing its `end` listener, and `end` was the only
+  // place a nudge or a resize pushed its undo step. So pressing Escape mid-drag left
+  // the element exactly where the drag had put it, with the offset already recorded by
+  // every `move` and bound for the edits file, and no undo step at all: the Undo button
+  // sat disabled and Ctrl+Z answered "nothing to undo". Escape reads to a user as
+  // cancel; it did the opposite, and the only way back out was Reset.
+  var pendingGestureEnd = null;
+  // The prologue every undoable gesture shares, plus the tail it must run even if
+  // aborted. Used by the drag-nudge, interact's resize, and the grips.
+  //
+  // Shape DRAWING deliberately keeps its own inline prologue and does not come through
+  // here: drawUp ends with a bare `interacting = false` rather than endGesture(),
+  // because endGesture()'s 300ms click box is right for a drag on an existing element
+  // and wrong straight after drawing (it swallowed the click that selected the next
+  // element). See swallowNextClick.
+  function beginGesture(tail) {
+    pendingGestureEnd = tail || null;
+    interacting = true;
+    hoverBox.hidden = true;
+  }
+  // No-ops when nothing is in flight, which is what lets deselect() call it
+  // unconditionally on the way to unset(). The early return matters: endGesture()
+  // stamps gestureEndedAt, so running it on every deselect would arm the 300ms
+  // click-swallow after a plain Escape and eat the user's next click.
+  function finishGesture() {
+    var tail = pendingGestureEnd;
+    pendingGestureEnd = null;
+    if (!tail && !interacting) return;
+    endGesture();
+    if (tail) tail();
   }
   function clickEndsGesture() {
     // Time-boxed rather than a sticky flag: if a gesture ever ends without a
@@ -193,7 +230,20 @@
       }
       // Puts the element back where it was; the inverse removes it again.
       if (u.restore) {
-        if (u.restore.parent) u.restore.parent.insertBefore(u.el, u.restore.before);
+        // `before` is only a usable anchor while it is still a child of `parent`.
+        // Reset all gathers every element's steps BEFORE removing any of them, and
+        // shapes are appended as siblings on <body> - so shape 1's recorded
+        // `nextSibling` IS shape 2, which by undo time is detached. insertBefore then
+        // threw, and because the throw escaped undo() after undoStack.pop() the whole
+        // batch was gone: two shapes reset, Ctrl+Z pressed, neither ever came back and
+        // the Undo button was left stale-enabled. Appending when the anchor is missing
+        // is order-independent - restoring 1-then-2 appends 1 then appends 2, and
+        // 2-then-1 appends 2 then inserts 1 before it. Both end up [1, 2].
+        if (u.restore.parent) {
+          var anchor = u.restore.before;
+          if (anchor && anchor.parentNode !== u.restore.parent) anchor = null;
+          u.restore.parent.insertBefore(u.el, anchor);
+        }
         edited.set(u.el, u.restore.entry);
         if (els.indexOf(u.el) < 0) els.push(u.el);
         inverse.push({ el: u.el, create: true });
@@ -645,7 +695,17 @@
 
   // Two conditions are the same band if they differ only in whitespace or case -
   // `(max-width:600px)` and `(max-width: 600px)` are one row, not two.
-  function bandKey(c) { return String(c).replace(/\s+/g, " ").trim().toLowerCase(); }
+  //
+  // Whitespace is REMOVED, not collapsed. The previous form was
+  // `.replace(/\s+/g, " ")`, which squeezes runs but never deletes a single space,
+  // so it failed on the very pair this comment gives as its example: the picker
+  // showed two rows both labelled the same, and one band's edits split across two
+  // `media` keys that reconcile then folded into the same @media block twice. It is
+  // safe to drop whitespace entirely because a media condition's tokens are already
+  // delimited by punctuation (`(`, `)`, `:`, `,`) except around the `and`/`only`/`not`
+  // keywords, which keep their neighbouring punctuation either side - so no two
+  // meaningfully different conditions collapse onto one key.
+  function bandKey(c) { return String(c).replace(/\s+/g, "").toLowerCase(); }
 
   // A condition the page's own stylesheets do not declare has to be remembered here
   // or it stops being offered: `pageConditions()` re-derives itself from the page on
@@ -830,8 +890,16 @@
     var text = String(raw).trim();
     if (!text || text === BASE_LABEL) return setScope(null);
     if (scope && (text === scope.label || text === scope.condition)) return refreshScope();
+    // Matched on bandKey, not on exact text, so a differently-spelled but identical
+    // condition resolves to the PAGE'S OWN band object rather than minting a new one.
+    // That matters past the picker: `scope.condition` becomes the emitted `media` key,
+    // and reconcile merges a banded declaration into the @media block whose condition
+    // matches. Typing `(max-width:600px)` against a stylesheet that declares
+    // `(max-width: 600px)` used to emit the typed spelling verbatim, so reconcile saw
+    // no matching block and opened a duplicate.
+    var typedKey = bandKey(text);
     var known = pageBands().filter(function (x) {
-      return x.condition === text || x.label === text;
+      return bandKey(x.condition) === typedKey || x.label === text;
     })[0];
     var b = known || makeBand(text);
     if (!b.valid || !looksLikeQuery(text)) {
@@ -948,6 +1016,37 @@
     renderBandStyle();
     var result = read();
     map[prop] = saved;
+    renderBandStyle();
+    return result;
+  }
+
+  // The BASE-scope counterpart: peel this session's banded overrides of `prop` in
+  // EVERY band at once, so a base baseline is read without any of them in the way.
+  //
+  // Why this has to exist. A banded override is emitted `!important` (renderBandStyle)
+  // because it competes with an inline style, so at a width the band covers it beats
+  // everything. populate()'s base branch peeled only the inline style, which left the
+  // band's value standing - and that value landed in `baselines[c.id]`. Typing it back
+  // then looked like a revert to writeControl, so at 480px: base 40, band 30, back to
+  // Base, type 30 saved `changes: {}` - the base 40 destroyed and the base 30 the user
+  // asked for never recorded. On an element with no base edit at all it was the same
+  // read, so base was simply unwritable at any width a band covered. Peeling every
+  // band rather than just the matching one keeps this independent of which bands
+  // happen to match the current window.
+  function withTempBandsRemoved(ent, prop, read) {
+    if (!prop || !ent || !ent.media) return read();
+    var saved = [];
+    Object.keys(ent.media).forEach(function (cond) {
+      var map = ent.media[cond];
+      if (map && Object.prototype.hasOwnProperty.call(map, prop)) {
+        saved.push([cond, map[prop]]);
+        delete map[prop];
+      }
+    });
+    if (!saved.length) return read();
+    renderBandStyle();
+    var result = read();
+    saved.forEach(function (pair) { ent.media[pair[0]][prop] = pair[1]; });
     renderBandStyle();
     return result;
   }
@@ -1236,9 +1335,22 @@
     btn.innerHTML = paletteIcon(kind);
     palette.appendChild(btn);
   });
-  document.getElementById("wt-shape-btn").addEventListener("click", function () {
+  var shapeBtn = document.getElementById("wt-shape-btn");
+  shapeBtn.addEventListener("click", function () {
     palette.hidden = !palette.hidden;
   });
+  // Close on a click anywhere else, the way every other transient layer here behaves.
+  // The palette is not a `.wt-suggest`, so closeAllSuggests does not sweep it, and its
+  // ONLY other lifecycle was the toggle above - meaning an open palette persisted
+  // through a page click, a selection change and a resize. Harmless while it sat under
+  // the bar; not harmless on a wrapped bar, where it opened over the properties panel
+  // and the only way to dismiss it was to reach the button it was covering the way to.
+  // Capture phase, so it still fires when a page handler stops propagation.
+  document.addEventListener("click", function (ev) {
+    if (palette.hidden) return;
+    if (palette.contains(ev.target) || shapeBtn.contains(ev.target)) return;
+    palette.hidden = true;
+  }, true);
   palette.addEventListener("click", function (ev) {
     var btn = ev.target.closest(".wt-shape-item");
     if (btn) enterPlaceMode(btn.dataset.shape);   // click-to-place: next canvas click drops it
@@ -1688,8 +1800,10 @@
   // ---- selection ------------------------------------------------------------
   function selectEl(el) {
     if (!el || el === document.body || el === document.documentElement) { deselect(); return; }
+    // Settle any in-flight gesture BEFORE unset() tears it down: unset() aborts it
+    // without firing 'end', so this is what pays the undo step the gesture still owes.
+    finishGesture();
     if (selectedEl && window.interact) interact(selectedEl).unset();
-    interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
     selectedEl = el;
     entry(el); // lock the authored baseline before any edit
     positionBox(selBox, el);
@@ -1704,8 +1818,10 @@
 
   function deselect() {
     if (pendingShape) exitPlaceMode();  // a Deselect/Esc during place mode also cancels placement
+    // Settle any in-flight gesture BEFORE unset() tears it down: unset() aborts it
+    // without firing 'end', so this is what pays the undo step the gesture still owes.
+    finishGesture();
     if (selectedEl && window.interact) interact(selectedEl).unset();
-    interacting = false;  // unset() can abort an in-flight gesture without firing 'end'
     selectedEl = null;
     selBox.hidden = true;
     closeAllSuggests();   // else it reopens with the panel on the next selection
@@ -1876,10 +1992,23 @@
         base = withTempBandRemoved(ent, band, prop, function () {
           return c.read(getComputedStyle(host));
         });
-      } else if (ent && ent.changes && prop && Object.prototype.hasOwnProperty.call(ent.changes, prop)) {
-        base = withTempStyle(host,
-          function (s) { s.removeProperty(prop); },
-          function () { return c.read(getComputedStyle(host)); });
+      } else if (ent) {
+        // Base scope: peel BOTH kinds of this session's own override for `prop` - the
+        // inline style (the base edit) and every banded rule (which is `!important`,
+        // so at a width its band covers it wins outright). Peeling only the inline
+        // half read the band's value back as the "authored baseline", which made a
+        // base edit at such a width both unwritable and destructive of the base value
+        // already recorded. The bands are peeled unconditionally, not only when
+        // `changes` already holds the property: the same misread happened on an
+        // element that had never been edited at base at all.
+        base = withTempBandsRemoved(ent, prop, function () {
+          if (ent.changes && prop && Object.prototype.hasOwnProperty.call(ent.changes, prop)) {
+            return withTempStyle(host,
+              function (s) { s.removeProperty(prop); },
+              function () { return c.read(getComputedStyle(host)); });
+          }
+          return c.read(getComputedStyle(host));
+        });
       }
       baselines[c.id] = String(base);
       if (c.kind === "align") {
@@ -2521,6 +2650,13 @@
 
     input.addEventListener("pointermove", function (ev) {
       if (!armed) return;
+      // Re-check the selection on every move, not just on pointerdown. The pointer is
+      // captured on the input, so the drag keeps delivering moves after an Escape or a
+      // Deselect - and writeSides/writeOne then dereference a null selectedEl, throwing
+      // `Cannot read properties of null` once per move for as long as the button is
+      // held. The grip-resize path has carried the same re-check for exactly this
+      // reason ("deselected mid-gesture (e.g. Esc)"); this one was simply missed.
+      if (!selectedEl) { armed = false; dragging = false; input.classList.remove("wt-scrubbing"); return; }
       var dy = startY - ev.clientY;             // up is an increase, as everywhere else
       if (!dragging) {
         if (Math.abs(dy) < SCRUB_SLOP) return;
@@ -2770,23 +2906,22 @@
         enabled: !el.__wtInline,
         listeners: {
           start: function () {
-            interacting = true; hoverBox.hidden = true;
             if (el.__wtShape) movePrev = snapshotProps(el, MOVE_PROPS);
             else nudgePrev = ((edited.get(el) || {}).changes || {}).nudge;
             // A gesture's parent scale can't change mid-drag, so compute it once here
             // rather than forcing a layout read on every pointermove - the same
             // pattern the grip-resize handler below already uses.
             nudgeScale = getParentScale(el);
+            beginGesture(function () {
+              if (el.__wtShape) {
+                pushGestureUndo(el, MOVE_PROPS, movePrev);
+              } else {
+                var cur = ((edited.get(el) || {}).changes || {}).nudge;
+                if (cur !== nudgePrev) pushUndo([{ el: el, prop: "nudge", prev: nudgePrev }]);
+              }
+            });
           },
-          end: function () {
-            endGesture();
-            if (el.__wtShape) {
-              pushGestureUndo(el, MOVE_PROPS, movePrev);
-            } else {
-              var cur = ((edited.get(el) || {}).changes || {}).nudge;
-              if (cur !== nudgePrev) pushUndo([{ el: el, prop: "nudge", prev: nudgePrev }]);
-            }
-          },
+          end: finishGesture,
           move: function (event) {
             var e = entry(el);
             var sc = nudgeScale;
@@ -2830,13 +2965,10 @@
         margin: margin,
         listeners: {
           start: function () {
-            interacting = true; hoverBox.hidden = true;
             resizePrev = snapshotProps(el, RESIZE_PROPS);
+            beginGesture(function () { pushGestureUndo(el, RESIZE_PROPS, resizePrev); });
           },
-          end: function () {
-            endGesture();
-            pushGestureUndo(el, RESIZE_PROPS, resizePrev);
-          },
+          end: finishGesture,
           move: function (event) {
             resizeWrite(el, event.rect);
             positionBox(selBox, el);
@@ -2859,6 +2991,13 @@
       if (!grip) return;
       var doW = spec.doW, doH = spec.doH;
       grip.addEventListener("pointerdown", function (ev) {
+        // Primary button only, matching attachScrub. Without it a right-button drag
+        // performed a real resize and recorded a patch, while the browser also opened
+        // its context menu over the top - and because the menu can swallow the
+        // pointerup, `interacting` could be left true, which silently disables
+        // refreshChanges() and localSafe() (the live-reload guard) for the rest of the
+        // session.
+        if (ev.button !== 0) return;
         if (!selectedEl || selectedEl.__wtInline) return;
         ev.preventDefault();
         ev.stopPropagation();               // don't let it bubble into a select/drag
@@ -2867,7 +3006,7 @@
         var sc = getParentScale(el);
         var startX = ev.clientX, startY = ev.clientY;
         var prev = snapshotProps(el, RESIZE_PROPS);
-        interacting = true; hoverBox.hidden = true;
+        beginGesture(function () { pushGestureUndo(el, RESIZE_PROPS, prev); });
         try { grip.setPointerCapture(ev.pointerId); } catch (e) { /* older engines */ }
         function move(e) {
           if (selectedEl !== el) return;   // deselected mid-gesture (e.g. Esc) - stop writing
@@ -2881,11 +3020,12 @@
           positionBox(selBox, el);
         }
         function up() {
-          endGesture();
           grip.removeEventListener("pointermove", move);
           grip.removeEventListener("pointerup", up);
           grip.removeEventListener("pointercancel", up);
-          pushGestureUndo(el, RESIZE_PROPS, prev);
+          // Runs the tail beginGesture registered - and does nothing if a deselect
+          // already ran it, so the undo step is pushed exactly once either way.
+          finishGesture();
         }
         grip.addEventListener("pointermove", move);
         grip.addEventListener("pointerup", up);
@@ -2972,6 +3112,12 @@
       // An open suggestion list is what Esc dismisses first; the selection behind
       // it is not what the user was trying to leave.
       if (root.querySelector(".wt-suggest-list:not([hidden])")) { closeAllSuggests(); return; }
+      // The palette is not a `.wt-suggest` (it has its own lifecycle) but it is still
+      // an open transient layer over the page, so Esc has to reach it. Without this
+      // the only way to close it was to find the Shape button again - and on a wrapped
+      // bar it opened on top of the properties panel, so "find the button again" meant
+      // working around a menu that was covering the thing you wanted to click.
+      if (!palette.hidden) { palette.hidden = true; return; }
       deselect();
       return;
     }
@@ -3168,7 +3314,7 @@
             if (document.getElementById(cid)) {
               // Already on the page, which means reconcile has written the shape into
               // source but has not marked the batch yet (it writes source first, marks
-              // second - SKILL.md steps 7 then 8). Do NOT re-inject it, or the page
+              // second - SKILL.md steps 7 then 9). Do NOT re-inject it, or the page
               // gets two. Do keep the patch: a save replaces this session's whole
               // batch, so returning without recording it anywhere - the one path that
               // did - erased the only description of the shape from the edits file
@@ -3312,7 +3458,7 @@
     var sig = rows.map(function (r) {
       return rowName(r) + "|" + changeSummary(r.e);
     }).join("\n");
-    if (sig === changesSig) return paintSelection(rows);
+    if (sig === changesSig) return paintSelection();
     changesSig = sig;
 
     changesList.textContent = "";
@@ -3351,7 +3497,7 @@
       li.appendChild(btn);
       changesList.appendChild(li);
     });
-    paintSelection(rows);
+    paintSelection();
   }
 
   // The `.on` highlight is the only thing a selection change affects, so move it
@@ -3433,7 +3579,7 @@
   // Reasons the on-disk state makes a reload unsafe:
   //  - we could not read the edits file at all, so we know nothing (fail closed);
   //  - our batch is still `pending`, because reconcile writes source FIRST and
-  //    marks second (SKILL.md steps 7 then 8), so restore() would re-apply it on
+  //    marks second (SKILL.md steps 7 then 9), so restore() would re-apply it on
   //    top of source Claude already rewrote - doubling a nudge;
   //  - we saved a batch but the file no longer carries it. That is a deleted or
   //    reverted edits file, NOT a reconcile, and `serveEdits` reports a missing
@@ -3549,7 +3695,7 @@
         return;
       }
       // An outstanding offer is re-evaluated, not preserved: reconcile can leave
-      // a batch pending on purpose (SKILL.md step 8), and the old latch left the
+      // a batch pending on purpose (SKILL.md step 9), and the old latch left the
       // badge stuck on "reconciling..." for the rest of the session.
       // Our saved batch is no longer in the file (deleted, or reverted by a VCS
       // checkout). Say so: the edits are still on screen and can be re-saved,
