@@ -13,3 +13,6 @@ __pycache__/
 
 # local dev virtualenv (see README Development / requirements-dev.txt)
 .venv/
+
+# agent worktrees created by Claude Code
+.claude/
