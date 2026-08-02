@@ -1,6 +1,6 @@
 {
   "name": "webtweak",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Local visual editor for hand-coded HTML/CSS - captures edits as patches, Claude reconciles them into source",
   "author": "Stuart Walker (https://github.com/stueydubs)",
   "bugs": {

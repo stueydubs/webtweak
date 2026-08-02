@@ -5,7 +5,20 @@ All notable changes to webtweak are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.1] - 2026-08-02
+
+**What a review of 0.8.0 found, and a gate so the next one is found by a machine.**
+Patch-level: nothing here changes the Patch contract or the edits-file format, so 0.8.0
+edits files reconcile unchanged and the bundled reconcile skill does not need
+reinstalling. One fix is visible from outside and is a deliberate trade rather than a
+pure win - see the resize grips below.
+
+The pattern in all four is the same, and it is the one worth naming: a correctness
+property held up by something that was never designed to hold it up. A grip that only
+avoided the bar because most elements do not reach it. A `max-height` that only stayed
+positive because windows are usually tall. A measurement that was only a height because
+pages are usually horizontal. A floor-finder that was only right because place mode
+happens to deselect first.
 
 ### Fixed
 
@@ -914,7 +927,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/stueydubs/webtweak/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/stueydubs/webtweak/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/stueydubs/webtweak/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/stueydubs/webtweak/compare/v0.6.0...v0.7.0
