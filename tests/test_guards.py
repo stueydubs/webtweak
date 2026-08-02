@@ -21,6 +21,7 @@ import pathlib
 import shutil
 import unittest
 
+from conftest import SAMPLE
 from _server import make_page, start, stop
 
 
@@ -126,7 +127,7 @@ class DotfileTests(unittest.TestCase):
     def setUp(self):
         self.tmp, _ = make_page()
         (self.tmp / "site").mkdir()
-        shutil.copy(self.tmp / "sample.html", self.tmp / "site" / "page.html")
+        shutil.copy(self.tmp / SAMPLE, self.tmp / "site" / "page.html")
         (self.tmp / ".git").mkdir()
         (self.tmp / ".git" / "config").write_text("[core]\n  placeholder = 1\n")
         (self.tmp / ".hidden").mkdir()

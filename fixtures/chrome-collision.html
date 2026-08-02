@@ -52,6 +52,17 @@
   #intro    { position: absolute; top: 196px; left: 24px; width: 200px; height: 44px;
               margin: 0; }
 
+  /* Right edge deliberately in the MIDDLE of the bar's controls, not past them.
+     #nav spans the full width, so its resize grips land in the bar's 14px padding
+     where they overlap nothing - which made the grip-over-a-control case untestable.
+     This one ends at x=1100, and is kept clear of #nav's centre (x = w/2) so the nav
+     tests still see the nav. Only used at 1280; at narrower widths it is off-screen,
+     which is fine because it is absolutely placed and moves nothing. */
+  #banner {
+    position: absolute; top: 0; left: 800px; width: 300px; height: 30px;
+    background: #2a1;
+  }
+
   /* Under the properties panel in its column layout (above 520px wide). Placed BELOW
      the text block rather than beside it, so the two can never overlap on a narrow
      window however the text is sized. */
@@ -71,6 +82,7 @@
   <nav id="nav"><a href="#" id="nav-link">Home</a></nav>
   <h1 id="headline">Reachable</h1>
   <p id="intro">Clear of the chrome.</p>
+  <div id="banner">A banner ending mid-bar.</div>
   <aside id="rail">A right-hand rail.</aside>
   <div id="widget">A corner widget.</div>
 </body>

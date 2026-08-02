@@ -14,38 +14,80 @@ import pytest
 from _server import make_page, start, stop
 
 
+# The fixture filenames, named once. Every test that needs a path under the served
+# tmp dir builds it from these rather than repeating the literal - six call sites used
+# to spell "sample.html" by hand, which is only safe for as long as no fixture ever
+# serves anything else, and the collision fixture ended that.
+SAMPLE = "sample.html"
+COLLISION = "chrome-collision.html"
+
+
+def _serve(name):
+    """Boot a webtweak server on an ephemeral port over a fresh copy of `name`.
+
+    The two fixtures below differed by one argument and were otherwise identical,
+    which is how the second one ends up subtly behind the first.
+    """
+    tmp, page = make_page(name)
+    proc, port = start(page)
+    try:
+        yield tmp, port
+    finally:
+        stop(proc)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 @pytest.fixture
 def served():
-    """A webtweak server on an ephemeral port serving a fresh copy of the sample
-    fixture. Yields (tmp_dir, port)."""
-    tmp, page = make_page()
-    proc, port = start(page)
-    yield tmp, port
-    stop(proc)
-    shutil.rmtree(tmp, ignore_errors=True)
+    """A webtweak server serving a fresh copy of the sample fixture.
+    Yields (tmp_dir, port); the page itself is `tmp_dir / SAMPLE`."""
+    yield from _serve(SAMPLE)
 
 
 @pytest.fixture
 def served_collision():
     """A server on the chrome-collision fixture - a page with content deliberately
-    underneath the bar, the panel and the dock. Yields (tmp_dir, port)."""
-    tmp, page = make_page("chrome-collision.html")
-    proc, port = start(page)
-    yield tmp, port
-    stop(proc)
-    shutil.rmtree(tmp, ignore_errors=True)
+    underneath the bar, the panel and the dock.
+    Yields (tmp_dir, port); the page itself is `tmp_dir / COLLISION`."""
+    yield from _serve(COLLISION)
 
 
-def open_page(playwright, port, name="sample.html", width=1280, height=900):
-    """Launch Chromium on a served page with the overlay mounted.
+def open_page(playwright, port, name=SAMPLE, width=1280, height=900):
+    """Open a served page with the overlay mounted, in a fresh browser context.
 
-    Returns (browser, page); the caller closes the browser.
+    Returns (context, page). The caller closes the first element exactly as before -
+    `close()` means the same thing on a context as on a browser, which is why every
+    `browser, page = open_page(...)` / `browser.close()` pair in the suite still reads
+    and behaves correctly without being touched.
+
+    ONE Chromium per `sync_playwright()` block rather than one per call. A context is
+    a fresh cookie jar, storage and page, which is the isolation these tests actually
+    depend on, so the browser process is the part worth not paying for twice. Measured
+    here: first call 195ms, second 104ms - the 91ms difference is the launch, and the
+    remaining 104ms is page load and the `#wt-root` wait, which no amount of reuse
+    touches.
+
+    Be honest about the size of it. `sync_playwright()` is entered per TEST, so the
+    cached browser dies with the test that made it: this helps a test that opens
+    several pages - the width sweeps, which is where the peek module's 70 opens across
+    39 tests came from - and does nothing at all for the majority that open one. Across
+    the whole suite the effect is inside run-to-run variance (470 tests/228.2s before,
+    475/231.2s after). Kept because it is strictly less work and costs no isolation,
+    NOT because it made the suite meaningfully faster. It did not.
+
+    Crash containment is the one thing given up: a browser that dies takes the rest of
+    that test's contexts with it. Playwright tears the browser down when the enclosing
+    `sync_playwright()` block exits, so a per-test blast radius is the worst case.
     """
-    browser = playwright.chromium.launch()
-    page = browser.new_page(viewport={"width": width, "height": height})
+    browser = getattr(playwright, "_wt_browser", None)
+    if browser is None or not browser.is_connected():
+        browser = playwright.chromium.launch()
+        playwright._wt_browser = browser
+    ctx = browser.new_context(viewport={"width": width, "height": height})
+    page = ctx.new_page()
     page.goto(f"http://127.0.0.1:{port}/{name}")
     page.wait_for_selector("#wt-root")
-    return browser, page
+    return ctx, page
 
 
 def centre(page, selector):

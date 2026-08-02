@@ -11,7 +11,7 @@ import shutil
 
 import pytest
 
-from conftest import edit, open_page
+from conftest import SAMPLE, edit, open_page
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -24,7 +24,7 @@ def test_source_change_reloads_a_clean_page(served):
         browser, page = open_page(p, port)
         page.evaluate("window.__reload_probe = true")     # cleared by a real reload
         # Simulate Claude reconciling: touch the page's own source.
-        src = tmp / "sample.html"
+        src = tmp / SAMPLE
         src.write_text(src.read_text().replace("</body>", "<!-- reconciled --></body>"))
         page.wait_for_function("window.__reload_probe === undefined", timeout=8000)
         assert page.evaluate("document.documentElement.outerHTML").count("reconciled") >= 1
@@ -40,7 +40,7 @@ def test_source_change_never_reloads_over_unsaved_edits(served):
         edit(page, "#headline", "#wt-fs", "52")
         page.evaluate("window.__reload_probe = true")
 
-        src = tmp / "sample.html"
+        src = tmp / SAMPLE
         src.write_text(src.read_text().replace("</body>", "<!-- touched --></body>"))
 
         # Offer a reload rather than taking one.
@@ -102,7 +102,7 @@ def test_reconcile_order_does_not_double_apply(served):
         page.evaluate("window.__reload_probe = true")
 
         # Step 7: Claude writes the CSS. The batch is still pending.
-        src = tmp / "sample.html"
+        src = tmp / SAMPLE
         src.write_text(src.read_text().replace("</body>", "<!-- reconciled --></body>"))
         page.wait_for_function(
             "document.getElementById('wt-badge').textContent.includes('reconciling')",
@@ -223,7 +223,7 @@ def test_save_retries_a_pending_source_change_instead_of_dropping_it(served):
         browser, page = open_page(p, port)
         edit(page, "#headline", "#wt-fs", "52")
 
-        src = tmp / "sample.html"
+        src = tmp / SAMPLE
         src.write_text(src.read_text().replace("</body>", "<!-- moved --></body>"))
         page.wait_for_function(
             "document.getElementById('wt-badge').textContent.includes('reload')",

@@ -24,6 +24,18 @@ html { user-select: none; }
      and the overlay is injected last, so equal is enough to win. */
   z-index: 2147483647;
   pointer-events: none; /* let the page receive picker events; UI re-enables locally */
+  /* The Overlay does not inherit the page's writing mode or direction. Both are
+     inherited properties set on <html> or <body>, and #wt-root is mounted on <html>,
+     so a vertical-rl page or an RTL one silently re-laid-out the entire chrome: the
+     bar's flex axis, every `left`/`right` anchor, and the panel's column all flip or
+     rotate. The measurement path is the sharpest instance - measurePanel reads
+     `borderBoxSize[0].blockSize`, which is the physical HEIGHT only while the writing
+     mode is horizontal, and is the physical WIDTH under vertical-rl, so `--wt-panel-h`
+     would have been handed a width and put the dock hundreds of pixels wrong. Pinning
+     it here fixes that at the cause rather than special-casing the one reader, and the
+     Overlay's own copy is English regardless of what the page is written in. */
+  writing-mode: horizontal-tb;
+  direction: ltr;
   /* How tall the bar currently is. Everything that hangs below the bar reads this
      instead of repeating a number, because the bar wraps (see .wt-bar) and its
      height is therefore a fact about the rendered content, not a constant - measured
@@ -487,7 +499,27 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 /* --- hover + selection boxes -------------------------------------------- */
 .wt-box {
   position: fixed;
-  z-index: 2147482000;
+  /* BELOW every piece of chrome, and that is the whole point of the value. This was
+     2147482000 against the bar's `1` and the dock, panel and hint's `auto`, so the
+     outlines - and the three 11px resize grips inside them, which DO take clicks -
+     painted on top of the chrome and won its hit-tests. An element whose right or
+     bottom edge sits under the bar made part of a real control unclickable: measured
+     at 1280 with a banner ending at x=1100, `wt-grip-b` covered 9px of Redo and
+     `wt-grip-r` covered 7px of Reset all, and a click on either started a resize
+     instead. That is the same defect peek exists to fix, pointing the other way.
+
+     0 rather than `auto` because the bar carries `z-index: 1` and would otherwise be
+     the only chrome that wins; at 0 the bar wins on z-index and the dock, panel,
+     place-hint and peek-note all win on document order, being declared after these two
+     in the markup. Nothing is lost by the outlines being covered: chrome is opaque, so
+     an outline under it was never visible there anyway - it simply used to be
+     clickable, which is the bug. A grip you cannot reach because the bar is over it is
+     what peek is for.
+
+     The trade is real and worth naming: an edge tucked under the chrome can no longer
+     be grabbed to resize without peeking first. A control that silently does the wrong
+     thing is worse than a handle that needs one keystroke to reach. */
+  z-index: 0;
   pointer-events: none;
   border: 1px solid transparent;
 }
@@ -532,7 +564,12 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   position: fixed;
   top: calc(var(--wt-bar-h) + 12px); right: 12px;
   width: 270px;
-  max-height: calc(100vh - var(--wt-bar-h) - 28px);
+  /* max() because a negative max-height is not "very short", it is ZERO - the
+     declaration clamps and the box disappears rather than shrinking. --wt-bar-h
+     reaches 119px in the bar's worst state, so this goes negative on a window under
+     ~147px tall and small well before that. 120px keeps the panel a usable scrolling
+     strip instead of vanishing with the selection still live and no way to see it. */
+  max-height: max(120px, calc(100vh - var(--wt-bar-h) - 28px));
   overflow-y: auto;
   background: #1a1d23;
   color: #e8eaed;
@@ -734,7 +771,10 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   position: fixed;
   bottom: 12px; left: 12px;
   width: 320px;
-  max-height: calc(100vh - var(--wt-bar-h) - 24px);
+  /* Floored for the same reason as .wt-panel: negative clamps to 0 and the change
+     list vanishes silently, which is the one box whose job is telling you what you
+     have changed. 72px is its header plus a row. */
+  max-height: max(72px, calc(100vh - var(--wt-bar-h) - 24px));
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -866,7 +906,10 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
      contentRect - which is exactly the offset the dock wants when there is no sheet. */
   .wt-dock {
     bottom: calc(var(--wt-panel-h) + 20px);
-    max-height: calc(100vh - var(--wt-bar-h) - var(--wt-panel-h) - 32px);
+    /* The tightest of the three - the sheet takes 45vh as well - so this is where
+       the clamp-to-zero actually bites: at a 119px bar it reaches 0 around 275px tall
+       and is already under 72px by ~420px, a height a short laptop window reaches. */
+    max-height: max(72px, calc(100vh - var(--wt-bar-h) - var(--wt-panel-h) - 32px));
   }
 }
 

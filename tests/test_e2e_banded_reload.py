@@ -20,7 +20,7 @@ import json
 
 import pytest
 
-from conftest import (headline, open_page, patches, pick, place_shape,
+from conftest import (SAMPLE, headline, open_page, patches, pick, place_shape,
                       reload_and_restore, rendered, resize, save, seed_batch,
                       set_field)
 
@@ -431,7 +431,7 @@ def test_a_create_patch_already_in_source_is_not_dropped(served):
 
         # Write the shape into the SERVED SOURCE, which is what reconcile does - a DOM
         # mutation would not survive the reload this test is about.
-        src = tmp / "sample.html"
+        src = tmp / SAMPLE
         src.write_text(src.read_text().replace(
             "</body>", f'<svg id="{shape_id}" width="40" height="40"></svg>\n</body>'))
         reload_and_restore(page)

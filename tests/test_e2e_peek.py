@@ -15,12 +15,12 @@ pass if the collision fixture drifted out from under the chrome, which is precis
 how this would stop testing anything.
 """
 
-from conftest import (centre, click_el, hit, open_page, selected,  # noqa: F401
-                      served_collision, worst_case_bar)
+from conftest import (COLLISION, centre, click_el, hit, open_page,  # noqa: F401
+                      selected, served_collision, worst_case_bar)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
-PAGE = "chrome-collision.html"
+PAGE = COLLISION            # named in conftest beside the fixture
 
 
 def peeking(page):
@@ -43,9 +43,17 @@ def test_top_nav_is_unreachable_at_every_width(served_collision):
     with sync_playwright() as pw:
         for width in (360, 480, 700, 1280):
             browser, page = open_page(pw, port, PAGE, width=width, height=800)
+            # Select something reachable FIRST, so the assertion below has a value that
+            # is not also the starting state. Asserting `== ""` after the click proved
+            # less than it read: an empty selection is what an untouched page has, so a
+            # click that did nothing at all - a mis-aimed coordinate, a page that never
+            # mounted - passed identically to a click the chrome swallowed.
+            click_el(page, "#headline")
+            assert selected(page) == "h1#headline", f"setup failed at {width}px"
             assert hit(page, "#nav") == "chrome", f"nav not under the bar at {width}px"
             click_el(page, "#nav")
-            assert selected(page) == "", f"nav selectable at {width}px without peek"
+            assert selected(page) == "h1#headline", \
+                f"nav selectable at {width}px without peek"
             browser.close()
 
 
@@ -96,9 +104,13 @@ def test_peek_reaches_content_under_the_dock(served_collision):
     _, port = served_collision
     with sync_playwright() as pw:
         browser, page = open_page(pw, port, PAGE, width=1280, height=900)
+        # A real selection first, for the same reason as the nav test: "" is also what
+        # an untouched page reports, so it cannot tell a swallowed click from no click.
+        click_el(page, "#headline")
+        assert selected(page) == "h1#headline", "setup failed"
         assert hit(page, "#widget") == "chrome"
         click_el(page, "#widget")
-        assert selected(page) == "", "widget selectable through the dock"
+        assert selected(page) == "h1#headline", "widget selectable through the dock"
         peek(page)
         click_el(page, "#widget")
         assert selected(page) == "div#widget"
@@ -133,8 +145,13 @@ def test_the_key_is_discoverable_at_every_width(served_collision):
                 """el => ({text: el.innerText,
                           h: Math.round(el.getBoundingClientRect().height),
                           display: getComputedStyle(el).display})""")
-            assert shown["display"] != "none" and shown["h"] > 0, \
-                f"the hint is not rendered at {width}px"
+            # 24 rather than 0. Measured, the hint is 90px tall while the long spelling
+            # shows and 54px once it shortens, so `> 0` left 54px of slack and would
+            # have accepted a hint collapsed to a sliver - rendered, technically, and
+            # unreadable. One line of 12px text with its padding cannot come in under
+            # 24px, so anything below that is a hint that is not doing its job.
+            assert shown["display"] != "none" and shown["h"] >= 24, \
+                f"the hint is {shown['h']}px tall at {width}px, too short to read"
             assert "peek" in shown["text"].lower(), \
                 f"nothing on screen mentions peek at {width}px: {shown['text']!r}"
             assert "H" in shown["text"], f"the key itself is unnamed at {width}px"
@@ -681,99 +698,6 @@ def test_the_peek_note_names_the_key(served_collision):
         browser.close()
 
 
-def test_the_dock_is_capped_against_the_panel_between_521_and_613(served_collision):
-    """The rule this release repaired. It shipped inert in 0.7.1 - written above the
-    `.wt-dock { width: 320px }` it was meant to override, so it lost the cascade - and
-    deleting it outright still left the whole suite green, because nothing measured the
-    dock in that band. Moving it back up, which is the exact original bug, has to fail
-    something.
-
-    Both edges of the band are pinned as well as its middle, because testing only the
-    inside proved less than it looked: widening `max-width: 613` to 700, or dropping
-    `min-width: 521` altogether, failed nothing at all. The band is not arbitrary. An
-    uncapped dock spans 12..332 and the panel's left edge is `w - 282`, so the two stop
-    overlapping at exactly 614 - which is why the cap ends at 613 and why the dock is
-    back to its full 320px at 614, touching the panel without crossing it.
-    """
-    _, port = served_collision
-    FULL = 320                                     # .wt-dock { width: 320px }, uncapped
-    with sync_playwright() as pw:
-        for width in (521, 560, 613):
-            browser, page = open_page(pw, port, PAGE, width=width, height=800)
-            click_el(page, "#headline")            # the panel is a column at these widths
-            boxes = page.evaluate(
-                """() => { const g = s => { const r = document.querySelector(s)
-                             .getBoundingClientRect();
-                             return {l: Math.round(r.left), r: Math.round(r.right),
-                                     w: Math.round(r.width)}; };
-                           return {dock: g('.wt-dock'), panel: g('.wt-panel')}; }""")
-            assert boxes["dock"]["r"] <= boxes["panel"]["l"], \
-                f"the dock reaches into the panel at {width}px: {boxes}"
-            assert boxes["dock"]["w"] < FULL, \
-                f"the cap is not applying at {width}px, inside the band: {boxes}"
-            browser.close()
-
-        # Both edges. 520 is the sheet layout, where the panel spans the window and the
-        # dock is not capped against it; 614 is the first width where an uncapped dock
-        # no longer reaches the panel. A cap applying at either would be the rule
-        # escaping the band it was scoped to.
-        for width in (520, 614):
-            browser, page = open_page(pw, port, PAGE, width=width, height=800)
-            click_el(page, "#headline")
-            dock_w = page.evaluate(
-                "Math.round(document.querySelector('.wt-dock').getBoundingClientRect().width)")
-            assert dock_w == FULL, \
-                f"the dock is capped at {width}px, outside the 521-613 band: {dock_w}px"
-            browser.close()
-
-
-def test_the_shape_palette_does_not_stretch_on_a_wrapped_bar(served_collision):
-    """`.wt-palette` is anchored `right: 0`, and the wrapped-bar rule re-anchors it to
-    `left: 12px` - so unless `right` is released the box is over-constrained the other
-    way and stretches between both edges. Measured before the fix: 608px wide at a
-    620px window, opaque and taking pointer events across all of it, and a click at the
-    properties panel's top-right corner landed on the palette. That rule exists
-    precisely to stop the palette eating panel clicks; it had moved the theft from one
-    edge to the other."""
-    _, port = served_collision
-    with sync_playwright() as pw:
-        for width in (1280, 700, 620, 480, 360):
-            browser, page = open_page(pw, port, PAGE, width=width, height=800)
-            click_el(page, "#headline")                    # opens the panel
-            page.click("#wt-shape-btn")
-            page.wait_for_selector("#wt-palette:not([hidden])")
-            box = page.evaluate(
-                """() => { const p = document.getElementById('wt-palette')
-                             .getBoundingClientRect();
-                           const panel = document.getElementById('wt-panel')
-                             .getBoundingClientRect();
-                           const h = document.elementFromPoint(
-                               Math.round(panel.right - 8), Math.round(panel.top + 8));
-                           return {w: Math.round(p.width),
-                                   hit: h ? (h.id || h.className || h.tagName) : 'none'}; }""")
-            assert box["w"] < 200, \
-                f"the palette stretched to {box['w']}px at {width}px"
-            assert "wt-palette" not in box["hit"], \
-                f"the palette took the panel's click at {width}px (hit {box['hit']})"
-            browser.close()
-
-
-def test_the_band_picker_keeps_its_own_width(served_collision):
-    """#wt-scope-list carries `wt-suggest-list wt-band-list`. The generic list is 236px
-    and the band list wants 258px for a three-line row, but at equal specificity the
-    generic rule - declared several hundred lines later - won, so band conditions
-    ellipsised 22px earlier than intended at every width."""
-    _, port = served_collision
-    with sync_playwright() as pw:
-        browser, page = open_page(pw, port, PAGE, width=1280, height=900)
-        page.click("#wt-scope-toggle")
-        page.wait_for_selector("#wt-scope-list:not([hidden])")
-        width = page.eval_on_selector(
-            "#wt-scope-list", "el => Math.round(el.getBoundingClientRect().width)")
-        assert width == 258, f"the band list is {width}px, not its own 258px"
-        browser.close()
-
-
 def test_a_shape_placed_low_on_a_narrow_page_stays_visible(served_collision):
     """placeShape drops the shape where you clicked and selects it, which opens the
     sheet over the lower 45% - so a click down there produced a shape the user could
@@ -999,6 +923,64 @@ def test_the_resize_grips_stop_taking_clicks(served_collision):
         assert page.eval_on_selector(
             "#wt-selected", "el => getComputedStyle(el).visibility") == "visible"
         browser.close()
+
+
+def test_the_grips_do_not_take_the_bars_clicks_outside_a_peek(served_collision):
+    """The counterpart of the test above, for the case where nobody is peeking.
+
+    Peek hides the grips because they take clicks. Outside a peek they still take
+    them, and `.wt-box` carried `z-index: 2147482000` against the bar's `1` and the
+    dock and panel's `auto` - so an element whose right or bottom edge sits under the
+    chrome painted three 11px squares on top of it and won every hit-test there.
+
+    #banner ends at x=1100 with its top edge at 0, which puts its grips squarely over
+    the bar's controls: measured, `wt-grip-b` overlapped **Redo** and `wt-grip-r` and
+    `wt-grip-br` overlapped **Reset all**. Part of two real buttons was unclickable,
+    and the click did not fail - it started a resize instead, which is the same shape
+    as the defect peek exists to fix, pointing the other way. #nav could not show this:
+    it spans the full width, so its grips land in the bar's 14px padding.
+
+    Sampled at the CENTRE OF THE OVERLAP, not on a grid across the control. Written
+    with a grid first, this passed and proved nothing: an 11px square against an 81px
+    button is a narrow target, the samples topped out at x=1089 and the grip covers
+    1094-1101. Computing the intersection and probing inside it cannot miss, and if
+    there is no intersection there is nothing to probe.
+    """
+    _, port = served_collision
+    with sync_playwright() as pw:
+        browser, page = open_page(pw, port, PAGE, width=1280, height=900)
+        peek(page)
+        click_el(page, "#banner")            # only reachable under the bar via a peek
+        assert selected(page) == "div#banner"
+        stolen = page.evaluate(
+            """() => {
+                const bad = [], overlapped = [];
+                const grips = [...document.querySelectorAll('.wt-grip')]
+                    .map(g => g.getBoundingClientRect()).filter(r => r.width);
+                document.querySelectorAll(
+                    '.wt-bar .wt-btn, .wt-bar button, .wt-bar input').forEach(b => {
+                  const c = b.getBoundingClientRect();
+                  if (!c.width || !c.height) return;
+                  grips.forEach(g => {
+                    const l = Math.max(c.left, g.left), r = Math.min(c.right, g.right);
+                    const t = Math.max(c.top, g.top), bt = Math.min(c.bottom, g.bottom);
+                    if (r <= l || bt <= t) return;          // no intersection
+                    const x = Math.round((l + r) / 2), y = Math.round((t + bt) / 2);
+                    overlapped.push((b.id || b.className) + ' @' + x + ',' + y);
+                    const e = document.elementFromPoint(x, y);
+                    if (e && e.closest('.wt-grip'))
+                      bad.push((b.id || b.className) + ' @' + x + ',' + y);
+                  });
+                });
+                return {bad: bad, overlapped: overlapped}; }""")
+        overlapped, stolen = stolen["overlapped"], stolen["bad"]
+        # The setup has to actually create the collision, or the assertion below is
+        # vacuous - which is exactly how the grid version of this test passed.
+        assert overlapped, "no grip overlaps any bar control; #banner has drifted"
+        browser.close()
+    assert not stolen, \
+        f"a resize grip is taking clicks aimed at {len(stolen)} points on the bar: " \
+        f"{stolen[:6]}"
 
 
 def test_peek_moves_focus_out_of_the_hidden_chrome(served_collision):

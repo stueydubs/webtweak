@@ -1172,7 +1172,7 @@
   var root = document.createElement("div");
   root.id = "wt-root";
   root.innerHTML = [
-    '<div class="wt-bar wt-ui">',
+    '<div class="wt-bar wt-ui wt-ceiling">',
     '  <span class="wt-logo">webtweak</span>',
     '  <span class="wt-crumb" id="wt-crumb">click an element to select</span>',
     // Deliberately "Applies at", never "Editing": the element is the subject and the
@@ -1257,7 +1257,7 @@
     "  </div>",
     "</div>",
     panelHTML(),
-    '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Drag</b> to draw the shape, or <b>click</b> to drop it at a default size. <b>Esc</b> to cancel.</div>',
+    '<div class="wt-place-hint wt-ui wt-ceiling" id="wt-place-hint" hidden><b>Drag</b> to draw the shape, or <b>click</b> to drop it at a default size. <b>Esc</b> to cancel.</div>',
     // Outside the dock, and deliberately not .wt-ui: it is the only thing left on
     // screen once peek hides the rest, so it is what stops a hidden overlay reading
     // as a crashed one. See .wt-peek-note in overlay.css for why it cannot block a
@@ -1932,15 +1932,25 @@
       // definition, and counting them would make the element its own obstruction and
       // scroll for ever.
       //
-      // The bar is excluded because it is the CEILING, not a floor: scrollClearOfChrome's `room`
-      // is what keeps the element clear of it, and treating it as a floor would make
-      // every element "hidden" and scroll on every selection. This used to be written
+      // `.wt-ceiling` is chrome anchored to the TOP of the window rather than the
+      // bottom, so it is not a floor at all: scrollClearOfChrome's `room` is what keeps
+      // the element clear of it, and counting one would put the floor just under it,
+      // make every element "hidden", and scroll on every selection. This was written
       // `if (b.top <= barBottom) return`, which is the same exclusion inferred from
       // position - and inferring it re-created in miniature the enumeration bug this
       // function exists to end: a dock tall enough to reach above the bar's bottom
       // (a long change list on a short window) silently stopped counting as a floor.
-      // Say which box is the bar; do not deduce it.
-      if (box.hidden || box === barEl || box.classList.contains("wt-box")) return;
+      //
+      // Then it was `box === barEl`, which fixed that and left a smaller version of
+      // the same mistake: naming the ONE ceiling that existed and assuming every other
+      // child was a floor. `.wt-place-hint` is top-anchored too (`top: calc(var(
+      // --wt-bar-h) + 12px)`) and was already a counter-example - harmless only
+      // because place mode happens to deselect before this can run, which is two
+      // unrelated facts holding a correctness property up rather than a design. A box
+      // now declares which edge it occupies, so the next fixed layer either says so or
+      // is a floor on purpose.
+      if (box.hidden || box.classList.contains("wt-ceiling") ||
+          box.classList.contains("wt-box")) return;
       var s = getComputedStyle(box);
       if (s.visibility === "hidden" || s.display === "none") return;
       var b = box.getBoundingClientRect();
@@ -3310,10 +3320,14 @@
     root.classList.toggle("wt-peek", peeking);
     peekNote.hidden = !peeking;
     // Both directions, because the box is stale both ways: it is drawn from the last
-    // mousemove, and a keyboard toggle moves no pointer. Leaving it on the way OUT is
-    // the visible half - .wt-box outranks .wt-bar inside #wt-root's stacking context,
-    // so a box drawn on an element the bar is about to cover paints ON TOP of the bar
-    // until the pointer next moves. The next mousemove redraws it correctly either way.
+    // mousemove, and a keyboard toggle moves no pointer, so nothing redraws it until
+    // the pointer next moves. That is the whole reason now.
+    //
+    // It used to be that leaving it on the way OUT also painted the outline ON TOP of
+    // the bar, because `.wt-box` outranked every piece of chrome. It no longer does -
+    // `.wt-box` is `z-index: 0` and sits under all of it, which is what stopped its
+    // grips stealing the bar's clicks - so that half of this comment described a
+    // stacking order the stylesheet had stopped having.
     hoverBox.hidden = true;
     // The grips go with the rest of the chrome, but that is only half of what takes a
     // gesture: a nudge is a drag on the element's own body, and interact's resize edge

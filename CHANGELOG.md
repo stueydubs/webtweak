@@ -5,6 +5,43 @@ All notable changes to webtweak are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The selection's resize grips no longer take the top bar's clicks.** The hover and
+  selection outlines carried a `z-index` above every piece of chrome, and the three
+  11px grips inside them accept clicks - so an element whose right or bottom edge sat
+  under the bar painted a grip over a real control and won its hit-test. Measured at
+  1280 with a banner ending mid-bar, part of **Redo** and part of **Reset all** were
+  unclickable, and the click did not fail: it started a resize instead. The outlines
+  now paint under the chrome. The trade is that an edge tucked under the bar cannot be
+  grabbed to resize without pressing `H` first, which is what `H` is for.
+- **The change list and the properties panel no longer vanish on a short window.**
+  Both size themselves with `max-height: calc(100vh - ...)`, and a negative result does
+  not mean "very short" - it clamps to zero and the box disappears. With the bar in its
+  tallest state the dock's calculation goes negative below about 275px of window height
+  and is already under 72px by ~420px. Both are floored now, so they shrink and scroll
+  rather than disappearing while the selection is still live.
+- **The Overlay no longer inherits the page's writing mode or direction.** Both are
+  inherited from `<html>`, which is where the Overlay mounts, so a `vertical-rl` or RTL
+  page silently re-laid-out the whole chrome - the bar's flex axis, every `left`/`right`
+  anchor, and the panel's column. The sharpest instance was the panel measurement, which
+  reads a *block* size: correct as a height only while the writing mode is horizontal,
+  and the physical width under `vertical-rl`, which would have put the dock hundreds of
+  pixels out.
+- **A future piece of top-anchored chrome will not break the reveal.** The routine that
+  finds what is covering the selected element skipped the bar by name and assumed every
+  other box was anchored to the bottom. The place-hint is anchored to the top and was
+  already a counter-example, harmless only because place mode happens to deselect first.
+  Boxes now declare which edge they occupy.
+
+### Changed
+
+- The CHANGELOG's `0.5.0` heading was glued to the end of the previous entry with no
+  line break, so it was not a heading at all - it rendered inline and `0.5.0` was
+  missing from the document's structure from the day it shipped.
+
 ## [0.8.0] - 2026-08-02
 
 **Reaching the page under the Overlay.** This started as "the bar is too tall" and the
@@ -544,7 +581,9 @@ guidance is that sides *absent* from a Patch must be left alone, which is what k
   edited row now shows a small × beside its label that puts just that property back:
   before this, undoing one property meant knowing that clearing its field did that,
   which nothing on screen suggested. It goes through the undo stack like any other
-  change, so the revert is itself undoable.## [0.5.0] - 2026-07-30
+  change, so the revert is itself undoable.
+
+## [0.5.0] - 2026-07-30
 
 A small release from using the tool: the last two bare text boxes in the Type group
 get proper controls, and three things found by driving the overlay in a real browser
