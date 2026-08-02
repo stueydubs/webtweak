@@ -9,7 +9,7 @@ centring. Recording only the side that changed removes that hazard at the source
 these tests assert on the Patch as much as on the render.
 """
 
-from conftest import changes, open_page, save, select_card, set_field
+from conftest import changes, open_page, save, select_card, selected, set_field
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -72,7 +72,7 @@ def test_a_centred_block_keeps_its_auto_margins(served):
         # inside .wrap's own padding, but below the overlay's fixed 44px top bar,
         # which otherwise intercepts the click
         page.click(".wrap", position={"x": 6, "y": 60})
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "main.wrap"
+        assert selected(page) == "main.wrap"
         shown = boxes(page, "margin")
         set_field(page, "#wt-margin-top", "48px")
         save(page)

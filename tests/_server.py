@@ -39,11 +39,15 @@ def start(page, root=None):
     raise RuntimeError("webtweak did not announce a listening port within 5s")
 
 
-def make_page():
-    """Copy the sample fixture into a fresh temp dir; return (tmp_dir, page_path)."""
+def make_page(name="sample.html"):
+    """Copy a fixture into a fresh temp dir; return (tmp_dir, page_path).
+
+    `name` picks which fixture - the edits file is written beside the page, so each
+    test still gets its own copy whichever one it asks for.
+    """
     tmp = pathlib.Path(tempfile.mkdtemp())
-    page = tmp / "sample.html"
-    shutil.copy(ROOT / "fixtures" / "sample.html", page)
+    page = tmp / name
+    shutil.copy(ROOT / "fixtures" / name, page)
     return tmp, page
 
 

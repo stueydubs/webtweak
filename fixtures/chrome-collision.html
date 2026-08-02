@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chrome collision - webtweak fixture</title>
+<!--
+  A page whose own content sits exactly where the Overlay's chrome does. It exists
+  because sample.html cannot test this: its .wrap carries 80px of top padding, so its
+  first text clears a 44px bar by accident, and it has nothing at the right edge or the
+  bottom-left corner at all. Every element below is placed to collide with one region
+  of the chrome, or - for #headline and #intro - to be provably clear of all of it.
+
+  EVERY BOX IS ABSOLUTELY PLACED AND EXPLICITLY SIZED, and that is the whole design
+  rather than a style preference. The first version of this file laid the text out in
+  flow with `padding: 200px 320px 0 40px`, which makes the content box `width - 360`:
+  at 360px wide #headline was measured at ZERO pixels across, and at 414px it was 54px
+  of text wrapped into a 96px-tall column. Five tests clicked it at those widths and
+  selected it only because the click landed on the element's left edge. A fixture whose
+  geometry moves with the viewport cannot be reasoned about, and a test that passes by
+  luck is worse than one that fails. Nothing here reflows: at every width these boxes
+  are in the same place and the same size, so an assertion that changes with the
+  viewport is telling you about the Overlay, which is the only thing under test.
+
+  Deliberately no media queries: the Overlay's own breakpoints (460/520/613/620/640/
+  700/820) must not collide with any the fixture declares, or pageConditions() cannot
+  be shown to exclude the Overlay's stylesheet from the band picker.
+
+  Vertical budget, for anyone moving a box. The bar is 44px on one row and up to 100px
+  in its worst state; the properties panel is a bottom sheet of 45vh below 520px wide,
+  so on the 740-900px-tall viewports the tests use its top edge is at y=407 or lower.
+  #headline and #intro live between y=140 and y=240 because that band is below every
+  bar and above every sheet at every size the suite drives.
+-->
+<style>
+  body { margin: 0; font: 16px/1.4 system-ui, sans-serif; height: 1600px; }
+
+  /* Under the top bar at every width - 56px tall, so its centre (y=28) is inside even
+     a one-row 44px bar. */
+  #nav {
+    position: absolute; top: 0; left: 0; right: 0; height: 56px;
+    background: #123; color: #fff;
+  }
+  #nav a { position: absolute; top: 18px; left: 18px; color: #fff; }
+
+  /* Clear of every region of the chrome at every width the suite uses. These are the
+     control cases: if either of them ever needs a peek, the failure is not about
+     chrome. Kept narrow and left-anchored so the properties panel's 270px right-hand
+     column cannot reach them at any width. */
+  #headline { position: absolute; top: 140px; left: 24px; width: 200px; height: 44px;
+              margin: 0; font-size: 22px; }
+  #intro    { position: absolute; top: 196px; left: 24px; width: 200px; height: 44px;
+              margin: 0; }
+
+  /* Under the properties panel in its column layout (above 520px wide). Placed BELOW
+     the text block rather than beside it, so the two can never overlap on a narrow
+     window however the text is sized. */
+  #rail {
+    position: absolute; top: 280px; right: 0; width: 240px; height: 320px;
+    background: #eef;
+  }
+
+  /* Under the dock - the change list and the hint share the bottom-left corner. */
+  #widget {
+    position: fixed; left: 16px; bottom: 16px; width: 260px; height: 60px;
+    background: #fe8;
+  }
+</style>
+</head>
+<body>
+  <nav id="nav"><a href="#" id="nav-link">Home</a></nav>
+  <h1 id="headline">Reachable</h1>
+  <p id="intro">Clear of the chrome.</p>
+  <aside id="rail">A right-hand rail.</aside>
+  <div id="widget">A corner widget.</div>
+</body>
+</html>

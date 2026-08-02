@@ -2,7 +2,7 @@
 
 **▶ Live demo &amp; site: https://stueydubs.github.io/webtweak/**
 
-[![webtweak demo — edit by eye, Claude writes the CSS](https://raw.githubusercontent.com/stueydubs/webtweak/main/site/demo-poster.png)](https://stueydubs.github.io/webtweak/)
+[![webtweak demo - edit by eye, Claude writes the CSS](https://raw.githubusercontent.com/stueydubs/webtweak/main/site/demo-poster.png)](https://stueydubs.github.io/webtweak/)
 
 A local, open-source visual editor for hand-coded HTML/CSS pages. You drag, resize, and restyle an existing page by eye; webtweak captures what you changed as machine-readable patches; Claude reconciles those patches into the real source (and pushes only if you ask).
 
@@ -71,9 +71,10 @@ In the browser:
 - **Add a shadow from presets.** The Shadow field's ▾ offers a hairline, a card lift, a modal lift, a dramatic drop, an inset press, and `none` to take one off - so the property nobody remembers the syntax of is one you pick. Typing your own still works.
 - **Draw a shape** from the shape button - square, circle, triangle, star, pentagon, hexagon. Drag on the page to draw one at the size you want, or click to drop it at a default size. Each is one inline `<svg>` with editable fill, stroke, corner radius and rotation (snapped to 45°).
 - **Undo and redo** from the buttons in the top bar or the keyboard: **Cmd/Ctrl+Z** undoes your last change of any kind, **Shift+Cmd/Ctrl+Z** (or **Ctrl+Y**) puts it back. Each button dims when there is nothing left in that direction, so you can see where you are in history. Making a new edit drops the redo trail, so stepping forward can never splice in work you had abandoned.
+- **Peek under the Overlay.** Press **H** and the whole Overlay vanishes, so you can see your page and click straight through to anything that was underneath it - a top nav, a right-hand sidebar, a corner widget. Click an element and the Overlay comes back with it selected; press **H** again to just put it back. Before this, anything under the bar, the panel or the change list could not be selected at all: the click worked whatever control was there instead, so a page whose nav sat in its top 56px could not have that nav edited at any window width.
 - **Reset this element** discards all your edits to the selected element (also undoable).
 - **Review before you save.** A "N elements changed" list sits bottom-left; open it to see every element you've touched and what changed on it, and click an entry to jump back to that element.
-- **Save** when you're happy. **Cmd/Ctrl+S** saves, **Esc** deselects.
+- **Save** when you're happy. **Cmd/Ctrl+S** saves, **H** peeks under the Overlay, **Esc** backs out of whatever is on top - a peek first, then a field you are typing in, then the selection.
 
 A reload mid-session is safe: webtweak restores the current session's pending edits, and warns you if you have unsaved changes.
 
@@ -81,7 +82,7 @@ A reload mid-session is safe: webtweak restores the current session's pending ed
 
 The bar carries a badge showing where your changes are: **N pending** once saved, **reconciled** once Claude has folded them into your source.
 
-webtweak also watches the files it serves. When Claude rewrites your CSS, the page reloads itself and the badge flips — so you *see* your drag become real CSS instead of guessing and reloading by hand. If you have unsaved edits when the source changes, it will never reload over them; it offers you the reload instead.
+webtweak also watches the files it serves. When Claude rewrites your CSS, the page reloads itself and the badge flips - so you *see* your drag become real CSS instead of guessing and reloading by hand. If you have unsaved edits when the source changes, it will never reload over them; it offers you the reload instead.
 
 ## The loop
 
@@ -128,7 +129,7 @@ Claude reads the pending patches, proposes CSS changes, writes them to source, a
 
 - **No structural reordering.** Moving an element above another (rewriting the DOM order in source) is deferred. Today it is resize, restyle, and nudge.
 - **No copy editing.** Changing the actual words is spoken to Claude, not done in the overlay.
-- **Per-breakpoint editing is partial.** Type, colour and box changes can be scoped to a breakpoint your page already declares - they preview only inside it, and Claude merges them into the `@media` block your stylesheet already has rather than adding a second one. But border, per-side spacing and every shape control stay base-only whatever you pick, and so does every gesture edit - a drag-nudge, a grip-resize or a shape move always records at base regardless of the scope shown; the panel says so rather than quietly ignoring the scope you chose. There is no device frame either: you resize your own window, so you can only author at widths your screen can actually show. The bar also grows to two or three rows at narrow widths and covers up to 119px of the top of your page; widening the window shortens it. Shipped in **0.7.0**; if you are upgrading, reinstall the bundled reconcile skill, because an edits file carrying a `media` map needs a skill from this release to fold it into source. Edits files written before it have no `media` key and reconcile exactly as they always did.
+- **Per-breakpoint editing is partial.** Type, colour and box changes can be scoped to a breakpoint your page already declares - they preview only inside it, and Claude merges them into the `@media` block your stylesheet already has rather than adding a second one. But border, per-side spacing and every shape control stay base-only whatever you pick, and so does every gesture edit - a drag-nudge, a grip-resize or a shape move always records at base regardless of the scope shown; the panel says so rather than quietly ignoring the scope you chose. There is no device frame either: you resize your own window, so you can only author at widths your screen can actually show. The Overlay also takes real estate from the page - about 26% of a 1280px window once something is selected, and about 61% of a 360px one. Below 520px the properties panel moves to the bottom of the window rather than the side, so the page keeps its full width; press **H** to peek under the Overlay whenever you need the rest of it back. Shipped in **0.7.0**; if you are upgrading, reinstall the bundled reconcile skill, because an edits file carrying a `media` map needs a skill from this release to fold it into source. Edits files written before it have no `media` key and reconcile exactly as they always did.
 - **Limited property set.** Flex/grid alignment editors and hover/focus states are out of the panel. Borders and shadows are in as of 0.4.0, but not per-side border controls or per-corner radii - and in both cases the overlay *declines* rather than flattens: an element whose sides carry different borders, or whose corners carry different radii, has those controls switched off with an explanation, so a deliberate design can't be silently replaced with a box.
 - **Serves one directory as web root.** By default that is the page's own folder, so a page in a subfolder referencing site-root-absolute assets (`/assets/...`, `/css/site.css`) will 404 them. Pass `--root` at the real site root to fix it. Pages needing a build step (Tailwind compile, server-side partials) still won't render identically to production.
 
@@ -140,7 +141,7 @@ There are two suites. The stdlib one needs nothing but pytest:
 python3 -m pytest -m "not browser"      # unit + HTTP integration, no browser needed
 ```
 
-**A `not browser` run is not full coverage** — it excludes every test that drives the overlay in a real page, which is most of what webtweak does. The browser suite needs two more steps:
+**A `not browser` run is not full coverage** - it excludes every test that drives the overlay in a real page, which is most of what webtweak does. The browser suite needs two more steps:
 
 ```bash
 python3 -m venv .venv
@@ -149,7 +150,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest               # everything, nothing skipped
 ```
 
-Browser tests skip as a *single* line per module when Playwright is absent, so a suite missing them still reads green — check the skip count rather than the colour. They carry the `browser` marker and CI selects on it, never on a filename: a new browser module that CI does not know about would otherwise read green while never executing.
+Browser tests skip as a *single* line per module when Playwright is absent, so a suite missing them still reads green - check the skip count rather than the colour. They carry the `browser` marker and CI selects on it, never on a filename: a new browser module that CI does not know about would otherwise read green while never executing.
 
 The unit tests drive `webtweak.js` itself (via `tests/_wtjs.py`), so they guard the code the package actually ships. CI runs the stdlib suite across Node 18/20/22/24 and the browser suite in a job where Playwright is always present.
 
@@ -160,12 +161,13 @@ No runtime dependencies. interact.js is vendored under `overlay/` for the drag/r
 - `webtweak.js` - the CLI/server: pure functions `injectOverlay` and `applyBatch` plus a thin HTTP handler. Node stdlib only. This is what ships.
 - `overlay/` - the browser overlay (`overlay.js`, `overlay.css`, vendored `interact.min.js`)
 - `fixtures/sample.html` - a sample editorial page for manual testing and the e2e
+- `fixtures/chrome-collision.html` - a page whose nav, sidebar and corner widget sit deliberately underneath the Overlay's own bar, panel and change list, so the peek tests can prove both that the chrome swallows them and that peek hands them back
 - `tests/` - unit, integration, and browser tests
 - `reconcile/` - the Claude Code reconcile skill (`SKILL.md`) and the `wtreconcile.py` helper (Python 3)
 - `CONTEXT.md`, `docs/` - the domain language, the PRD, the ADRs, and the issue breakdown
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE).
 
 `overlay/interact.min.js` is [interact.js](https://interactjs.io) by Taye Adeyemi, also MIT. Version, upstream and checksum are recorded in [overlay/VENDOR.md](overlay/VENDOR.md).

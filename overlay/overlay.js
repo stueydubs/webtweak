@@ -1220,18 +1220,57 @@
     '  <span class="wt-grip wt-grip-r"></span><span class="wt-grip wt-grip-b"></span>',
     '  <span class="wt-grip wt-grip-br"></span>',
     "</div>",
-    panelHTML(),
     // Change list and hint share the bottom-left corner, so they live in one
     // flow container - fixed offsets on both let them overlap and swallow
     // each other's clicks.
+    //
+    // BEFORE the panel, and that order is load-bearing rather than tidy. `.wt-panel`
+    // is position:fixed, which makes it a stacking context, so `.wt-suggest-list`'s
+    // own `z-index: 1` cannot lift a dropdown out of the panel and above a LATER
+    // sibling of #wt-root. The dock used to be that later sibling. It never showed in
+    // the column layout, because a right-hand panel and a bottom-left dock do not
+    // overlap - the bottom sheet is what made them share space, and then a dropdown
+    // with no room below flipped upward straight into the dock's band: measured at
+    // 360x480, two of the six Shadow presets hit-tested to `.wt-hint` instead of to
+    // the list. Painting the dock first fixes the whole class rather than that one
+    // dropdown, and it costs nothing: `.wt-dock` is pointer-events:none and its
+    // children only ever need to beat the page, not the panel. `.wt-bar`'s explicit
+    // `z-index: 1` still keeps the bar and its palette above both.
     '<div class="wt-dock">',
     '  <div class="wt-changes wt-ui" id="wt-changes" hidden>',
     '    <button class="wt-changes-head" id="wt-changes-head" aria-expanded="false"></button>',
     '    <ul class="wt-changes-list" id="wt-changes-list" hidden></ul>',
     "  </div>",
-    '  <div class="wt-hint wt-ui">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>Cmd/Ctrl+Z</b> undo, <b>Shift+Cmd/Ctrl+Z</b> redo, <b>Cmd/Ctrl+S</b> save.</div>',
+    // Two spellings, the same shed the scope and reset labels use, and for a stronger
+    // reason than either: the long hint is display:none below 640px, so hiding it
+    // outright took the only mention of H off the screen at exactly the widths where
+    // the chrome covers 50-76% of the page and peek is the thing you most need to
+    // know about. The short form keeps the key that gives the page back.
+    '  <div class="wt-hint wt-ui">',
+    // "the page underneath", not "the editor": CONTEXT.md's glossary lists `editor` as
+    // a term to avoid for the Overlay because it is too vague - and here it would be
+    // actively wrong, since webtweak as a whole is the editor, so "under the editor"
+    // reads as "under the tool". Naming what the user gets back sidesteps the whole
+    // question and is plainer than either term of art.
+    '    <span class="wt-hint-long">Click to select. Drag the interior to <b>nudge</b>, drag the right/bottom/corner grips to <b>resize</b>. <b>Esc</b> deselect, <b>H</b> peek at the page underneath, <b>Cmd/Ctrl+Z</b> undo, <b>Shift+Cmd/Ctrl+Z</b> redo, <b>Cmd/Ctrl+S</b> save.</span>',
+    '    <span class="wt-hint-short"><b>H</b> peek at the page underneath &middot; <b>Esc</b> deselect &middot; <b>Cmd/Ctrl+S</b> save</span>',
+    "  </div>",
     "</div>",
+    panelHTML(),
     '<div class="wt-place-hint wt-ui" id="wt-place-hint" hidden><b>Drag</b> to draw the shape, or <b>click</b> to drop it at a default size. <b>Esc</b> to cancel.</div>',
+    // Outside the dock, and deliberately not .wt-ui: it is the only thing left on
+    // screen once peek hides the rest, so it is what stops a hidden overlay reading
+    // as a crashed one. See .wt-peek-note in overlay.css for why it cannot block a
+    // click even though it is painted over the page.
+    // role="status" because peek is otherwise silent: pressing H takes 93 controls out
+    // of the accessibility tree at once, and this note is the only thing that replaces
+    // them. Without a live region a screen-reader user gets no announcement and then
+    // finds the entire editor gone. It is the Overlay's FIRST live region - #wt-status
+    // has never had one either, so saves and errors are announced nowhere; that is a
+    // wider gap than this note and is not fixed here.
+    // Esc is named as well as H: both end a peek, and offering only one of them made
+    // the note say less than it knew.
+    '<div class="wt-peek-note" id="wt-peek-note" role="status" hidden>Peeking - <b>click</b> any element to select it, or press <b>H</b> or <b>Esc</b></div>',
   ].join("\n");
   // Mounted on <html>, not <body>: a transformed ancestor becomes the containing
   // block for position:fixed descendants, so a page with `body { transform:
@@ -1284,20 +1323,67 @@
     repositionSuggests();
   }
   measureBar();
+
+  var panel = document.getElementById("wt-panel");
+
+  // The panel's own height, published for the same reason and by the same means. Only
+  // the bottom-sheet block below 520px reads it - the dock shares that corner with the
+  // sheet and has to sit on top of it - but the measurement runs at every width,
+  // because a media query cannot tell overlay.js which branch is live and a stale
+  // value would be wrong the moment the window crossed 520px. A hidden panel is
+  // display:none and reports a zero rect, which is exactly the value the dock wants
+  // when there is no sheet: its normal 12px offset, undisturbed.
+  //
+  // `entries` rather than another getBoundingClientRect: the observer has already been
+  // handed the box it is telling us about, so reading it back forces a layout the
+  // browser did for us a moment ago.
+  function measurePanel(entries) {
+    var h = entries && entries[0] && entries[0].borderBoxSize && entries[0].borderBoxSize[0]
+      ? entries[0].borderBoxSize[0].blockSize
+      : panel.getBoundingClientRect().height;   // the explicit first call has no entry
+    root.style.setProperty("--wt-panel-h", Math.round(h) + "px");
+  }
+  measurePanel();
+
+  // ONE observer for both boxes, not one each. They fire in the same delivery at the
+  // same timestamp anyway, and separate observers put the order in the hands of
+  // construction sequence rather than in the hands of whoever reads this.
+  //
+  // The order matters in one direction only: the BAR feeds the PANEL. measureBar
+  // writes --wt-bar-h, and .wt-panel's `top` and `max-height` are both
+  // calc(var(--wt-bar-h) ...), so the panel's own box depends on what the bar just
+  // published - which is why measureBar goes first below. Nothing runs the other way:
+  // --wt-panel-h is read only by the dock, in CSS, and by nothing in this file.
+  // (An earlier version of this comment had it backwards, claiming the panel's write
+  // and the bar's read were the hazard. They are unrelated - measureBar reads
+  // getComputedStyle(barEl).minHeight, which no one writes. The dispatch order below
+  // was written to match that wrong account, so it ran the panel first.)
+  //
   // No feature test: ResizeObserver predates every browser this runs in, and the
   // `resize` fallback that used to be here was worse than nothing - it fires only on
   // width changes, so it missed the badge appearing, the status text, and the crumb
   // changing on selection, which are precisely the causes a media query cannot see.
   // It read as coverage while leaving the panel 22px under the bar for good. The 44px
   // fallback in the stylesheet is the real degradation path.
-  new ResizeObserver(measureBar).observe(barEl);
+  var chromeObserver = new ResizeObserver(function (entries) {
+    // One pass over the entries, not one per target. Two passes meant the dispatch
+    // condition was written twice and would need a third copy for a third box.
+    var panelEntry = null, sawBar = false;
+    entries.forEach(function (e) {
+      if (e.target === panel) panelEntry = e;
+      else if (e.target === barEl) sawBar = true;
+    });
+    if (sawBar) measureBar();
+    if (panelEntry) measurePanel([panelEntry]);
+  });
+  chromeObserver.observe(panel);
+  chromeObserver.observe(barEl);
 
   var hoverBox = document.getElementById("wt-hover");
   var selBox = document.getElementById("wt-selected");
   var selTag = document.getElementById("wt-seltag");
   var crumbEl = document.getElementById("wt-crumb");
   var statusEl = document.getElementById("wt-status");
-  var panel = document.getElementById("wt-panel");
   var palette = document.getElementById("wt-palette");
   var placeHint = document.getElementById("wt-place-hint");
 
@@ -1814,6 +1900,87 @@
     panel.hidden = false;
     attachInteract(el);
     refreshChanges();      // keep the list's current-selection highlight honest
+    revealBehindSheet(el);
+  }
+
+  // In the bottom-sheet layout the panel opens over the lower 45% of the window, so
+  // selecting something down there hides it behind the thing you selected it to edit.
+  // Worst on a shape: placeShape() drops it wherever you clicked and selects it, so a
+  // click in the lower half of a 360px-wide page produced a shape the user could not
+  // see, with no warning - place mode hides the panel, so nothing is covering that
+  // half at the moment they aim. Scroll it back into the band between the bar and the
+  // sheet.
+  //
+  // Scoped to the sheet on purpose. In the column layout the panel takes the right
+  // edge and never covers a full row, so scrolling there would be moving the page
+  // under someone for no reason; the sheet is identified by spanning the full width
+  // rather than by re-testing the breakpoint, so this follows the CSS instead of
+  // duplicating its number.
+  // The lowest line the page is visible above, for an element at `r`. Asks every piece
+  // of chrome that is actually rendered, rather than naming the two we happen to
+  // remember - an enumeration this function already got wrong once during authoring:
+  // clearing only the sheet moved a placed shape straight under `.wt-hint`, the same bug
+  // one obstruction further up. Naming boxes means the next fixed layer to arrive
+  // reintroduces it silently, with no test failing.
+  function chromeFloor(r) {
+    var floor = window.innerHeight;
+    Array.prototype.forEach.call(root.children, function (box) {
+      // Two exclusions, both by IDENTITY rather than by geometry.
+      //
+      // `.wt-box` is the hover and selection outlines - the one thing under #wt-root
+      // that is not chrome. They TRACK the page, so they overlap the selection by
+      // definition, and counting them would make the element its own obstruction and
+      // scroll for ever.
+      //
+      // The bar is excluded because it is the CEILING, not a floor: scrollClearOfChrome's `room`
+      // is what keeps the element clear of it, and treating it as a floor would make
+      // every element "hidden" and scroll on every selection. This used to be written
+      // `if (b.top <= barBottom) return`, which is the same exclusion inferred from
+      // position - and inferring it re-created in miniature the enumeration bug this
+      // function exists to end: a dock tall enough to reach above the bar's bottom
+      // (a long change list on a short window) silently stopped counting as a floor.
+      // Say which box is the bar; do not deduce it.
+      if (box.hidden || box === barEl || box.classList.contains("wt-box")) return;
+      var s = getComputedStyle(box);
+      if (s.visibility === "hidden" || s.display === "none") return;
+      var b = box.getBoundingClientRect();
+      if (!b.height || !b.width) return;
+      if (b.right <= r.left || b.left >= r.right) return;   // no horizontal overlap
+      floor = Math.min(floor, b.top);
+    });
+    return floor;
+  }
+
+  // Deferred two frames, and neither is superstition. Opening the panel is what gives
+  // the sheet its height, `--wt-panel-h` is written from a ResizeObserver so it lands a
+  // frame after that, and the dock's `bottom: calc(var(--wt-panel-h) + 20px)` only
+  // resolves on the style recalc after THAT. Measured synchronously inside selectEl the
+  // dock is still at its pre-sheet offset, so the floor reads too low and a shape gets
+  // scrolled into the band the dock is about to occupy - which is the bug this exists to
+  // fix, one frame later. The cheap test is done up front so the common case (the column
+  // layout, every desktop selection) costs one rect read and no scheduled frames.
+  function revealBehindSheet(el) {
+    if (panel.hidden) return;
+    var p = panel.getBoundingClientRect();
+    if (p.left > 1 || p.right < window.innerWidth - 1) return;   // column, not sheet
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        if (selectedEl === el) scrollClearOfChrome(el);   // selection may have moved on
+      });
+    });
+  }
+
+  function scrollClearOfChrome(el) {
+    if (panel.hidden) return;
+    var r = el.getBoundingClientRect();
+    var hidden = r.bottom - chromeFloor(r);
+    if (hidden <= 0) return;                                     // already clear
+    // Never scroll so far that the element's TOP disappears under the bar - for an
+    // element taller than the visible band, showing its top is more use than showing
+    // its bottom, and scrolling past it would be strictly worse than doing nothing.
+    var room = r.top - (barEl.getBoundingClientRect().bottom + 8);
+    if (room <= 0) return;
+    window.scrollBy(0, Math.min(hidden + 8, room));
   }
 
   function deselect() {
@@ -3074,6 +3241,13 @@
     if (isOverlay(ev.target)) return;          // let panel/bar controls work
     ev.preventDefault();                        // editor mode: no navigation
     ev.stopPropagation();
+    // Reaching a covered element is the whole reason to peek, so the click that
+    // reaches one ends it: the chrome comes back with that element selected, and the
+    // properties panel - the thing you peeked in order to be able to aim at - is
+    // already open on it. Placed before every early return below so it cannot be
+    // skipped by a path that declines to change the selection; the peek is over
+    // either way, because the click has already been spent on the page.
+    endPeekForPageClick();
     if (pendingShape) {                         // place mode: drop a shape at the click point
       placeShape(pendingShape, ev.clientX + window.scrollX, ev.clientY + window.scrollY);
       return;
@@ -3105,9 +3279,138 @@
   document.getElementById("wt-redo").addEventListener("click", redo);
   document.getElementById("wt-reset-all").addEventListener("click", resetAll);
 
+  // ---- peek -------------------------------------------------------------------
+  // Hides the Overlay's own chrome so the page underneath can be clicked. The measured
+  // case for it, and why the chrome is hidden rather than the page pushed down, is on
+  // the .wt-peek rules in overlay.css. The short version: the bar, panel and dock make
+  // anything beneath them unselectable, a click there works a control instead, and a
+  // page's top nav is therefore uneditable at every width - so this is a hole in what
+  // the tool can reach, not a cosmetic complaint about how much room the bar takes.
+  var peeking = false;
+  var peekNote = document.getElementById("wt-peek-note");
+  // Where the keyboard was when the peek started. `visibility: hidden` makes the
+  // chrome non-focusable, so the browser's focus fixup drops focus to the body - which
+  // is right while peeking and useless afterwards: without this the user's place in
+  // the tab order is destroyed by every peek, and the next Tab restarts at the top of
+  // the bar. Cleared whenever the peek ends by a page click, since the point of that
+  // click is that the selection - not the old control - is what they are now working
+  // on.
+  var focusBeforePeek = null;
+  // Named rather than `setPeek(false, false)`, because a bare second `false` at the
+  // call site needed a comment to be readable at all - which is the tell that the
+  // argument was carrying meaning the name should have carried.
+  function endPeekForPageClick() {
+    setPeek(false, false);
+  }
+
+  function setPeek(on, restoreFocus) {
+    on = !!on;
+    if (on === peeking) return;
+    peeking = on;
+    root.classList.toggle("wt-peek", peeking);
+    peekNote.hidden = !peeking;
+    // Both directions, because the box is stale both ways: it is drawn from the last
+    // mousemove, and a keyboard toggle moves no pointer. Leaving it on the way OUT is
+    // the visible half - .wt-box outranks .wt-bar inside #wt-root's stacking context,
+    // so a box drawn on an element the bar is about to cover paints ON TOP of the bar
+    // until the pointer next moves. The next mousemove redraws it correctly either way.
+    hoverBox.hidden = true;
+    // The grips go with the rest of the chrome, but that is only half of what takes a
+    // gesture: a nudge is a drag on the element's own body, and interact's resize edge
+    // band sits INSIDE the element too (see .resizable below - non-shapes have no
+    // visible grip to hide). Neither reads the peek flag, so both had to be turned off
+    // here rather than left to the stylesheet. Recording an edit while every piece of
+    // editing UI is invisible is the failure: no outline moving under the pointer, no
+    // change list, no Undo, and Reset the only way back.
+    // Both directions in one place, and the enabled expressions are the ones the
+    // attach site uses, so an element that was never draggable does not become so on
+    // the way out of a peek.
+    if (selectedEl && window.interact) {
+      interact(selectedEl)
+        .draggable({ enabled: !peeking && !selectedEl.__wtInline })
+        .resizable({ enabled: !peeking && !selectedEl.__wtInline && !selectedEl.__wtShape });
+    }
+    if (!peeking) {
+      // Put the keyboard back where it was, unless the caller says the peek ended by a
+      // click on the page - in which case the selection, not the old control, is what
+      // the user is now working on. Passed as an argument rather than pre-cleared by
+      // the click handler, which spread one state machine across two files' worth of
+      // distance. `isConnected` because a peek can outlive the control it started
+      // from: a reset or a re-populate rebuilds the panel's fields.
+      var back = focusBeforePeek;
+      focusBeforePeek = null;
+      if (restoreFocus !== false && back && back.isConnected && root.contains(back)) {
+        back.focus();
+      }
+      return;
+    }
+    focusBeforePeek =
+      root.contains(document.activeElement) ? document.activeElement : null;
+    // Both are transient layers anchored to a control that is about to disappear, so
+    // leaving them open would paint a menu with nothing under it. closeAllSuggests
+    // also clears the toggles' aria-expanded, which is why it is called rather than
+    // hiding the lists directly.
+    closeAllSuggests();
+    palette.hidden = true;
+    // No blur here, deliberately. `visibility: hidden` makes the chrome non-focusable,
+    // and the HTML focus fixup rule then resets focus to the body by itself - verified
+    // in Chromium, and the reason the peek-focus test kills the `opacity: 0` mutation
+    // (which leaves both the focus AND the hit-testing intact) but not a removed
+    // blur() call. An explicit blur here would be a line taking credit for the
+    // stylesheet's work, and the comment on it would be the misleading part.
+  }
+
   // ---- keyboard -------------------------------------------------------------
+  // A page element that has been made editable (contenteditable, or a page's own
+  // input) is a place where "h" means the letter h. `isOverlay` is not the test:
+  // these are the PAGE's fields, not the Overlay's, and the Overlay's own fields are
+  // reached through the same check.
+  function typingInto(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    var tag = el.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
+  function bareH(ev) {
+    // `repeat` alongside the modifiers because this is the one place the condition
+    // lives, and autorepeat is the same kind of "not a press the user meant" as
+    // Ctrl+H. Peek is a toggle, and a held key is a keydown per repeat, so a resting
+    // finger strobed the whole Overlay and finished wherever the repeat count left it.
+    return (ev.key === "h" || ev.key === "H") && !ev.repeat &&
+      !ev.metaKey && !ev.ctrlKey && !ev.altKey && !ev.shiftKey;
+  }
+
   document.addEventListener("keydown", function (ev) {
+    // Bare H only. Ctrl/Cmd+H is the browser's history, Alt+H opens a menu on Windows,
+    // and shift is excluded so a page that ends up with a capital H typed at it is not
+    // silently peeking instead. One condition, one place: it used to be spelled out
+    // twice, differing only in whether `typingInto` was negated, so the modifier list
+    // had two copies to keep in step.
+    if (bareH(ev)) {
+      // Typing wins the key, but not silently. `h` is a letter, so a field that has
+      // focus has to keep it - but peek has no button, so H is the ONLY way to reach
+      // it, and pressing it inside a field did nothing and said nothing. The Overlay's
+      // own fields are the common case: clicking a page element that sits under the
+      // panel lands the click on whichever control was painted there, which takes
+      // focus, and the very next thing that user wants is a peek. Found by a test
+      // doing exactly that (see test_peek_reaches_content_under_the_panel).
+      if (typingInto(document.activeElement)) {
+        if (!peeking) status("H types here - click the page or press Esc first to peek");
+        return;
+      }
+      // Not during a drag/resize (the gesture owns the pointer, and the chrome it
+      // would uncover is not what the user is looking at), and not while placing a
+      // shape, where the next click means "drop it here" rather than "select this".
+      if (interacting || pendingShape) return;
+      ev.preventDefault();
+      setPeek(!peeking);
+      return;
+    }
     if (ev.key === "Escape") {
+      // Ahead of the selection: peek is the outermost transient state, and Esc's job
+      // through this whole chain is to leave the newest layer rather than the oldest.
+      if (peeking) { setPeek(false); return; }
       if (pendingShape) { exitPlaceMode(); status("placement cancelled"); return; }
       // An open suggestion list is what Esc dismisses first; the selection behind
       // it is not what the user was trying to leave.
@@ -3118,6 +3421,23 @@
       // bar it opened on top of the properties panel, so "find the button again" meant
       // working around a menu that was covering the thing you wanted to click.
       if (!palette.hidden) { palette.hidden = true; return; }
+      // Leaving the FIELD, before leaving the selection. Esc inside a text input
+      // conventionally means "get me out of this input", and here it has to: the
+      // guarded H branch tells the user to "press Esc first to peek", and without this
+      // that advice was both destructive and useless - Esc threw away the selection,
+      // focus stayed in the field, and the next H typed an `h` into it. Measured on
+      // 2026-08-02: the Scope input read "all widthsh" afterwards. A message that
+      // instructs the user to do something has to be a message the tool honours.
+      // Not restricted to the Overlay's own fields, deliberately. `typingInto` covers
+      // the PAGE's fields too - that is the case its comment names first - so the H
+      // guard offers this advice over a page's own input or contenteditable as well,
+      // and an Esc that only honoured it inside `#wt-root` left exactly the failure
+      // above one case narrower. The other repair, narrowing H to match, is wrong:
+      // `h` in a page field has to stay the letter h.
+      if (typingInto(document.activeElement)) {
+        document.activeElement.blur();
+        return;
+      }
       deselect();
       return;
     }
@@ -3490,8 +3810,16 @@
       } else {
         btn.addEventListener("click", function () {
           if (!document.contains(row.el)) { status("that element is no longer on the page", false); return; }
+          // Scroll FIRST and instantly, then select. selectEl now schedules its own
+          // reveal two frames out, and a smooth scroll started after it is still
+          // animating when that reveal measures - so the two disagreed about where the
+          // element should end up, and which won depended on frame timing. Ordered
+          // this way there is one authority: this brings the element on screen, the
+          // reveal then nudges it clear of the sheet and dock if it landed under them.
+          // `block: "center"` is the reason that matters below 520px, where the centre
+          // of the window is inside the dock's band.
+          row.el.scrollIntoView({ block: "center" });
           selectEl(row.el);
-          row.el.scrollIntoView({ block: "center", behavior: "smooth" });
         });
       }
       li.appendChild(btn);

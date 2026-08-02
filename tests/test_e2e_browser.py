@@ -11,7 +11,8 @@ import json
 import pytest
 
 from conftest import (edit, open_page, place_shape, reload_and_restore, resize,
-                      save, seed_batch, select_card, set_field)
+                      save, seed_batch, select_card, selected, set_field,
+                      worst_case_bar)
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -63,7 +64,7 @@ def test_select_edit_nudge_resize_save_loop(served):
 
         # --- select + property change ---
         page.click("#headline")
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "h1#headline"
+        assert selected(page) == "h1#headline"
         page.fill("#wt-fs", "52")
         page.dispatch_event("#wt-fs", "input")
         assert page.eval_on_selector("#headline", "el => getComputedStyle(el).fontSize") == "52px"
@@ -120,7 +121,7 @@ def test_create_shape_change_fill_save(served):
 
         place_shape(page, "triangle", 400, 350)
         # the dropped <svg> is selected, and the panel shows Shape / hides Type
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent").startswith("svg#wt-shape-")
+        assert selected(page).startswith("svg#wt-shape-")
         vis = page.evaluate("""() => ({
             shape: document.querySelector('.wt-group[data-group="Shape"]').hidden,
             type: document.querySelector('.wt-group[data-group="Type"]').hidden,
@@ -999,23 +1000,10 @@ def test_reset_all_leaves_nothing_to_save(served):
     assert status == "nothing changed yet"
 
 
-# The bar's worst case, assembled by hand because no single user action produces all
-# of it at once: every control enabled, the longest status the Overlay writes, and the
-# badge showing its longest text. The badge is the part that keeps being forgotten -
-# it is hidden until a save, so an earlier version of this test filtered it out with
-# `!k.hidden` and passed while Save sat 65px off a 480px viewport the moment anything
-# was saved. Whatever the bar can show at once is what has to fit.
-LONGEST_STATUS = ("restored 4 of 6 edited elements; 2 could not be re-located"
-                  " (kept for reconcile)")
-LONGEST_BADGE = "source changed - reload"
-
-_WORST_CASE = """([status, badge]) => {
-    document.getElementById('wt-status').textContent = status;
-    const b = document.getElementById('wt-badge');
-    b.hidden = false; b.textContent = badge; b.className = 'wt-badge wt-badge-warn';
-    ['wt-undo', 'wt-redo', 'wt-reset-all', 'wt-deselect', 'wt-save']
-        .forEach(id => { const e = document.getElementById(id); if (e) e.disabled = false; });
-}"""
+# The bar's worst case now lives in conftest, because the peek module needs it too -
+# see LONGEST_STATUS, LONGEST_BADGE and worst_case_bar there. It was imported across
+# from here for a while, which meant one module reaching into another test module for
+# a name marked private, and executing 67KB of unrelated module body to get it.
 
 # The Overlay's own breakpoints (620/640/700/820), plus round widths spanning the range
 # it is used at. Not "one either side of each breakpoint" - these are the real widths a
@@ -1061,7 +1049,7 @@ def test_every_bar_control_stays_inside_the_bar(served, width):
     with sync_playwright() as p:
         browser, page = open_page(p, port, width=width)
         edit(page, "#headline", "#wt-fs", "70px")
-        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        worst_case_bar(page)
         escaped = page.evaluate(
             """() => {
                 const bar = document.querySelector('.wt-bar');
@@ -1085,25 +1073,40 @@ def test_the_panel_clears_the_bar_at_every_width(served, width):
     """The bar wraps, so its height is a rendered fact rather than a constant, and the
     panel positions itself against a `--wt-bar-h` the Overlay measures and writes back.
     If that measurement stops happening the panel silently slides under the bar and
-    its top controls become unclickable - so assert the geometry, not the property."""
+    its top controls become unclickable - so assert the geometry, not the property.
+
+    Two layouts, one invariant. At or below 520px the panel is a bottom sheet and does
+    not hang off the bar at all, so the "just below it" half of the assertion is a fact
+    about the column layout rather than about the measurement. What has to hold in both
+    is that the panel never overlaps the bar; the column adds that it hangs directly
+    beneath it, and the sheet adds that it reaches the bottom of the window. Written as
+    one predicate per layout rather than as the weaker `panel.top >= bar.bottom` that
+    covers both, because that alone passes just as happily against a measurement far
+    too large - a mutant adding 600px left it green with most of the panel off-screen.
+    """
     tmp, port = served
+    sheet = width <= 520
     with sync_playwright() as p:
         browser, page = open_page(p, port, width=width)
         page.click("#headline", position={"x": 8, "y": 8})    # opens the panel
-        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        worst_case_bar(page)
         # A wait, not a bare read: the measurement rides a ResizeObserver, so it lands
         # a frame after the layout change rather than synchronously. Five seconds is
         # far more than a frame and keeps a real failure from costing 30.
-        # Bounded from BOTH sides. `panel.top >= bar.bottom` alone passes just as
-        # happily against a measurement that is far too large - a mutant adding 600px
-        # to the measured height left this assertion green while most of the panel was
-        # off the bottom of the window.
         page.wait_for_function(
-            """() => {
+            """(sheet) => {
                 const bar = document.querySelector('.wt-bar').getBoundingClientRect();
                 const panel = document.querySelector('.wt-panel').getBoundingClientRect();
-                return panel.top >= bar.bottom && panel.top <= bar.bottom + 20;
+                if (panel.top < bar.bottom) return false;      // holds either way
+                // Both branches bound the panel from BOTH sides. Pinning only
+                // `panel.bottom` to the window left the sheet's top unbounded, so a
+                // sheet grown to 90vh passed here just as happily as the 45vh one.
+                return sheet
+                    ? Math.abs(panel.bottom - innerHeight) <= 1
+                      && panel.height <= innerHeight * 0.45 + 1
+                    : panel.top <= bar.bottom + 20;
             }""",
+            arg=sheet,
             timeout=5000,
         )
         browser.close()
@@ -1135,7 +1138,7 @@ def test_an_open_bar_dropdown_covers_no_bar_control(served, width, opener, shown
     with sync_playwright() as p:
         browser, page = open_page(p, port, width=width)
         edit(page, "#headline", "#wt-fs", "70px")
-        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        worst_case_bar(page)
         page.click(opener)
         page.wait_for_selector(f"{shown}:not([hidden])")
         blocked = page.evaluate(_COVERED_BAR_CONTROLS, shown)
@@ -1175,7 +1178,7 @@ def test_the_change_list_header_clears_the_bar_on_a_short_window(served, width):
             edit(page, f"#filler-{i}", "#wt-fs", f"{20 + i}px")
         page.click("#wt-changes-head")          # expand the list
         resize(page, width, height=420)
-        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        worst_case_bar(page)
         # Wait on the thing the assertion depends on, not a fixed pause: the dock's
         # max-height rides --wt-bar-h, which a ResizeObserver publishes a frame after
         # the layout change. A flat sleep reads a layout that may not exist yet and
@@ -1230,7 +1233,7 @@ def test_a_bar_dropdown_open_when_the_bar_grows_still_covers_nothing(
         edit(page, "#headline", "#wt-fs", "70px")
         page.click(opener)
         page.wait_for_selector(f"{shown}:not([hidden])")
-        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])   # bar grows now
+        worst_case_bar(page)   # bar grows now
         page.wait_for_timeout(150)          # let the ResizeObserver land
         blocked = page.evaluate(_COVERED_BAR_CONTROLS, shown)
         clears = page.evaluate(
@@ -1263,7 +1266,7 @@ def test_a_bar_dropdown_on_a_short_window_covers_nothing(served, height):
     with sync_playwright() as p:
         browser, page = open_page(p, port, width=360, height=height)
         edit(page, "#headline", "#wt-fs", "70px")
-        page.evaluate(_WORST_CASE, [LONGEST_STATUS, LONGEST_BADGE])
+        worst_case_bar(page)
         page.click("#wt-scope-toggle")
         page.wait_for_selector("#wt-scope-list:not([hidden])")
         blocked = page.evaluate(_COVERED_BAR_CONTROLS, "#wt-scope-list")

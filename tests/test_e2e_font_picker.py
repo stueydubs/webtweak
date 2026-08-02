@@ -6,7 +6,7 @@ depending on the user retyping them. Driven the way a user drives it - open the
 list, click an entry, save - and asserted on the rendered page and the Patches.
 """
 
-from conftest import changes, open_page, save
+from conftest import changes, open_page, save, selected
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -156,13 +156,13 @@ def test_the_list_closes_without_losing_the_selection(served):
         page.wait_for_selector(open_list)
         page.keyboard.press("Escape")
         page.wait_for_selector(open_list, state="hidden")
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "h1#headline"
+        assert selected(page) == "h1#headline"
 
         page.click("#wt-ff-toggle")                 # reopen, then click the page
         page.wait_for_selector(open_list)
         page.click(".lede")
         page.wait_for_selector(open_list, state="hidden")
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "p.lede"
+        assert selected(page) == "p.lede"
         browser.close()
 
 

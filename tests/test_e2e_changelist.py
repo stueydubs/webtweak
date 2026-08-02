@@ -10,7 +10,7 @@ import shutil
 
 import pytest
 
-from conftest import edit, open_page
+from conftest import edit, open_page, selected
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -76,10 +76,10 @@ def test_clicking_an_entry_selects_that_element(served):
         edit(page, ".lede", "#wt-fs", "19")
         page.click("#wt-changes-head")
         page.wait_for_selector("#wt-changes-list:not([hidden])")
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "p.lede"
+        assert selected(page) == "p.lede"
 
         page.click(".wt-change:has-text('h1#headline')")
-        assert page.eval_on_selector("#wt-seltag", "el => el.textContent") == "h1#headline"
+        assert selected(page) == "h1#headline"
         browser.close()
 
 

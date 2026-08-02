@@ -5,7 +5,123 @@ All notable changes to webtweak are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-08-02
+
+**Reaching the page under the Overlay.** This started as "the bar is too tall" and the
+measurement disagreed twice: the bar was never the expensive part, and height was never
+the real problem. Anything underneath the chrome could not be selected at all, at any
+window width, because the click operated whichever control was painted there instead.
+Peek answers that, and the footprint was shrunk separately where the measurement said it
+was worth shrinking. Minor, not patch: peek is new capability, not a repair.
+
+**One outward behaviour change worth knowing about.** `H` is now a reserved key over the
+page - the handler calls `preventDefault()` - so a page carrying its own document-level
+`h` shortcut will not receive it while webtweak is injected, unless a field has focus.
+There is no way to have both; peek has no button, and a modifier chord would have made
+the one feature you reach for while looking at the page the hardest one to press.
+
+### Added
+
+- **Peek: press `H` to see straight past the Overlay and click the page under it.**
+  Click an element and the Overlay comes back with it selected; press `H` again to
+  simply put it back. `Esc` leaves a peek before it leaves the selection, and a field
+  you are typing in before either - `h` is a letter, so a focused field keeps the key,
+  and `Esc` is what the Overlay tells you to press to get out of one.
+
+### Fixed
+
+- **Anything under the Overlay could not be selected at all - at any window width.** The
+  bar, the properties panel and the change list are `position: fixed` with pointer
+  events enabled, so a click aimed at the page beneath them worked whatever control was
+  there instead. A page whose nav occupied its top 56px hit `wt-shape-btn` at 360px,
+  `wt-undo` at 480px, `wt-shape-btn` at 700px and `wt-scope-input` at 1280px - never the
+  nav. A right-hand rail landed in the line-height field. Sampled on a 4px grid with one
+  element selected, the chrome covers about 27% of a 1280x800 viewport and about 76% of
+  a 360x740 one, and none of it was reachable. Peek is the fix, and it hides the chrome
+  rather than offsetting the page: an offset addresses only the bar, changes how the
+  page renders, and does not move a `position: fixed` header at all. See
+  [ADR-0005](docs/adr/0005-peek-hides-the-chrome-rather-than-moving-the-page.md).
+
+### Changed
+
+- **The properties panel becomes a bottom sheet below 520px.** A 270px column is 75%
+  of a 360px window, and the strip it leaves is too narrow to read a layout in. The
+  arithmetic narrows it but does not settle it: a column costs about `(270/w) x 0.89`
+  of the window while a full-width 45vh sheet costs `0.45` whatever the width, and at
+  that `0.89` the two meet at 534px. But the `0.89` is a single measurement from one
+  900px-tall window, and across the range that fraction really takes (0.84 to 0.92) the
+  crossing moves between 504px and 552px - a 48px band rather than a point. 520 sits
+  inside it, chosen to keep the column until the sheet is clearly the cheaper shape.
+  Above the breakpoint the panel stays exactly where it was.
+- **The bar gives back a row below 460px**, 90px to 71px, by letting the breadcrumb
+  share a row instead of claiming one. Between 480 and 560 it still gets its own row,
+  where that costs nothing.
+- **The keyboard hint shortens instead of disappearing below 640px.** It used to be
+  hidden outright, which was fine while everything it named had a visible control too -
+  peek has no button, so hiding the hint took the only mention of `H` off the screen at
+  exactly the widths where the chrome covers half the page.
+
+Net effect on how much of the page the Overlay sits on, with an element selected:
+**about 77% down to about 61% at 360x740**, and unchanged at about 26% on a 1280x900
+window, where the existing layout is already the right shape and peek is the answer
+instead. Whole numbers because the grid sampling moves these by roughly half a point on
+its own phase, so a tenth is more precision than the method has.
+
+- **The shape palette no longer stretches across the page, or steals the properties
+  panel's clicks.** On a wrapped bar `.wt-bar-wrapped .wt-palette` re-anchored it with
+  `left: 12px` without releasing the `right: 0` it inherits, so the box spanned both
+  edges - 608px wide at a 620px window, opaque and taking pointer events across all of
+  it, and at 620px a click at the panel's top-right landed on the palette. The rule
+  exists to stop exactly that; it had moved the theft from one edge to the other.
+  Shipped in 0.7.1.
+- **The dock's narrow-window cap now applies at all.** Also 0.7.1: written above the
+  rules it overrides, so `width: auto` lost the cascade to a `width: 320px` declared
+  340 lines later - while `right: 294px` did apply, which left it looking half-alive.
+- **Band conditions in the Scope picker stop ellipsising 22px early**, and a dead
+  `gap` declaration is gone. Both were the same trap in a third guise: an element
+  carrying two classes whose rules conflict, where the loser is not the one written
+  earlier but the one on the class you were not thinking about.
+- **Panel dropdowns are clickable in the bottom sheet.** With no room below, a list
+  flips upward - straight into the dock's band, and `.wt-panel` is a stacking context
+  so the list's own `z-index` could not lift it clear. At 360x480 two of the six Shadow
+  presets hit the hint instead of the list. The dock is now painted before the panel.
+- **A shape dropped in the lower half of a narrow page is no longer buried** by the
+  sheet that opens over it the instant it is selected.
+- **Peek is no longer silent.** The note carries `role="status"` - the Overlay's first
+  live region, since peek removes 93 controls from the accessibility tree at once - the
+  keyboard position is restored when a peek ends by the key, and pressing `H` while a
+  field has focus now says why nothing happened instead of doing nothing quietly.
+- **A drag or resize during a peek no longer records an edit you cannot see.** Peek
+  takes the grips out of reach because they accept clicks, but a nudge is a drag on the
+  element's own body and interact's resize band sits inside the element too, and
+  neither consulted the peek. So a gesture while peeking moved the element and recorded
+  the change with every piece of editing UI invisible - no outline following the
+  pointer, no change list, no Undo - and Reset was the only way back. Both gestures are
+  now suspended for the duration of a peek.
+- **`Esc` gets you out of your own page's fields, not only the Overlay's.** The `H`
+  guard treats a page's own `input` or `contenteditable` as a field and says to press
+  `Esc` first, but `Esc` only released the Overlay's own fields. On a page field it
+  threw the selection away instead, left the focus where it was, and the next `H` typed
+  an `h` into the page - the exact failure the advice exists to prevent, one case
+  narrower.
+- **Holding `H` down no longer strobes the Overlay.** Autorepeat sends a keydown per
+  repeat and every one of them was a toggle, so a resting finger flashed the chrome on
+  and off and finished wherever the repeat count left it.
+- **The peek note fits a 320px window.** It is one unwrappable line centred on the
+  window, so past its own width it hung off both edges at once - and it is the only
+  text on screen during a peek and the only thing naming `Esc`, so losing its ends lost
+  the way out.
+- **The dock and the panel no longer overlap at fractional window widths.** The bottom
+  sheet applied at `max-width: 520px` and the dock's cap at `min-width: 521px`, which
+  are not adjacent: browser zoom and hidpi arithmetic both produce widths like 520.5,
+  where neither applied and about 93px of the change list sat under the panel taking no
+  clicks.
+- **The change list scrolls to an element instantly rather than smoothly.** The smooth
+  scroll animated for long enough that the selection landed before the element arrived,
+  so the panel opened against a position the page had already left.
+
+Nothing here changes the Patch contract or the edits-file format, and the bundled
+reconcile skill is unchanged - existing edits files reconcile exactly as before.
 
 ## [0.7.1] - 2026-08-01
 
@@ -759,7 +875,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/stueydubs/webtweak/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/stueydubs/webtweak/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/stueydubs/webtweak/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/stueydubs/webtweak/compare/v0.5.0...v0.6.0

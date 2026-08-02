@@ -36,6 +36,12 @@ html { user-select: none; }
      and the fourth (.wt-dock) was missed on the first pass, which is the argument
      for having one name for it. */
   --wt-bar-h: 44px;
+  /* The panel's counterpart, and 0 is the honest fallback rather than a guess: the
+     panel is hidden until something is selected, and the only rule that reads this
+     (the dock, in the <=520px bottom-sheet block at the end of this file) wants to sit
+     at its normal offset when there is no sheet to clear. overlay.js writes the
+     measured height over it. */
+  --wt-panel-h: 0px;
 }
 
 #wt-root .wt-ui { pointer-events: auto; }
@@ -112,10 +118,32 @@ html { user-select: none; }
 /* --- the band picker ------------------------------------------------------ */
 /* Which widths an edit applies at. Reads as a scope, never as the subject - the
    crumb names the element, this names the condition. */
-.wt-scope { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+/* No `gap` here, deliberately. #wt-scope is also `.wt-suggest`, which sets `gap: 4px`
+   further down the file, so a `gap: 6px` written here never applied - 4px is what has
+   always rendered, at every width. Declaring the losing value only tells the next
+   reader something untrue; the `@media (max-width: 700px)` block that also set 4px on
+   .wt-scope has gone for the same reason, it was restating the value that already won.
+   `flex: 0 0 auto` is in the same position and would lose to `.wt-suggest { flex: 1 }`
+   too - it survives only because `.wt-bar > .wt-scope` above re-states it at 0-2-0.
+
+   The whole `.wt-scope` rule has gone the same way, and it went one round later than
+   it should have: `display: flex` and `align-items: center` sat here losing to
+   `.wt-suggest` exactly as `gap` did, and were left behind by the edit that removed
+   `gap` for that reason. They rendered correctly only because the winning rule happens
+   to declare the same two values - the silent form of this trap, and the one this
+   comment was written about. #wt-scope is the only element carrying the class, so
+   there is nothing left for the rule to do. */
 .wt-scope-label { color: #717784; font-size: 11px; white-space: nowrap; }
+/* The three "short spelling" defaults live together up here, ahead of every media
+   block, because that is the half of the pattern that is easy to get wrong: these and
+   their media-block counterparts have equal specificity, so whichever is declared LAST
+   wins. Written down beside .wt-hint (line ~640, well after its @media at ~200) the
+   default silenced the short hint at every width instead of only wide ones - the box
+   still rendered, 18px of padding around nothing, which is a shape a passing eye reads
+   as working. Keep new ones here. */
 .wt-scope-short { display: none; }
 .wt-reset-short { display: none; }   /* swapped in below 620px; see the media block */
+.wt-hint-short { display: none; }    /* swapped in below 640px; see the media block */
 #wt-scope-input {
   width: 92px;
   background: #0f1115; border: 1px solid #2c303a; color: #e8eaed;
@@ -128,7 +156,16 @@ html { user-select: none; }
    Every rule here is scoped to `.wt-band-list` for the cascade reason above:
    `.wt-suggest-item` is declared later with `display: block; white-space: nowrap`,
    and a one-line row ran all three spans together into an ellipsised smear. */
-.wt-band-list { width: 258px; max-width: 258px; }
+/* Two classes, one element: #wt-scope-list is `wt-suggest-list wt-band-list`, and
+   `.wt-suggest-list` sets `width: 236px` several hundred lines further down. At equal
+   specificity the later declaration wins, so the 258px below had never applied and
+   band conditions ellipsised 22px earlier than this rule intends. Doubled up to 0-2-0
+   so it beats the generic rule wherever either is declared - the same defensive
+   scoping `.wt-band-list .wt-band` and `.wt-bar > .wt-scope` already use, and the one
+   place it was left off. A double-classed element is the third shape of the cascade
+   trap this file keeps hitting: not source order, but a second class the reader does
+   not have in mind. */
+.wt-suggest-list.wt-band-list { width: 258px; max-width: 258px; }
 .wt-band-list .wt-band {
   display: flex; flex-direction: column; gap: 1px;
   white-space: normal; padding: 6px 8px;
@@ -172,7 +209,11 @@ html { user-select: none; }
   .wt-bar { gap: 7px; padding: 4px 8px; }
   .wt-logo { display: none; }
   .wt-bar .wt-btn { padding: 6px 9px; }
-  .wt-scope { gap: 4px; }
+  /* No `.wt-scope { gap: 4px }` here any more: #wt-scope is also `.wt-suggest`, which
+     sets 4px unconditionally further down and wins at equal specificity, so this line
+     had never applied. It was inert AND invisible, because the value it declared was
+     the value already winning - the most dangerous version of a dead rule, since
+     changing either number would have silently done nothing. */
   #wt-scope-input { width: 66px; }
 }
 /* The bar itself wraps at every width now (see .wt-bar), so this block no longer has
@@ -192,12 +233,68 @@ html { user-select: none; }
   .wt-bar .wt-btn { padding: 6px 7px; }
   /* The crumb names the selected element; on a bar that has wrapped it takes the
      whole first row, so the controls beneath line up rather than sitting in a ragged
-     column beside a stub of element name. */
+     column beside a stub of element name. Below 460px it gives that row back - see
+     the block immediately after this one. */
   .wt-crumb { flex: 1 0 100%; }
 }
-/* The hint is the one thing here that teaches rather than does, so it goes last. */
+/* Where the whole-row crumb stops paying for itself. Measured with an element
+   selected, bar height with the crumb on its own row vs sharing one:
+
+     360  90 -> 71     440  90 -> 71     520  56 -> 71     620  56 -> 44
+     390  90 -> 71     460  90 -> 71     560  56 -> 71
+     414  90 -> 71     480  56 -> 71
+
+   Non-monotonic, and that is why this is one narrow block rather than a change to the
+   620 rule above. Between 480 and 560 the controls need two rows whichever way the
+   crumb goes, so giving it a row of its own costs nothing and reads better - sharing
+   there pushes a third row and makes things WORSE, 56px to 71px. At 460 and below the
+   controls need two rows anyway and the crumb's own row is a third, so sharing saves
+   19px of the user's page - about 2.6% of a 360x740 window, on top of what the bottom
+   sheet gives back.
+
+   The crumb still gets 138-151px at every width in that range, which held the fixture's
+   full `main.wrap > div.card > p` without truncating - so this is not the crushed-to-4px
+   failure the .wt-crumb comment warns about.
+
+   `min-width` is a real floor and it binds: in the bar's worst state (longest status,
+   badge showing, every button enabled) the crumb falls to 80px without it, which is
+   the crushed-to-unreadable failure the .wt-status comment above records at 4px.
+   `test_the_bar_gives_back_a_row_below_460px` asserts it and a mutation removing this
+   line fails that test.
+
+   Worth the space, because getting here took four goes and three of them were wrong.
+   The mutation appeared to SURVIVE, twice, and each time the response was a comment
+   explaining why an unkillable guard was still worth keeping - "it is a tripwire",
+   then "the test recreates the configuration it guards". Both were fiction. What was
+   actually happening: the test had been given `.wt-status { flex: 0 1 auto }` via an
+   injected style tag, added in a previous round precisely to "make the floor bite" -
+   and it did the opposite. That basis lets the status size to its own text instead of
+   filling the row, which hands the crumb MORE room and hides the floor's effect
+   entirely. The test was masking the thing it was written to prove. Deleting the
+   injection is what made the mutation die. A test that stages the failure it is
+   checking for can stage it wrong, and a passing mutation is evidence about the test
+   before it is evidence about the code.
+
+   Left alone deliberately: at exactly 620px sharing would also win, 56px against 44px,
+   because there is room for the crumb and every control on one row. Chasing that would
+   mean a third band tuned to the exact pixel widths of eight controls, and this bar has
+   already been pushed past its own width three times by things as small as a longer
+   status message. One boundary that is right for a reason beats three that are right
+   for today's control set. */
+@media (max-width: 460px) {
+  .wt-crumb { flex: 1 1 auto; min-width: 110px; }
+}
+/* The hint is the one thing here that teaches rather than does, so it sheds last -
+   but it sheds to a shorter sentence now rather than to nothing. It used to be
+   `display: none`, which was defensible while everything it named had a visible
+   control somewhere (Esc has Deselect, Ctrl+S has Save). Peek does not: H is the ONLY
+   way to reach it, and the widths where the hint was hidden are the widths where the
+   chrome covers 50-76% of the page, so hiding the hint took the answer off the screen
+   exactly where the problem was worst. One line costs about 30px of a corner the dock
+   was not otherwise using. */
 @media (max-width: 640px) {
-  .wt-hint { display: none; }
+  .wt-hint-long { display: none; }
+  .wt-hint-short { display: inline; }
 }
 /* Reconcile state: where this session's changes have got to in the loop. */
 .wt-badge {
@@ -269,16 +366,9 @@ html { user-select: none; }
    viewport-gutter version detaches it from the control it belongs to at every desktop
    width. placeSuggest keeps the band picker's `left` anchored to its own toggle for
    exactly the same reason; only the vertical drop moves to the bar. */
-/* Below ~614px the dock's 320px and the panel's 270px no longer both fit between the
-   gutters, and the dock - a later sibling in #wt-root - hit-tested on top of the
-   panel's bottom-most control. Clicking "Reset this element" re-selected whatever
-   change-list row was underneath instead, which is the exact defect moving the dock
-   bottom-left was supposed to have designed away. Cap the dock against the panel's
-   left edge (100vw - 282) with the same 12px gutter, rather than letting it keep a
-   fixed width it no longer has room for. */
-@media (max-width: 613px) {
-  .wt-dock { width: auto; right: 294px; }
-}
+/* The dock's own narrow-window cap used to sit here and has moved to the end of the
+   file - see the bottom-sheet block for why anything overriding .wt-panel or .wt-dock
+   has to be declared below them rather than up here with the bar's blocks. */
 
 .wt-bar-wrapped .wt-palette {
   position: fixed;
@@ -289,6 +379,15 @@ html { user-select: none; }
      hid the panel via enterPlaceMode's deselect(). The two only ever collide when the
      bar wraps, which is also the only time this rule applies. */
   left: 12px;
+  /* And `right` has to be RELEASED, not merely re-anchored. .wt-palette sets
+     `right: 0`, this block only added `left`, and `width` is auto - so the box was
+     over-constrained the other way and simply STRETCHED between the two edges: 608px
+     across at 620px wide, 348px at 360px, an opaque panel painted over the page with
+     `pointer-events: auto` on all of it. At 620px `elementFromPoint` at the properties
+     panel's top-right returned wt-palette, so the click-theft this whole block exists
+     to end was still happening - moved from the right edge to the left rather than
+     stopped. Shipped in 0.7.1 and measured on 2026-08-02. */
+  right: auto;
 }
 .wt-shape-item {
   width: 40px; height: 40px;
@@ -314,6 +413,76 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 }
 .wt-place-hint[hidden] { display: none; }
 .wt-place-hint b { font-weight: 800; }
+
+/* --- peek ---------------------------------------------------------------- */
+/* The Overlay's own chrome is the largest thing covering the page. Sampled with
+   elementFromPoint on a 4px grid across the whole viewport, with an element selected:
+   about 27% of 1280x800 is chrome, 58% of 480x800, and 76% of 360x740 (whole numbers:
+   the grid's phase moves each by about half a point, so a tenth is borrowed precision).
+   Worse than the area, none of the page under it can be SELECTED - the click lands on a
+   control - so a page whose nav occupies its top 56px cannot have that nav edited at any
+   width at all,
+   including 1280px, where the click hits the scope input. Peek is the way back to it:
+   the chrome stops being drawn and stops taking pointer events, a click reaches
+   whatever was underneath, and selecting brings the chrome back.
+
+   `visibility: hidden`, deliberately, and not `display: none` or `opacity: 0`:
+   - `display: none` would take .wt-bar out of layout, so the ResizeObserver in
+     overlay.js would measure 0 and write `--wt-bar-h: 0px`. The panel, the dock and
+     the place-hint all position against that property, and `.wt-bar-wrapped` is
+     decided by comparing the measured height against min-height, so a 0 turns that
+     class on for as long as the peek lasts. (Corrected: this used to claim the
+     misplacement OUTLASTED the peek. It would not - the same ResizeObserver fires
+     again the moment display is restored, so the damage is a frame of wrong geometry,
+     not a lasting one. Still the wrong choice, for a smaller reason than claimed.)
+   - `opacity: 0` leaves the chrome hit-testable and focusable: the bar would still
+     swallow the click peek exists to let through, and Tab would walk into controls
+     nobody can see. `visibility: hidden` keeps the box (so the measurement stays
+     right) while removing it from hit-testing and from the tab order both.
+   The second of those also does a job overlay.js would otherwise have to: making a
+   FOCUSED control non-focusable triggers the HTML focus fixup rule, so a bar button
+   that had focus when the peek started hands it back to the body on its own. Without
+   that, an invisible Save would still be taking the Enter meant for the page - and
+   the H that ends the peek. `opacity: 0` does not do this; verified both ways in
+   Chromium, and test_e2e_peek covers it.
+   No transition: a peek is a thing you do to look at the page right now, and fading
+   the chrome would put the click you are trying to make inside the animation. */
+#wt-root.wt-peek .wt-ui { visibility: hidden; }
+/* The grips are not .wt-ui - they live inside the selection box, which is
+   pointer-events:none with the grips opting back in - so the rule above does not
+   reach them, and three 11px squares latched to the selected element's right and
+   bottom edges would keep taking clicks aimed at the page beneath them. The selection
+   and hover outlines themselves stay: they are pointer-events:none, they cannot
+   intercept anything, and while peeking they are the only feedback about what a click
+   is going to select. */
+#wt-root.wt-peek .wt-grip { visibility: hidden; }
+
+/* Not .wt-ui, or the rule above would hide the one thing that says why everything
+   else vanished. pointer-events:none is what makes that safe: it is painted over the
+   page but can never take a click, so it costs nothing at the moment the page has to
+   be fully reachable. Centred at the bottom rather than in a corner - bottom-left is
+   the dock's and bottom-right is where a page's own chat widget usually sits. */
+.wt-peek-note {
+  position: fixed;
+  bottom: 14px; left: 50%; transform: translateX(-50%);
+  background: rgba(21, 23, 28, 0.92); color: #aab0bb;
+  border: 1px solid #2c303a; border-radius: 8px;
+  padding: 6px 12px; font-size: 12px; line-height: 1.4;
+  /* No `nowrap`, and a cap instead. The note is one fixed 333.5px line at every width,
+     so it cleared a 360px window by 26.5px and hung 6.8px off BOTH edges of a 320px
+     one - `left: 50%` + `translateX(-50%)` centres it, so it cannot be pushed back in,
+     it loses the start and the end together. It is also the only text on screen during
+     a peek and the only thing that names Esc, so losing its ends is losing the way out.
+     A fixed box is shrink-to-fit, so max-width alone does the whole job: it stays on
+     one line wherever one line fits and wraps only where it would not, with no
+     breakpoint to keep in step with the text. `100%` rather than `100vw` because the
+     containing block is the viewport WITHOUT the scrollbar, and 100vw includes it. */
+  max-width: calc(100% - 24px);
+  pointer-events: none;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+}
+.wt-peek-note[hidden] { display: none; }
+.wt-peek-note b { color: #ffd479; }
 
 /* --- hover + selection boxes -------------------------------------------- */
 .wt-box {
@@ -353,6 +522,12 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-grip-br { right: -6px; bottom: -6px; cursor: nwse-resize; }
 
 /* --- properties panel --------------------------------------------------- */
+/* The single biggest thing the Overlay takes from the page, by a distance. Measured
+   with an element selected: 270x797 is 18.7% of a 1280x900 window against the bar's
+   4.9%, and at 360x740 the same 270px column is 63% against the bar's 12.2%. Slimming
+   the bar was never going to be the fix; the panel is.
+   Below 520px it becomes a bottom sheet instead - see the media block at the end of
+   this file, which is also where the breakdown above is argued in full. */
 .wt-panel {
   position: fixed;
   top: calc(var(--wt-bar-h) + 12px); right: 12px;
@@ -634,3 +809,109 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   flex: 0 0 auto;
 }
 .wt-hint b { color: #ffd479; }
+
+/* --- the panel as a bottom sheet ----------------------------------------- */
+/* LAST in the file, and that placement is the point rather than tidiness. Every other
+   @media here sits up around line 200, which works only because what those blocks flip
+   is declared ABOVE them (.wt-scope-short and friends, gathered deliberately at the top
+   for exactly this reason). `.wt-panel` and `.wt-dock` are declared further down, so an
+   override written up there loses the cascade to them at equal specificity - and loses
+   it PARTIALLY, which is the dangerous part: `left: 0` took effect while `width` and
+   `top` did not, giving a 270px column pinned to the left edge that no rule in the file
+   describes. If this block ever needs to move, it moves down, never up.
+
+   Why the shape changes rather than the width shrinking. The panel is the single
+   biggest thing the Overlay takes from the page - 18.7% of a 1280x900 window against
+   the bar's 4.9%, and 63% of a 360x740 one against the bar's 12.2% - so slimming the
+   bar was never going to be the fix. At 360px a 270px column is 75% of the width, and
+   the 78px strip it leaves is too narrow to read a layout in at all. Trimming the
+   column to 240px would buy back about 8% of the area and none of that problem. A
+   sheet hands the page back its full width and a bit over half its height, which is
+   the shape a layout can actually be judged in.
+
+   520, and it is arithmetic rather than taste. A 270px column costs about (270/w) x
+   0.89 of the window; a full-width 45vh sheet costs 0.45 whatever w is. Solving those
+   gives 534px, so 520 sits deliberately BELOW the crossover rather than on it - the
+   comment here said "about 520" for a day, which was the lowest width sampled and not
+   the number the algebra gives. (The 0.89 is a measurement too, 797/900 from one
+   900px-tall window; `calc(100vh - var(--wt-bar-h) - 28px)` really ranges 0.84-0.92,
+   so the crossover shifts a few px with window height. The direction is what the
+   breakpoint needed, and the direction is robust.) At 620 the sheet would be 45%
+   against the column's 39%, so switching early would have made the thing it was meant
+   to fix WORSE - which the first draft of this block did, measuring 55.7% at 620px
+   where the column had been 46.7%. Below the crossover the sheet wins on both counts,
+   area and shape. Also checked against the
+   collision the other blocks warn about: the Overlay's own breakpoints must not equal
+   any the test fixture declares (sample.html uses 900 and 600; chrome-collision.html
+   declares none), or pageConditions() cannot be shown to exclude this stylesheet from
+   the band picker.
+
+   The page is still neither pushed down nor reflowed. The sheet is over the page like
+   everything else here, and H peeks under it exactly as it does under the bar. */
+@media (max-width: 520px) {
+  .wt-panel {
+    top: auto; bottom: 0; left: 0; right: 0;
+    width: auto;
+    max-height: 45vh;
+    /* Flush to three edges, so the rounding and the border exist only where there is
+       actually a seam against the page. */
+    border-width: 1px 0 0;
+    border-radius: 10px 10px 0 0;
+  }
+  /* The dock shares the bottom-left corner with the sheet, so it rides on top of
+     whatever the sheet is currently tall - a fact about rendered content (the groups
+     collapse, and the sheet is only there while something is selected), not a
+     constant. Hence --wt-panel-h, measured in overlay.js the way --wt-bar-h is, and
+     0px while the panel is hidden because a display:none element reports a zero
+     contentRect - which is exactly the offset the dock wants when there is no sheet. */
+  .wt-dock {
+    bottom: calc(var(--wt-panel-h) + 20px);
+    max-height: calc(100vh - var(--wt-bar-h) - var(--wt-panel-h) - 32px);
+  }
+}
+
+/* The band between the sheet taking over and the two boxes fitting side by side.
+   Above 613px the dock's 320px and the panel's 270px both fit between the gutters;
+   below 521px the sheet has moved the dock above the panel entirely and this must NOT
+   apply, or `right: 294px` would squeeze the dock to 54px at 360px wide. In between
+   they overlap - at 560px the dock's box runs to 332 and the panel starts at 278 - so
+   cap the dock against the panel's left edge instead of letting it keep a fixed width
+   it no longer has room for.
+
+   This rule shipped in 0.7.1 and had never once applied: it was written up beside the
+   bar's media blocks, where `width: auto` loses at equal specificity to the
+   `width: 320px` declared 340 lines further down. What made that survive review is
+   that `right: 294px` DID apply, so the rule looked half-alive - and with left, right
+   and width all non-auto the box is over-constrained and `right` is simply dropped,
+   which is a silent no-op rather than a visible mistake.
+
+   An earlier draft of this comment argued the overlap was harmless "because .wt-dock's
+   children are narrower than its box". That is wrong, and the measurement that was
+   already on hand said so: .wt-dock is `display: flex; flex-direction: column` with no
+   align-items, so `.wt-changes` and `.wt-hint` STRETCH to the full 320px - measured at
+   12..332, exactly the box. What actually kept the overlap from swallowing a control
+   was the vertical bound (the dock only reaches up as far as its own content) plus the
+   fact that no panel control's centre happened to land in the strip. Neither is a
+   property anyone designed, and the panel's contents change with the selected element,
+   so the rule earns its place. */
+/* 520.02, not 521, and the pair above is the reason. Media queries evaluate
+   FRACTIONAL widths - browser zoom and hidpi window arithmetic both produce them - so
+   `max-width: 520px` and `min-width: 521px` are not adjacent, they have a hole between
+   them. At 520.5px neither block applied: the panel was still a 270px right-hand
+   column (238.5..508.5) while the dock kept its full `width: 320px` (12..332), so ~93px
+   of the change list sat under the panel. The dock paints BEFORE the panel now, which
+   makes the panel win the hit-test, so those rows took no clicks at all.
+   0.02 clears Chromium's 1/64px (0.015625) layout rounding with room to spare.
+
+   The tidier fix is range syntax - `(width <= 520px)` and `(520px < width <= 613px)` -
+   which closes the hole AND stops the boundary being written twice, the drift risk
+   this comment exists to flag. It is not used because it is invalid CSS in Safari
+   below 16.4, where an unrecognised media condition drops the WHOLE block: the sheet
+   layout would vanish and a 360px window would get the 270px column back. A hole
+   0.5px wide is a smaller failure than that. Switch both when that floor moves.
+
+   Not a matching hole above 613px: nothing is meant to catch that range, the cap just
+   stops and the base rules resume, so 613->614 is continuous. */
+@media (min-width: 520.02px) and (max-width: 613px) {
+  .wt-dock { width: auto; right: 294px; }
+}
