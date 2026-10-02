@@ -94,3 +94,26 @@ def test_without_a_shorthand_typing_the_baseline_still_reverts(served):
         browser.close()
     assert rendered == ["24px"] * 4
     assert saved == "nothing changed yet"
+
+
+def test_the_shorthand_side_follows_other_recorded_changes(served):
+    """`2em` resolves against the element's font-size, so with a font-size also
+    recorded the shorthand's side is 40px, not the 32px the authored 16px gives."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        set_field(page, "#wt-fs", "20px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "2em")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-left", "8px")
+        set_field(page, "#wt-padding-left", "")
+        shown = box(page, "left")
+        set_field(page, "#wt-padding-left", "32px")
+        rendered = padding_of(page)
+        save(page)
+        browser.close()
+    assert shown == "40px"
+    assert rendered == ["40px", "40px", "40px", "32px"]
+    assert changes(tmp) == {"font-size": "20px", "padding": "2em", "padding-left": "32px"}

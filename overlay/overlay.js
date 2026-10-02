@@ -2624,10 +2624,14 @@
     if (prop === c.prop || !ent || ent.changes[c.prop] === undefined) return null;
     var side = prop.slice(c.prop.length + 1);
     // Removing one longhand from a style that declares the shorthand drops that whole
-    // side's expansion, so measure from the authored style plus the shorthand alone.
+    // side's expansion, so measure from the authored style plus every recorded change
+    // but this group's longhands - the others too, since `2em` follows a recorded font-size.
+    var skip = sideKeys(c);
     return withTempStyle(selectedEl, function (s) {
       s.cssText = ent.origStyle == null ? "" : ent.origStyle;
-      s.setProperty(c.prop, ent.changes[c.prop]);
+      Object.keys(ent.changes).forEach(function (p) {
+        if (p !== "nudge" && !HOST_BY_PROP[p] && skip.indexOf(p) < 0) s.setProperty(p, ent.changes[p]);
+      });
     }, function () { return String(c.read(getComputedStyle(selectedEl), side)); });
   }
   // The shorthand write also removes the longhands, so they ride in the same undo
