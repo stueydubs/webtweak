@@ -185,17 +185,29 @@ def _term(v, pattern=_SESSION_RE, limit: int = 40) -> str:
     return repr(s)[:limit]
 
 
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _flat(v) -> str:
+    """A fingerprint field on one line: control characters print as their repr() escape.
+
+    Unlike `_term` this leaves an ordinary value, quotes and spaces included, untouched,
+    because a fingerprint is free text rather than a fixed-shape token.
+    """
+    return _CONTROL_RE.sub(lambda m: repr(m.group())[1:-1], _str(v))
+
+
 def _describe(fp: dict) -> str:
-    s = _str(fp.get("tag")) or "?"
+    s = _flat(fp.get("tag")) or "?"
     if fp.get("id"):
-        s += "#" + _str(fp["id"])
+        s += "#" + _flat(fp["id"])
     elif isinstance(fp.get("classes"), list) and fp["classes"]:
-        s += "." + _str(fp["classes"][0])
+        s += "." + _flat(fp["classes"][0])
     text = (_str(fp.get("ownText")) or _str(fp.get("text"))).strip()
     if text:
         # backslashreplace: a lone surrogate (from a truncated astral character) would
         # otherwise make print() raise UnicodeEncodeError mid-listing.
-        s += ' "' + text[:40].encode("utf-8", "backslashreplace").decode("utf-8") + '"'
+        s += ' "' + _flat(text[:40]).encode("utf-8", "backslashreplace").decode("utf-8") + '"'
     return s
 
 
