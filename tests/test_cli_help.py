@@ -17,6 +17,12 @@ def run_cli(*args):
     return subprocess.run(["node", str(ENTRY), *args], capture_output=True, text=True)
 
 
+def names(flag, text):
+    """True if `flag` appears as a whole token - a bare substring test would
+    find `-h` inside `--help` and pass whatever the help said about `-h`."""
+    return re.search(r"(?<![\w-])" + re.escape(flag) + r"(?![\w-])", text) is not None
+
+
 def readme_flags():
     """Every flag named in the first column of the README flag table."""
     flags = []
@@ -46,7 +52,7 @@ def test_readme_flag_table_was_parsed():
 def test_help_lists_every_readme_flag():
     r = run_cli("--help")
     assert r.returncode == 0, r.stderr
-    missing = [f for f in readme_flags() if f not in r.stdout]
+    missing = [f for f in readme_flags() if not names(f, r.stdout)]
     assert not missing, f"--help does not mention: {missing}"
 
 
@@ -54,7 +60,7 @@ def test_usage_line_lists_every_long_flag():
     """The usage line is all an error prints, so it must name every long flag."""
     r = run_cli()
     usage = r.stderr
-    missing = [f for f in readme_flags() if f.startswith("--") and f not in usage]
+    missing = [f for f in readme_flags() if f.startswith("--") and not names(f, usage)]
     assert not missing, f"usage line does not mention: {missing}\n{usage}"
 
 
@@ -63,6 +69,8 @@ def test_no_args_exits_1_and_points_at_root_and_help():
     assert r.returncode == 1
     assert "--root" in r.stderr
     assert "--help" in r.stderr
+    # USAGE itself names --help, so check the hint line the issue asked for too.
+    assert "Run webtweak --help for options." in r.stderr
 
 
 def test_directory_error_shows_usage_with_root(tmp_path):
