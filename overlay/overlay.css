@@ -145,7 +145,7 @@ html { user-select: none; }
    to declare the same two values - the silent form of this trap, and the one this
    comment was written about. #wt-scope is the only element carrying the class, so
    there is nothing left for the rule to do. */
-.wt-scope-label { color: #717784; font-size: 11px; white-space: nowrap; }
+.wt-scope-label { color: #8f96a3; font-size: 11px; white-space: nowrap; }
 /* The three "short spelling" defaults live together up here, ahead of every media
    block, because that is the half of the pattern that is easy to get wrong: these and
    their media-block counterparts have equal specificity, so whichever is declared LAST
@@ -188,7 +188,7 @@ html { user-select: none; }
   overflow: hidden; text-overflow: ellipsis;
 }
 .wt-band-list .wt-band-cond:empty { display: none; }
-.wt-band-list .wt-band-note { color: #717784; font-size: 10px; }
+.wt-band-list .wt-band-note { color: #8f96a3; font-size: 10px; }
 .wt-band-list .wt-band[data-state="matching"] .wt-band-label { color: #ffd479; }
 /* Declined out loud: a row you cannot pick has to LOOK unpickable, or the note
    explaining why reads as decoration. */
@@ -541,17 +541,21 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
    so they can be grabbed directly (the overlay drives resize off them). */
 .wt-grip {
   position: absolute;
+  width: 24px; height: 24px;   /* the hit box (WCAG 2.5.8); the 11px square is the ::after */
+  pointer-events: auto;
+  touch-action: none;          /* let the overlay handle the drag, not the browser */
+}
+.wt-grip::after {
+  content: ""; position: absolute; left: 6px; top: 6px; box-sizing: border-box;
   width: 11px; height: 11px;
   background: #ffd479;
   border: 1px solid #1a1300;
   border-radius: 2px;
-  pointer-events: auto;
-  touch-action: none;          /* let the overlay handle the drag, not the browser */
 }
-.wt-grip:hover { background: #ffe6a6; transform: scale(1.15); }
-.wt-grip-r { right: -6px; top: calc(50% - 5px); cursor: ew-resize; }
-.wt-grip-b { bottom: -6px; left: calc(50% - 5px); cursor: ns-resize; }
-.wt-grip-br { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.wt-grip:hover::after { background: #ffe6a6; transform: scale(1.15); }
+.wt-grip-r { right: -12px; top: calc(50% - 11px); cursor: ew-resize; }
+.wt-grip-b { bottom: -12px; left: calc(50% - 11px); cursor: ns-resize; }
+.wt-grip-br { right: -12px; bottom: -12px; cursor: nwse-resize; }
 
 /* --- properties panel --------------------------------------------------- */
 /* The single biggest thing the Overlay takes from the page, by a distance. Measured
@@ -607,7 +611,7 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #717784;
+  color: #8f96a3;
   margin-bottom: 6px;
   cursor: pointer;
   text-align: left;
@@ -622,6 +626,7 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-revert {
   flex: 0 0 auto;
   background: none; border: 0; padding: 0 3px 0 0;
+  min-width: 24px; min-height: 24px;
   color: #ffd479; font-size: 13px; line-height: 1; cursor: pointer;
 }
 .wt-revert[hidden] { display: none; }
@@ -687,16 +692,17 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 .wt-link {
   flex: 0 0 auto; background: #0f1115; border: 1px solid #2c303a; color: #6b7280;
   border-radius: 4px; padding: 3px 4px; font-size: 10px; line-height: 1; cursor: pointer;
+  min-width: 24px; min-height: 24px;
 }
 .wt-link.on { border-color: #ffd479; color: #ffd479; background: #23200f; }
 
 /* --- stepper (a text field you can also nudge with arrows) ---------------- */
 .wt-stepper { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
-.wt-step-btns { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }
+.wt-step-btns { flex: 0 0 auto; display: flex; gap: 2px; }
 .wt-step-btns button {
   background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
-  border-radius: 4px; padding: 0 5px; font-size: 7px; line-height: 10px;
-  cursor: pointer;
+  border-radius: 4px; padding: 0; font-size: 7px; line-height: 10px;
+  min-width: 24px; min-height: 24px; cursor: pointer;
 }
 .wt-step-btns button:hover { border-color: #ffd479; color: #ffd479; }
 
@@ -707,6 +713,7 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   flex: 0 0 auto;
   background: #0f1115; border: 1px solid #2c303a; color: #aab0bb;
   border-radius: 5px; padding: 3px 5px; font-size: 10px; line-height: 1; cursor: pointer;
+  min-width: 24px; min-height: 24px;
 }
 .wt-suggest-toggle[aria-expanded="true"] { border-color: #ffd479; color: #ffd479; }
 /* Positioned in VIEWPORT coordinates (placeSuggest sets top/left on open), not
@@ -756,7 +763,7 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
 }
 .wt-align button.on { background: #ffd479; color: #1a1300; border-color: #ffd479; }
 .wt-block { width: 100%; margin-top: 4px; }
-.wt-note { color: #717784; font-size: 11px; line-height: 1.5; margin-top: 8px; }
+.wt-note { color: #8f96a3; font-size: 11px; line-height: 1.5; margin-top: 8px; }
 /* Bottom-left dock: the change list stacked above the hint.
    Deliberately NOT the right column - the properties panel lives there and a
    right-hand list overlapped it on laptop-height windows, painting over Reset and
