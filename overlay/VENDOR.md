@@ -30,6 +30,9 @@ any upgrade:
 sha256sum overlay/interact.min.js
 ```
 
+`tests/test_vendor_integrity.py` enforces it in the stdlib suite: it fails if the file's
+sha256 differs from the row above, or if its banner version differs from the Version row.
+
 **On upgrading.** Fetch the release artefact from the upstream repo or npm, diff the
 banner version, record the new hash here in the same commit, and re-run the browser
 suite - `tests/test_e2e_browser.py` and `tests/test_e2e_shape_draw.py` are the ones that
