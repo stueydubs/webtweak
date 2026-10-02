@@ -659,7 +659,25 @@
   // bands distinguishable by their actual min-width threshold instead.
   var UNBOUNDED_SPAN = 1e9;
 
+  // The window-independent half of a band is a pure function of the condition string,
+  // so it is parsed once. Only hand-typed conditions are unbounded, hence the clear.
+  var bandParts = {}, bandPartsCount = 0;
+  var BAND_PARTS_MAX = 300;
+
   function makeBand(condition) {
+    var p = bandParts[condition];
+    if (!p || !Object.prototype.hasOwnProperty.call(bandParts, condition)) {
+      p = bandPartsOf(condition);
+      if (bandPartsCount >= BAND_PARTS_MAX) { bandParts = {}; bandPartsCount = 0; }
+      bandParts[condition] = p;
+      bandPartsCount++;
+    }
+    return {
+      condition: condition, valid: p.valid, min: p.min, max: p.max,
+      previewable: p.previewable, label: p.label, span: p.span,
+    };
+  }
+  function bandPartsOf(condition) {
     var norm = normaliseRanges(condition);
     var min = condLength(norm, "min-width"), max = condLength(norm, "max-width");
     // matchMedia is the authority on both questions the Overlay cannot answer by
@@ -667,7 +685,6 @@
     // to "not all"), and whether it applies right now.
     var mq = window.matchMedia(condition);
     var b = {
-      condition: condition,
       valid: mq.media !== "not all",
       min: min,
       max: max,
@@ -675,7 +692,7 @@
       // if resizing the window can show it. `width` read as a length beside min/max.
       previewable: !!(min || max),
     };
-    b.label = min && max ? min.text + "–" + max.text
+    b.label = min && max ? min.text + "-" + max.text
       : max ? "≤" + max.text
       : min ? "≥" + min.text
       : condition;
@@ -688,7 +705,7 @@
   // taken at is exactly the thing that changes underneath it.
   function bandMatches(b) { return !!b && window.matchMedia(b.condition).matches; }
   function resizeHint(b) {
-    if (b.min && b.max) return "resize to " + b.min.text + "–" + b.max.text;
+    if (b.min && b.max) return "resize to " + b.min.text + "-" + b.max.text;
     if (b.max) return "resize under " + b.max.text;
     return "resize over " + b.min.text;
   }
@@ -714,13 +731,16 @@
   // saved patch after a reload. Without the second, a reload left a restored banded
   // edit applying with its band absent from the list, so it could not be returned to
   // and reverted without retyping the exact condition.
-  function rememberBand(condition) {
+  //
+  // `keys` is an optional Set of bandKeys already offered, which restore() builds once
+  // so a long batch does not re-walk every stylesheet per banded group.
+  function rememberBand(condition, keys) {
     var k = bandKey(condition);
     if (!k) return;
-    var offered = pageConditions().concat(manualBands).some(function (c) {
+    var offered = keys ? keys.has(k) : pageConditions().concat(manualBands).some(function (c) {
       return bandKey(c) === k;
     });
-    if (!offered) manualBands.push(condition);
+    if (!offered) { manualBands.push(condition); if (keys) keys.add(k); }
   }
 
   // The page's bands plus any typed by hand, deduped, narrowest first - so the list
@@ -921,6 +941,7 @@
   // changes (see refreshChanges). Declarations are `!important`: the base edit they
   // compete with is an inline style, which beats any class rule that isn't.
   var bandStyleEl = null;   // assigned once the bar is mounted
+  var bandStyleText = "";   // what bandStyleEl holds, so an identical rewrite is skipped
   var mqCounter = 0;
 
   function currentBand() { return scope ? scope.condition : ""; }
@@ -991,7 +1012,7 @@
     var conds = Object.keys(groups).sort(function (a, b) {
       return makeBand(b).span - makeBand(a).span;
     });
-    bandStyleEl.textContent = conds.map(function (cond) {
+    var text = conds.map(function (cond) {
       var body = groups[cond].map(function (g) {
         var decls = Object.keys(g.props).map(function (p) {
           return p + ": " + g.props[p] + " !important;";
@@ -1000,6 +1021,10 @@
       }).join("\n  ");
       return "@media " + cond + " {\n  " + body + "\n}";
     }).join("\n");
+    // Assigning textContent re-parses the sheet and restyles every match even when the
+    // text is unchanged.
+    if (text === bandStyleText) return;
+    bandStyleEl.textContent = bandStyleText = text;
   }
 
   // Read a control's value with THIS element's own override for `prop` at `band`
@@ -2126,7 +2151,7 @@
 
   // Replaced (and replaced-like) inline elements that DO honour width/height and
   // transform, unlike ordinary inline text boxes. Keyed by lowercase tagName
-  // (HTML elements have uppercase tagName, SVG/MathML elements have lowercase —
+  // (HTML elements have uppercase tagName, SVG/MathML elements have lowercase -
   // always compare via .toLowerCase() to match both).
   var REPLACED = { img: 1, svg: 1, video: 1, canvas: 1, iframe: 1, embed: 1,
     object: 1, picture: 1, input: 1, textarea: 1, select: 1, button: 1, audio: 1 };
@@ -3067,8 +3092,8 @@
   function attachInteract(el) {
     if (!window.interact) {
       status(window.__WEBTWEAK_INTERACT_ERR__
-        ? "interact.js failed to load — check browser console"
-        : "interact.js not ready — drag/resize unavailable", false);
+        ? "interact.js failed to load - check browser console"
+        : "interact.js not ready - drag/resize unavailable", false);
       return;
     }
     // Scale the resize grab-band to the element so small elements stay nudgeable.
@@ -3639,6 +3664,7 @@
         persisted = true;  // a saved batch exists on disk; a full revert must clear it
         missed = [];
         var n = 0, total = (batch.patches || []).length;
+        var offeredKeys = new Set(pageConditions().concat(manualBands).map(bandKey));
         (batch.patches || []).forEach(function (p) {
           // A create patch re-injects the shape via makeShape (it has no source element
           // to relocate); its stored id + changes reproduce it exactly (ADR-0002).
@@ -3696,7 +3722,7 @@
           Object.keys(p.media || {}).forEach(function (cond) {
             var group = p.media[cond] || {};
             if (!Object.keys(group).length) return;
-            rememberBand(cond);   // or the restored edit's band drops out of the picker
+            rememberBand(cond, offeredKeys);   // or the restored edit's band drops out of the picker
             Object.keys(group).forEach(function (prop) {
               ensureMqClass(e, el);
               targetMap(e, cond, true)[prop] = group[prop];
