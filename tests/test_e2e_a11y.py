@@ -87,3 +87,32 @@ def test_an_outside_click_does_not_take_focus_back(served, toggle, list_id):
         browser.close()
     assert hidden
     assert focused == "wt-w"
+
+
+# (toggle id, list id, the field's own text input)
+LISTS_WITH_INPUT = [
+    pytest.param("wt-ff-toggle", "wt-ff-list", "wt-ff", id="font-suggest"),
+    pytest.param("wt-scope-toggle", "wt-scope-list", "wt-scope-input", id="band-picker"),
+]
+
+
+@pytest.mark.parametrize("toggle, list_id, input_id", LISTS_WITH_INPUT)
+def test_escape_from_outside_the_list_leaves_focus_alone(served, toggle, list_id, input_id):
+    """The case the "focus was inside the list" guard exists for. The outside-click case
+    above never reaches it (that close does not go through the focus-returning path),
+    but Esc does: with the list open and focus moved back into the field's own input,
+    Esc still closes the list, and must not yank focus out of the field being typed in."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.click("#headline")
+        page.focus(f"#{toggle}")
+        page.keyboard.press("Enter")
+        assert not list_hidden(page, list_id)
+        page.focus(f"#{input_id}")
+        assert not list_hidden(page, list_id)   # moving focus alone does not close it
+        page.keyboard.press("Escape")
+        focused, hidden = active_id(page), list_hidden(page, list_id)
+        browser.close()
+    assert hidden   # Esc really took the dismiss path, so the guard was exercised
+    assert focused == input_id
