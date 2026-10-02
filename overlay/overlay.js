@@ -1400,7 +1400,7 @@
     // rather than presentational - the same reasoning as the declined panel controls.
     if (!btn || btn.disabled) return;
     pickBand(btn.dataset.condition);
-    closeSuggest(bandList, bandToggle);
+    dismissSuggest(bandList, bandToggle);
   });
   // `change`, not `input`: every keystroke of "(max-width: 6" is an invalid condition
   // on the way to a valid one, and warning about each would nag through a value the
@@ -2896,7 +2896,7 @@
       var value = item.dataset.value;
       input.value = value;
       writeControl(c, value);
-      closeSuggest(list, toggle);
+      dismissSuggest(list, toggle);
     });
   }
   function openSuggest(c, list, toggle) {
@@ -2963,6 +2963,16 @@
   function closeSuggest(list, toggle) {
     list.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
+  }
+  // Close a list the keyboard user is working inside (a pick, or Esc), and keep them
+  // where they were. The focused item button is hidden along with the list, and the
+  // browser's focus fixup would drop focus to <body>, so the next Tab would start again
+  // from the top of the bar. Only when focus is inside the list: an outside-click close
+  // has already moved focus somewhere the user chose, and must not take it back.
+  function dismissSuggest(list, toggle) {
+    var hadFocus = list.contains(document.activeElement);
+    closeSuggest(list, toggle);
+    if (hadFocus) toggle.focus();
   }
   // Close any open list on Esc, on a click outside it, and whenever the selection
   // changes - an open dropdown left hanging over the panel swallows clicks meant
@@ -3428,7 +3438,7 @@
       if (pendingShape) { exitPlaceMode(); status("placement cancelled"); return; }
       // An open suggestion list is what Esc dismisses first; the selection behind
       // it is not what the user was trying to leave.
-      if (root.querySelector(".wt-suggest-list:not([hidden])")) { closeAllSuggests(); return; }
+      if (root.querySelector(".wt-suggest-list:not([hidden])")) { eachOpenSuggest(dismissSuggest); return; }
       // The palette is not a `.wt-suggest` (it has its own lifecycle) but it is still
       // an open transient layer over the page, so Esc has to reach it. Without this
       // the only way to close it was to find the Shape button again - and on a wrapped
