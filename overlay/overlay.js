@@ -3903,7 +3903,9 @@
     // would otherwise stay live on a later chip that styles itself
     // cursor:default and does not look clickable.
     badge.onclick = null;
-    badgeLive.textContent = text || "";
+    // Only on a change: repaintBadge() runs on every selection and edit, and rewriting
+    // the same "N pending" into a live region can be announced again each time.
+    if (badgeLive.textContent !== (text || "")) badgeLive.textContent = text || "";
     if (!text) { badge.hidden = true; badge.textContent = ""; badge.title = ""; return; }
     badge.hidden = false;
     badge.textContent = text;

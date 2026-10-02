@@ -220,11 +220,16 @@ def test_the_chosen_alignment_is_pressed(served):
         assert pressed == {"left": "false", "center": "true",
                            "right": "false", "justify": "false"}
         assert page.locator("[data-align=center][aria-pressed=true]").count() == 1
-        # Reselecting repaints from the element, not from the last click.
+        # Reselecting repaints from the element, not from the last click. The headline
+        # is not centred, so a repaint that left Centre pressed would still count one.
         page.click("#headline")
-        shown = page.eval_on_selector_all(
-            "#wt-align button", "els => els.filter(e => e.getAttribute('aria-pressed') === 'true').length")
-        assert shown == 1
+        state = page.eval_on_selector_all(
+            "#wt-align button",
+            "els => els.map(e => [e.dataset.align, e.getAttribute('aria-pressed'),"
+            " e.classList.contains('on')])")
+        pressed = [a for a, p, _ in state if p == "true"]
+        assert len(pressed) == 1 and pressed != ["center"], state
+        assert all((p == "true") == on for _, p, on in state), state
         browser.close()
 
 
