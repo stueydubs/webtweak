@@ -37,12 +37,12 @@ SHIPPED_PROSE = ["README.md", "package.json", "LICENSE",
 SHIPPED_CODE = ["overlay/overlay.js", "overlay/overlay.css", "webtweak.js"]
 
 # U+2014 EM DASH and U+2013 EN DASH. This project writes " - " instead, everywhere a
-# user can see it. "â" is the leading pair both dashes decode to when UTF-8
+# user can see it. U+00E2 U+20AC is the leading pair both dashes decode to when UTF-8
 # is read as Windows-1252 - the form that actually reaches a reader, and the one a
 # grep for the real character misses.
 DASHES = {"—": "em dash",
           "–": "en dash",
-          "â": "mojibake dash (UTF-8 read as Windows-1252)"}
+          "\u00e2\u20ac": "mojibake dash (UTF-8 read as Windows-1252)"}
 
 
 def _package():
