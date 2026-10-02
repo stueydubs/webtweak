@@ -100,9 +100,9 @@ def _changes_summary(changes: dict) -> str:
     parts = []
     for k, v in changes.items():
         if k == "nudge" and isinstance(v, dict):
-            parts.append(f"nudge({v.get('dx')},{v.get('dy')})")  # surface drag magnitude
+            parts.append(_flat(f"nudge({v.get('dx')},{v.get('dy')})"))  # surface drag magnitude
         else:
-            parts.append(k)
+            parts.append(_flat(k))
     return ", ".join(parts)
 
 
@@ -118,7 +118,9 @@ def _fmt_condition(cond: str) -> str:
     # unquoted and readable. An empty/blank condition is quoted too - otherwise it
     # prints as a gap in the line and reads as a rendering fault rather than as what
     # it is, a group whose condition went missing.
-    return f'"{cond}"' if (not cond.strip() or any(c in cond for c in ';[]"')) else cond
+    quote = not cond.strip() or any(c in cond for c in ';[]"')
+    cond = _flat(cond)
+    return f'"{cond}"' if quote else cond
 
 
 def _media_summary(media: dict) -> str:
@@ -189,12 +191,15 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def _flat(v) -> str:
-    """A fingerprint field on one line: control characters print as their repr() escape.
+    """A file-sourced field on one line: control characters print as their repr() escape.
+
+    A lone surrogate prints as its `\\udXXX` escape too, so `print` cannot raise on it.
 
     Unlike `_term` this leaves an ordinary value, quotes and spaces included, untouched,
     because a fingerprint is free text rather than a fixed-shape token.
     """
-    return _CONTROL_RE.sub(lambda m: repr(m.group())[1:-1], _str(v))
+    s = _CONTROL_RE.sub(lambda m: repr(m.group())[1:-1], _str(v))
+    return s.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 def _describe(fp: dict) -> str:
@@ -389,7 +394,7 @@ def pending(args) -> None:
             # edit patches sends Claude hunting for an element that isn't there.
             is_create = p.get("op") == "create"
             if is_create:
-                lead = f"+ create {p.get('shape', 'shape')} ->"
+                lead = f"+ create {_flat(str(p.get('shape', 'shape')))} ->"
             else:
                 lead = "-"
             line = f"    {lead} {_describe(p.get('fingerprint') or {})}  [{_changes_summary(p.get('changes') or {})}]"
