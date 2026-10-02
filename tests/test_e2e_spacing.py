@@ -126,6 +126,130 @@ def test_the_link_toggle_writes_all_four_as_a_shorthand(served):
     assert changes(tmp) == {"padding": "12px"}
 
 
+def resolved_sides(recorded, prop="padding"):
+    """What a reader of the Patch ends up with on each side: replay the changes in
+    key order the way the stylesheet cascade (and rebuildInline) would, so a longhand
+    that survives after the shorthand wins over it."""
+    sides = {s: None for s in SIDES}
+    for key, value in recorded.items():
+        if key == prop:
+            sides = {s: value for s in SIDES}
+        elif key.startswith(prop + "-"):
+            sides[key[len(prop) + 1:]] = value
+    return [sides[s] for s in SIDES]
+
+
+def test_a_linked_write_after_a_per_side_write_wins_after_a_rebuild(served):
+    """Link 20px, unlink and set top 5px, link and set 30px. The preview shows 30px
+    all round, but the map keeps the key order of FIRST insertion, so a replay put
+    `padding-top: 5px` back after the shorthand and the top snapped back unprompted."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "20px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "5px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "30px")
+        before = spacing_of(page, ".card", "padding")
+        # Any rebuild of the element's inline style replays the whole map.
+        set_field(page, "#wt-fs", "21px")
+        after = spacing_of(page, ".card", "padding")
+        page.keyboard.press("Control+z")
+        page.keyboard.press("Control+y")
+        redone = spacing_of(page, ".card", "padding")
+        save(page)
+        browser.close()
+    assert before == ["30px"] * 4
+    assert after == ["30px"] * 4          # the failure: top snapped back to 5px here
+    assert redone == ["30px"] * 4
+    recorded = changes(tmp)
+    assert recorded["padding"] == "30px"
+    assert "padding-top" not in recorded  # nothing survives to contradict the shorthand
+    assert resolved_sides(recorded) == ["30px"] * 4
+
+
+def test_a_per_side_write_after_a_linked_write_wins_after_a_rebuild(served):
+    """The mirror: top first, then the shorthand, then top again. The map held top
+    ahead of the shorthand, so a replay let the shorthand overwrite the later top edit.
+    Top must stay at its last value through a rebuild, the other sides from the
+    shorthand."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        set_field(page, "#wt-padding-top", "5px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "30px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "6px")      # top again, after the shorthand
+        set_field(page, "#wt-fs", "21px")
+        after = spacing_of(page, ".card", "padding")
+        save(page)
+        browser.close()
+    assert after == ["6px", "30px", "30px", "30px"]
+    assert resolved_sides(changes(tmp)) == ["6px", "30px", "30px", "30px"]
+
+
+def test_undoing_a_linked_write_restores_the_per_side_edits_it_replaced(served):
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        set_field(page, "#wt-padding-top", "5px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "30px")
+        set_field(page, "#wt-padding-top", "31px")     # typing: still one undo step
+        linked = spacing_of(page, ".card", "padding")
+        page.keyboard.press("Control+z")
+        undone = spacing_of(page, ".card", "padding")
+        browser.close()
+    assert linked == ["31px"] * 4
+    assert undone == ["5px", "24px", "24px", "24px"]
+
+
+def test_a_linked_value_equal_to_the_top_baseline_is_not_a_revert(served):
+    """Authored `padding: 10px 20px`: top's baseline is 10px but left and right are
+    20px. Linked, typing 10px is a real request for 10px all round; comparing against
+    the first box alone dropped it and snapped left and right back to 20px."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        page.add_style_tag(content=".card { padding: 10px 20px; }")
+        select_card(page)
+        start = boxes(page, "padding")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "10px")
+        shown = boxes(page, "padding")
+        rendered = spacing_of(page, ".card", "padding")
+        save(page)
+        browser.close()
+    assert start == ["10px", "20px", "10px", "20px"]    # the fixture does differ per side
+    assert shown == ["10px"] * 4
+    assert rendered == ["10px"] * 4
+    assert changes(tmp) == {"padding": "10px"}
+
+
+def test_a_linked_value_equal_to_every_baseline_is_still_a_revert(served):
+    """The all-four rule must not break the true revert: .card is 24px on every side,
+    so linked 24px is putting it back and records nothing."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "40px")
+        set_field(page, "#wt-padding-top", "24px")
+        rendered = spacing_of(page, ".card", "padding")
+        page.click("#wt-save")
+        saved = page.eval_on_selector("#wt-status", "el => el.textContent")
+        browser.close()
+    assert rendered == ["24px"] * 4
+    assert saved == "nothing changed yet"
+
+
 def test_clearing_one_side_reverts_only_that_side(served):
     tmp, port = served
     with sync_playwright() as p:
