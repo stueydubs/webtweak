@@ -3057,6 +3057,19 @@
     };
   }
 
+  // A computed max-width/min-height as px, or null when it can't be resolved (none,
+  // auto, or a unit other than px and %). A percentage resolves against the parent's
+  // content width (or height) - the same containing block the cap itself uses.
+  function cssLimitPx(value, parent, horizontal) {
+    if (/px$/.test(value || "")) return parseFloat(value);
+    if (!/%$/.test(value || "") || !parent) return null;
+    var pcs = getComputedStyle(parent);
+    var box = horizontal
+      ? parent.clientWidth - parseFloat(pcs.paddingLeft) - parseFloat(pcs.paddingRight)
+      : parent.clientHeight - parseFloat(pcs.paddingTop) - parseFloat(pcs.paddingBottom);
+    return parseFloat(value) * box / 100;
+  }
+
   // interact's rect is border-box; convert to the element's own box model so the
   // recorded value matches the panel (content-box for content-box elements) and
   // the element doesn't jump by its padding+border on the first drag.
@@ -3077,6 +3090,12 @@
     // couldn't have changed.
     var cMaxW = cs.maxWidth;
     var cMinH = cs.minHeight;
+    // getComputedStyle keeps a percentage cap as a percentage, and parseFloat("100%")
+    // is 100 - so a plain `max-width: 100%` read as a 100px cap and got pinned on every
+    // resize past 100px. Resolve a percentage against the parent's content box (read
+    // here, before any write) so it only pins when it genuinely binds; px compares as is.
+    var maxWpx = cssLimitPx(cMaxW, el.parentElement, true);
+    var minHpx = cssLimitPx(cMinH, el.parentElement, false);
     w = Math.max(1, Math.round(w));
     h = Math.max(1, Math.round(h));
     el.style.width = w + "px";
@@ -3085,11 +3104,11 @@
     record(el, "height", h + "px");
     // If a stylesheet max-width/min-height would override the resize, pin it inline
     // so the element actually reaches the desired size.
-    if (cMaxW && cMaxW !== "none" && w > parseFloat(cMaxW)) {
+    if (maxWpx !== null && w > maxWpx) {
       el.style.maxWidth = w + "px";
       record(el, "max-width", w + "px");
     }
-    if (cMinH && cMinH !== "0px" && h < parseFloat(cMinH)) {
+    if (minHpx !== null && minHpx > 0 && h < minHpx) {
       el.style.minHeight = h + "px";
       record(el, "min-height", h + "px");
     }
@@ -3109,7 +3128,7 @@
     // Scale the resize grab-band to the element so small elements stay nudgeable.
     var margin = el.offsetHeight < 40 ? 4 : 10;
     // Gesture-batched undo: snapshot at start, push one batch at end.
-    var nudgePrev, resizePrev, movePrev, nudgeScale;
+    var nudgePrev, resizePrev, movePrev, nudgeScale, resizeScale;
     interact(el)
       .draggable({
         // a nudge is a CSS transform, which has no effect on non-replaced inline
@@ -3178,11 +3197,17 @@
         listeners: {
           start: function () {
             resizePrev = snapshotProps(el, RESIZE_PROPS);
+            // interact's rect is viewport px but resizeWrite writes CSS px, so divide by
+            // the parent scale as the grip path does. Once per gesture, like nudgeScale.
+            resizeScale = getParentScale(el);
             beginGesture(function () { pushGestureUndo(el, RESIZE_PROPS, resizePrev); });
           },
           end: finishGesture,
           move: function (event) {
-            resizeWrite(el, event.rect);
+            resizeWrite(el, {
+              width: event.rect.width / resizeScale.x,
+              height: event.rect.height / resizeScale.y,
+            });
             positionBox(selBox, el);
           },
         },
