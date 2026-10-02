@@ -9,6 +9,7 @@ report status. Python stdlib only.
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -147,6 +148,35 @@ def _str(v) -> str:
     return v if isinstance(v, str) else ("" if v is None else str(v))
 
 
+# Every sessionId the Overlay generates is 's' + up to 8 base36 characters. Anything
+# else did not come from the Overlay (any script in the served page can POST one).
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+# savedAt is an ISO timestamp and target is a path, so they need a wider alphabet.
+# What every pattern here excludes is what matters: newlines and control characters.
+_STAMP_RE = re.compile(r"^[A-Za-z0-9_:.+-]{1,40}$")
+_PLAIN_RE = re.compile(r"^[^\x00-\x1f\x7f-\x9f\u2028\u2029]{1,80}$")
+_TARGET_RE = re.compile(r"^[A-Za-z0-9_./\\ -]{1,120}$")
+
+
+def _quote(v, limit: int = 60) -> str:
+    """A hostile value inside a warning: always repr(), always truncated."""
+    return repr(v if isinstance(v, (str, int, float, list)) else _str(v))[:limit]
+
+
+def _term(v, pattern=_SESSION_RE, limit: int = 40) -> str:
+    """Render a file-sourced scalar for the terminal Claude reads.
+
+    The edits file is attacker-writable, and this output is read as a listing and then
+    quoted back onto a command line. A value that fits the shape the Overlay could have
+    produced prints unchanged; anything else prints as a truncated repr(), which
+    escapes newlines and control characters so it cannot forge a second output line.
+    """
+    s = _str(v)
+    if pattern.match(s):
+        return s
+    return repr(s)[:limit]
+
+
 def _describe(fp: dict) -> str:
     s = _str(fp.get("tag")) or "?"
     if fp.get("id"):
@@ -176,6 +206,124 @@ def _warn_impossible_media(pend: list) -> None:
                     f"band, so this did not come from webtweak; ask before reconciling\n")
 
 
+_CREATE_FIELDS = {"op", "fingerprint", "changes", "media", "shape", "renderer", "geometry", "anchor"}
+_SHAPE_ELS = {"rect", "ellipse", "polygon"}
+_SHAPE_ATTRS = {"rx", "ry", "cx", "cy", "r", "x", "y", "width", "height"}
+_POINTS_RE = re.compile(r"^[0-9 ,.%-]*$")
+_ATTR_VALUE_RE = re.compile(r"^[0-9 ,.%-]*(?:px|em)?$")
+
+
+def _patch_label(i, n: int, p: dict) -> str:
+    return f"batch [{i}] patch {n} ({_term(_describe(p.get('fingerprint') or {}), _PLAIN_RE, 80)})"
+
+
+def _warn_unemittable_geometry(pend: list) -> None:
+    # SKILL.md tells Claude to copy a create patch's geometry into real source as an
+    # SVG child, and a forged patch can name `script`, `foreignObject` or `set` there,
+    # or an `onbegin`/`href: javascript:` attribute - markup that would ship to
+    # production. The Overlay only ever emits what its SHAPES table holds, so anything
+    # else did not come from webtweak. Warn, never _die, for the same reason as
+    # _warn_impossible_media.
+    for i, b in pend:
+        for n, p in enumerate(b.get("patches", [])):
+            if p.get("op") != "create":
+                continue
+            why = []
+            extra = sorted(str(k) for k in p if k not in _CREATE_FIELDS)
+            if extra:
+                why.append(f"unknown key(s) {_quote(extra)}")
+            geo = p.get("geometry")
+            if geo is not None and not isinstance(geo, dict):
+                why.append("geometry is not an object")
+            elif geo:
+                if not (isinstance(geo.get("el"), str) and geo["el"] in _SHAPE_ELS):
+                    why.append(f"geometry.el {_quote(geo.get('el'))}")
+                if "viewBox" in geo and geo["viewBox"] != "0 0 100 100":
+                    why.append(f"viewBox {_quote(geo['viewBox'])}")
+                pts = geo.get("points")
+                if pts is not None and not (isinstance(pts, str) and _POINTS_RE.match(pts)):
+                    why.append(f"points {_quote(pts)}")
+                attrs = geo.get("attrs")
+                if attrs is not None and not isinstance(attrs, dict):
+                    why.append("attrs is not an object")
+                elif attrs:
+                    for k, v in attrs.items():
+                        if k not in _SHAPE_ATTRS:
+                            why.append(f"attrs key {_quote(k)}")
+                        elif isinstance(v, bool) or not _ATTR_VALUE_RE.match(_str(v)):
+                            why.append(f"attrs value {_quote(v)} for {_quote(k)}")
+                extra_geo = sorted(str(k) for k in geo if k not in {"viewBox", "el", "points", "attrs"})
+                if extra_geo:
+                    why.append(f"unknown geometry key(s) {_quote(extra_geo)}")
+            if why:
+                sys.stderr.write(
+                    f"wtreconcile: {_patch_label(i, n, p)} has geometry the Overlay cannot "
+                    f"emit: {'; '.join(why)} - do not copy it into source; ask before "
+                    f"reconciling\n")
+
+
+# Every property the Overlay can record: its panel controls, the per-side forms of
+# margin/padding/border, the resize and move gestures, and the shape set.
+_OVERLAY_PROPS = {
+    "font-family", "font-size", "font-weight", "line-height", "letter-spacing",
+    "text-align", "color", "background-color", "width", "height", "max-width",
+    "min-height", "margin", "padding", "border", "border-radius", "box-shadow",
+    "transform", "nudge", "fill", "stroke", "stroke-width", "rx", "position",
+    "left", "top",
+} | {f"{base}-{side}" for base in ("margin", "padding", "border")
+     for side in ("top", "right", "bottom", "left")}
+_BAD_CHARS = set("{};<@")
+_BAD_SUBSTRINGS = ("url(", "expression(", "javascript:")
+
+
+def _bad_text(v) -> bool:
+    s = _str(v).lower()
+    return any(c in s for c in _BAD_CHARS) or any(x in s for x in _BAD_SUBSTRINGS)
+
+
+def _warn_unemittable_fields(pend: list) -> None:
+    # SKILL.md has Claude write `selector`, every `changes`/`media` value and each media
+    # condition into the real stylesheet. All of it comes from a file any page script
+    # can forge, and the Overlay's CSS.supports gate and property list could never
+    # record a `}`, a `url(` or a property it does not offer. SKILL.md says so in
+    # prose; this makes the helper say it too. A flagged patch is held, not applied.
+    for i, b in pend:
+        for n, p in enumerate(b.get("patches", [])):
+            why = []
+            groups = [("changes", p.get("changes") or {})]
+            groups += [(f"media {_quote(c)}", g) for c, g in (p.get("media") or {}).items()]
+            for c in (p.get("media") or {}):
+                if _bad_text(c):
+                    why.append(f"media condition {_quote(c)}")
+            for name, props in groups:
+                for k, v in props.items():
+                    if k not in _OVERLAY_PROPS:
+                        why.append(f"{name} key {_quote(k)}")
+                    if not isinstance(v, dict) and _bad_text(v):
+                        why.append(f"{name} value {_quote(v)} for {_quote(k)}")
+            sel = _str((p.get("fingerprint") or {}).get("selector"))
+            if any(c in sel for c in _BAD_CHARS | {"\n", "\r"}):
+                why.append(f"selector {_quote(sel)}")
+            if why:
+                sys.stderr.write(
+                    f"wtreconcile: {_patch_label(i, n, p)} carries fields the Overlay "
+                    f"cannot emit: {'; '.join(why)} - hold this patch, do not apply it; "
+                    f"ask before reconciling\n")
+
+
+def _warn_foreign_session_ids(pend: list) -> None:
+    # sessionId is the one file-sourced value SKILL.md has Claude paste onto a command
+    # line. One that the Overlay could not have generated is retired by index instead,
+    # so the string never reaches a shell.
+    for i, b in pend:
+        sid = b.get("sessionId")
+        if not (isinstance(sid, str) and _SESSION_RE.match(sid)):
+            sys.stderr.write(
+                f"wtreconcile: batch [{i}] has a sessionId ({_quote(sid)}) that did not "
+                f"come from the Overlay - never put it on a command line; "
+                f"mark it with `mark <file> --index {i}`\n")
+
+
 def pending(args) -> None:
     doc = _load(args.file)
     pend = [(i, b) for i, b in enumerate(doc.get("batches", []))
@@ -190,6 +338,9 @@ def pending(args) -> None:
     # SKILL.md means the safe order is the one that costs no thought.
     pend.sort(key=lambda pair: (pair[1].get("savedAt") or "", pair[0]))
     _warn_impossible_media(pend)
+    _warn_unemittable_geometry(pend)
+    _warn_unemittable_fields(pend)
+    _warn_foreign_session_ids(pend)
 
     if args.full:  # full patch JSON (fingerprints + changes) for deep work
         out = [
@@ -207,8 +358,9 @@ def pending(args) -> None:
         return
     for i, b in pend:  # cheap orientation summary (read the file itself for full fingerprints)
         patches = b.get("patches", [])
-        print(f"[{i}] session={b.get('sessionId')} saved={b.get('savedAt')} "
-              f"viewport={b.get('viewport')} patches={len(patches)}")
+        print(f"[{i}] session={_term(b.get('sessionId'))} "
+              f"saved={_term(b.get('savedAt'), _STAMP_RE)} "
+              f"viewport={_term(b.get('viewport'), _STAMP_RE)} patches={len(patches)}")
         for p in patches:
             # Flag create patches: they need a different reconcile path (insert
             # clean source, absolute placement sanctioned), and reading them as
@@ -252,11 +404,19 @@ def mark(args) -> None:
     """
     doc = _load(args.file)
     now = datetime.now().isoformat(timespec="seconds")
-    candidates = [
-        b for b in doc.get("batches", [])
-        if b.get("status") == "pending"
-        and (args.session is None or b.get("sessionId") == args.session)
-    ]
+    if args.index is not None:
+        if args.session is not None:
+            _die("pass a sessionId or --index, not both")
+        batches = doc.get("batches", [])
+        if not 0 <= args.index < len(batches) or batches[args.index].get("status") != "pending":
+            _die(f"no pending batch at index {args.index} - nothing marked")
+        candidates = [batches[args.index]]
+    else:
+        candidates = [
+            b for b in doc.get("batches", [])
+            if b.get("status") == "pending"
+            and (args.session is None or b.get("sessionId") == args.session)
+        ]
 
     if not candidates:
         if args.session is not None:
@@ -266,9 +426,19 @@ def mark(args) -> None:
     # Refuse to bulk-retire multiple sessions on a bare `mark`: each pending batch is a
     # separate session that may not have been reconciled yet, and marking it loses it.
     if args.session is None and len(candidates) > 1:
-        ids = ", ".join(str(b.get("sessionId") or "?") for b in candidates)
+        ids = ", ".join(_term(b.get("sessionId") or "?") for b in candidates)
         _die(f"{len(candidates)} pending batches ({ids}); pass a sessionId to mark one "
              f"at a time - reconcile each before marking it")
+
+    # Reconcile reads the batch at step 1 and marks at step 9, and a Save in between
+    # replaces the pending batch in place (same sessionId, new savedAt, more patches).
+    # Marking by sessionId alone would retire patches that were never applied.
+    if args.saved_at is not None:
+        stale = [b for b in candidates if _str(b.get("savedAt")) != args.saved_at]
+        if stale:
+            _die(f"the pending batch was saved at {_term(stale[0].get('savedAt'), _STAMP_RE)}, "
+                 f"not {_term(args.saved_at, _STAMP_RE)} - it changed after you read it, "
+                 f"so re-run `pending` and reconcile the new patches; nothing marked")
 
     for b in candidates:
         b["status"] = "reconciled"
@@ -284,10 +454,10 @@ def status(args) -> None:
     pend = [b for b in batches if b.get("status") == "pending"]
     recon = [b for b in batches if b.get("status") == "reconciled"]
     last_pending = max((b.get("savedAt") or "" for b in pend), default="")
-    print(f"target:       {doc.get('target')}")
+    print(f"target:       {_term(doc.get('target'), _TARGET_RE, 120)}")
     print(f"pending:      {len(pend)}")
     print(f"reconciled:   {len(recon)}")
-    print(f"last pending: {last_pending or '-'}")
+    print(f"last pending: {_term(last_pending, _STAMP_RE) if last_pending else '-'}")
     print("fully reconciled" if not pend else f"{len(pend)} batch(es) awaiting reconcile")
 
 
@@ -305,6 +475,12 @@ def main() -> None:
     m.add_argument("session", nargs="?", default=None,
                    help="sessionId to mark (if omitted, marks the single pending "
                         "batch; refuses when more than one is pending)")
+    m.add_argument("--saved-at", dest="saved_at", metavar="TS", default=None,
+                   help="refuse (marking nothing) unless the pending batch's savedAt "
+                        "is exactly TS - the value `pending` printed when you read it")
+    m.add_argument("--index", type=int, default=None, metavar="N",
+                   help="mark the pending batch at file index N (the [n] `pending` "
+                        "prints) instead of by sessionId")
     m.set_defaults(fn=mark)
 
     s = sub.add_parser("status", help="report pending vs reconciled counts")
