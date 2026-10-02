@@ -2595,7 +2595,8 @@
     // A linked write has four baselines, not one: it is a revert only if the typed
     // value matches every box. Comparing against the first alone made `10px` on an
     // element authored `10px 20px` a silent no-op that snapped left and right back.
-    var same = [].concat(baseId).every(function (id) {
+    var shorthand = shorthandSide(c, prop);
+    var same = shorthand !== null ? isRevert(prop, raw, shorthand) : [].concat(baseId).every(function (id) {
       return isRevert(prop, raw, String(baselines[id]));
     });
     if (same) return revertSide(c, prop, baseId);
@@ -2614,6 +2615,25 @@
     positionBox(selBox, selectedEl);
   }
   function sideKeys(c) { return SIDES.map(function (s) { return sideProp(c, s); }); }
+  // Once a shorthand is recorded, a side's baseline is what the shorthand gives it, not
+  // the authored longhand: deleting the side's longhand replays the shorthand, so a
+  // typed value equal to the authored one is a real write and the shorthand's own
+  // value is the revert. Null when no shorthand is recorded or `prop` is not a side.
+  function shorthandSide(c, prop) {
+    var ent = edited.get(selectedEl);
+    if (prop === c.prop || !ent || ent.changes[c.prop] === undefined) return null;
+    var side = prop.slice(c.prop.length + 1);
+    // Removing one longhand from a style that declares the shorthand drops that whole
+    // side's expansion, so measure from the authored style plus every recorded change
+    // but this group's longhands - the others too, since `2em` follows a recorded font-size.
+    var skip = sideKeys(c);
+    return withTempStyle(selectedEl, function (s) {
+      s.cssText = ent.origStyle == null ? "" : ent.origStyle;
+      Object.keys(ent.changes).forEach(function (p) {
+        if (p !== "nudge" && !HOST_BY_PROP[p] && skip.indexOf(p) < 0) s.setProperty(p, ent.changes[p]);
+      });
+    }, function () { return String(c.read(getComputedStyle(selectedEl), side)); });
+  }
   // The shorthand write also removes the longhands, so they ride in the same undo
   // batch and one Undo restores the exact prior map. The batch is tagged so the
   // keystrokes of one typed value still collapse into a single step, which
@@ -2659,6 +2679,9 @@
     settleAfterRevert(null, function () {
       // Put the field(s) back to the value the element is rendering again.
       [].concat(baseId).forEach(function (id) { set(id, baselines[id]); });
+      // A shorthand left recorded still renders, so the side shows its value instead.
+      var shown = shorthandSide(c, prop);
+      if (shown !== null) set(baseId, shown);
     });
   }
 
