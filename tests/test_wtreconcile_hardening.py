@@ -118,6 +118,10 @@ def test_mark_agrees_with_pending_on_null_containers(tmp_path, shape):
 def test_reconciled_at_is_utc_whatever_the_local_zone(tmp_path):
     f = write(tmp_path, {"target": "page.html", "batches": [batch()]})
     env = dict(os.environ, TZ="Australia/Perth")
+    # Without tzdata the zone silently falls back to UTC and this test proves nothing.
+    zone = subprocess.run([sys.executable, "-c", "import time; print(time.strftime('%z'))"],
+                          capture_output=True, text=True, env=env).stdout.strip()
+    assert zone == "+0800", f"TZ=Australia/Perth not honoured (got {zone!r}); install tzdata"
     before = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
     assert run("mark", str(f), env=env).returncode == 0
     after = datetime.now(timezone.utc).replace(tzinfo=None)
