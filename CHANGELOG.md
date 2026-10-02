@@ -5,6 +5,48 @@ All notable changes to webtweak are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-10-02
+
+**A hardening pass on the reconcile hand-off, plus a round of Overlay fixes and accessibility.** It came from a seven-lens audit of the whole repo, filed as issues and burned down by unattended agents with every change gated on both test suites. The Patch contract and the edits-file format are unchanged, so 0.8.x edits files reconcile as before. Minor rather than patch because the reconcile helper gained two `mark` options and new warnings, and the bundled skill's steps changed to use them: re-run `webtweak --install-skill` after upgrading, or an installed copy will not know about the stale-batch guard.
+
+### Security
+
+- **The edits file can no longer be a symlink out of the served root.** A cloned repo could ship `<page>.webtweak.json` as a link to any JSON file on your disk, and `GET /__webtweak__/edits` would hand it to the page's own script. `serveEdits` and `handleSave` now resolve the real path and require it inside the real root. A refused read looks like a missing file, and a refused save is a clear 500. A missing edits file, or a link that stays inside the root, behaves as before.
+- **Temp files are created exclusively in both writers.** The server and `wtreconcile.py` wrote a predictable temp file beside the edits file and followed a planted symlink. Each now removes a stale temp and opens with `O_EXCL`.
+- **Reconcile prints a forged edits file safely.** Anything the file supplies (sessionId, savedAt, viewport, target, fingerprint fields, change keys, nudge values, media conditions, shape) is escaped before it reaches the terminal, so a newline can no longer fake an extra `pending` line or put a hostile string on a command line. A lone surrogate in any of them no longer crashes `pending` partway through the listing. The safe-value patterns now anchor at the true end of the string, because Python's `$` also matches before a trailing newline.
+- **`pending` warns about anything the Overlay cannot emit.** On stderr, in both modes, exit status unchanged: create geometry outside the Overlay's shapes and attributes, and selectors, property names, values and media conditions it could never record. The skill says a flagged patch is held, not applied.
+- **`mark` cannot retire a batch you re-saved.** `mark --saved-at` refuses when the batch changed after reconcile read it, and `mark --index N` retires a batch whose sessionId should not go on a command line.
+
+### Fixed
+
+- **The edits-change watcher fires through a symlinked page or `--root`.** It walked the raw root while the edits path was built from the real one, so any symlink component made it drop the edits file as churn.
+- **The Overlay boots on pages with accented or non-Latin filenames.** The injected target name went through a latin1 re-encode and no longer matched the URL, so the Overlay returned silently. Non-ASCII is now escaped.
+- **Linked and per-side spacing writes agree on which wins.** A shorthand write and a longhand write for the same side could replay in the wrong order and snap a side back with no user action. A linked write is now a revert only when all four sides match, and a linked revert drops the per-side edits with it. One Undo restores the exact prior state.
+- **Spacing compares against the recorded shorthand.** With `padding` recorded, typing a side's authored value used to be treated as a revert and the side kept rendering the shorthand. Clearing a side box now shows the value the side actually renders, including a relative shorthand such as `2em` after a font-size edit.
+- **Resizing no longer pins a percentage `max-width` as pixels.** A `max-width: 100%` was read as 100px and pinned on any resize past it. A percentage now resolves against the parent and pins only when it really binds.
+- **Edge-resize under a scaled ancestor.** The edge band used viewport pixels where the grips used CSS pixels, so inside `transform: scale(0.5)` the element jumped to half size on the first move.
+- **The reconcile helper survives bad input.** Null batches, patches and fingerprints read as absent, a truncated astral character no longer breaks `mark`, and `reconciledAt` is stamped in UTC to match the server's `savedAt`.
+
+### Accessibility
+
+- The status line and the reconcile badge are live regions, and the badge announces only on change.
+- Panel labels are tied to their controls, and repeated icon buttons carry the property in their name.
+- The shape palette exposes its open state, and alignment buttons and change-list rows expose their selected state.
+- Focus returns to the toggle when a suggestion or band list closes.
+- Muted text meets 4.5:1 contrast, and the panel's tiny buttons and resize grips have a 24px hit box. The grip squares look the same as before.
+
+### Changed
+
+- Less repeated work per edit on pages with media bands: the window-independent half of each band is computed once, the injected band stylesheet is rewritten only when its text changed, and a restore builds the offered conditions once.
+- The CLI usage line lists every flag, and a test holds it against the README flag table.
+- The shipped reconcile skill no longer names a private client or the maintainer's checkout path.
+- The Overlay's own strings use hyphens, not en or em dashes. The dash gate now reads the Overlay and server files as well, and its Windows-1252 key matches the form that actually reaches a reader.
+
+### Development
+
+- New tests for the server's HTTP guards (415, 405, Range, HEAD, symlink escape), the wtreconcile save path, the watcher (with positive controls), the failed-save flow and the beforeunload guard, plus a sha256 and version gate on the vendored `interact.min.js`. The browser suite shares one Chromium launch.
+- Unattended agent runs are set up under `.sandcastle/`. It is not part of the published package.
+
 ## [0.8.1] - 2026-08-02
 
 **What a review of 0.8.0 found, and a gate so the next one is found by a machine.**
@@ -927,7 +969,8 @@ before release rather than in use.
 - Reconcile skill (`reconcile/`) for folding captured patches into source CSS.
 - Published to npm; installable globally or runnable via `npx webtweak`.
 
-[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/stueydubs/webtweak/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/stueydubs/webtweak/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/stueydubs/webtweak/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/stueydubs/webtweak/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/stueydubs/webtweak/compare/v0.7.0...v0.7.1
