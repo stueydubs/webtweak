@@ -1,118 +1,252 @@
-"""Browser end-to-end test of keyboard focus around the suggestion and band lists.
+"""Browser e2e for the Overlay's accessibility surface (issue #56): live regions,
+control names, the shape palette's open state and selected state.
 
-The list items are real buttons, so a keyboard user reaches them with Tab and picks
-with Enter. Closing the list hides the focused item, and the browser's focus fixup
-then drops focus to <body> - the user loses their place and the next Tab starts again
-from the top of the bar. The Overlay hands focus back to the list's toggle instead.
-Driven with the keyboard only, the way the user it protects works.
+Every assertion here reads the DOM the way assistive tech does - roles, aria-*
+attributes and Playwright's role/label locators - rather than the colours and classes
+a sighted user sees, because the colours and classes were all that existed before.
 """
 
-import pytest
-
-from conftest import open_page
+from conftest import edit, open_page, save
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
-# (toggle id, list id) - the Font field's suggestions, and the band picker in the bar
-LISTS = [
-    pytest.param("wt-ff-toggle", "wt-ff-list", id="font-suggest"),
-    pytest.param("wt-scope-toggle", "wt-scope-list", id="band-picker"),
-]
+LIVE = ("polite", "assertive")
 
 
-def active_id(page):
-    return page.evaluate("document.activeElement.id || document.activeElement.tagName")
+def live_attr(page, selector):
+    """The role and aria-live of the element, and of every ancestor up to the root."""
+    return page.evaluate(
+        """sel => {
+            const out = [];
+            for (let el = document.querySelector(sel); el; el = el.parentElement) {
+                out.push([el.getAttribute('role'), el.getAttribute('aria-live')]);
+            }
+            return out;
+        }""", selector)
 
 
-def list_hidden(page, list_id):
-    return page.eval_on_selector(f"#{list_id}", "el => el.hidden")
+def is_live(pairs):
+    return any(r == "status" or l in LIVE for r, l in pairs)
 
 
-def open_by_keyboard(page, toggle, list_id):
-    """Select an element, focus the toggle, open its list with Enter and Tab to the
-    first item. Guards that focus really is on an item inside the open list, so the
-    assertions after it cannot pass vacuously from focus never having left the toggle.
-    """
-    page.click("#headline")
-    page.focus(f"#{toggle}")
-    page.keyboard.press("Enter")
-    assert not list_hidden(page, list_id)
-    page.keyboard.press("Tab")
-    assert page.evaluate(
-        "id => document.getElementById(id).contains(document.activeElement)", list_id
-    )
+# --- part 1: live regions ----------------------------------------------------------
 
-
-@pytest.mark.parametrize("toggle, list_id", LISTS)
-def test_picking_an_item_returns_focus_to_the_toggle(served, toggle, list_id):
-    tmp, port = served
+def test_status_is_a_live_region_before_any_message(served):
+    """A region added alongside its first message is not announced, so it has to be
+    live from mount - before anything has been said."""
+    _, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        open_by_keyboard(page, toggle, list_id)
-        page.keyboard.press("Enter")
-        focused, hidden = active_id(page), list_hidden(page, list_id)
+        assert page.eval_on_selector("#wt-status", "el => el.textContent") == ""
+        assert is_live(live_attr(page, "#wt-status"))
         browser.close()
-    assert hidden
-    assert focused == toggle
 
 
-@pytest.mark.parametrize("toggle, list_id", LISTS)
-def test_escape_returns_focus_to_the_toggle(served, toggle, list_id):
-    tmp, port = served
+def test_a_refused_scope_is_said_in_the_live_region(served):
+    _, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        open_by_keyboard(page, toggle, list_id)
+        page.fill("#wt-scope-input", "garbage")
+        page.dispatch_event("#wt-scope-input", "change")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.includes('not a media condition')")
+        assert is_live(live_attr(page, "#wt-status"))
+        assert "not a media condition" in page.text_content("#wt-status")
+        browser.close()
+
+
+def test_the_badge_text_change_on_save_is_in_a_live_region(served):
+    _, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        assert is_live(live_attr(page, "#wt-badge-live"))
+        assert page.eval_on_selector("#wt-badge-live", "el => el.textContent") == ""
+        edit(page, "#headline", "#wt-fs", "40")
+        save(page)
+        page.wait_for_function(
+            "document.getElementById('wt-badge').textContent.trim() !== ''")
+        shown = page.text_content("#wt-badge").strip()
+        # The mirror says what the badge says, and the region it is in is live.
+        assert page.text_content("#wt-badge-live").strip() == shown
+        assert is_live(live_attr(page, "#wt-badge-live"))
+        browser.close()
+
+
+# --- part 2: names -----------------------------------------------------------------
+
+def select_paragraph(page):
+    page.click("p.lede")
+    page.wait_for_selector("#wt-panel:not([hidden])")
+
+
+def accessible_names(page, selector):
+    return page.evaluate(
+        """sel => Array.from(document.querySelectorAll(sel)).map(el =>
+            el.getAttribute('aria-label') || el.title ||
+            (el.labels && el.labels.length ? el.labels[0].textContent : '') ||
+            el.textContent.trim())""", selector)
+
+
+def test_every_panel_control_has_a_unique_name(served):
+    _, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_paragraph(page)
+        names = accessible_names(page, "#wt-panel input, #wt-panel select, #wt-panel textarea")
+        assert len(names) > 25, "the panel shrank, or the selector stopped matching"
+        assert all(names), names
+        assert len(set(names)) == len(names), sorted(names)
+        # Shape-only controls are in the panel markup whether or not they are shown.
+        panel = page.locator("#wt-panel")
+        assert panel.get_by_label("Border Width").count() == 1
+        assert panel.get_by_label("Box Width").count() == 1
+        browser.close()
+
+
+def test_a_declined_control_keeps_its_property_as_its_name(served):
+    """A decline rule puts a tooltip on the control, and the title becomes the name when
+    nothing else names it. aria-label has to win."""
+    _, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_paragraph(page)
+        page.evaluate("document.getElementById('wt-w').title = 'width/height are ignored'")
+        assert page.locator("#wt-panel").get_by_role(
+            "textbox", name="Box Width", exact=True).count() == 1
+        browser.close()
+
+
+def test_repeated_buttons_name_their_property(served):
+    _, port = served
+    generic = {"Increase", "Decrease", "Undo this property", "Suggestions",
+               "Link all four sides"}
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_paragraph(page)
+        for sel in ("#wt-panel .wt-revert", "#wt-panel .wt-step-btns button",
+                    "#wt-panel .wt-suggest-toggle", "#wt-panel .wt-link"):
+            names = accessible_names(page, sel)
+            assert names, sel
+            assert not generic & set(names), (sel, names)
+            assert len(set(names)) == len(names), (sel, names)
+        assert page.locator("#wt-panel").get_by_role(
+            "button", name="Increase Width").count() == 1
+        assert page.locator("#wt-panel").get_by_role(
+            "button", name="Link all Margin sides").count() == 1
+        browser.close()
+
+
+# --- part 3: the shape palette -----------------------------------------------------
+
+def expanded(page):
+    return page.get_attribute("#wt-shape-btn", "aria-expanded")
+
+
+def palette_open(page):
+    page.click("#wt-shape-btn")
+    assert expanded(page) == "true"
+    assert page.eval_on_selector("#wt-palette", "el => el.hidden") is False
+
+
+def test_palette_state_follows_every_way_it_closes(served):
+    _, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        assert expanded(page) == "false"
+
+        palette_open(page)
+        page.click("#wt-shape-btn")                       # second click
+        assert expanded(page) == "false"
+
+        palette_open(page)
         page.keyboard.press("Escape")
-        focused, hidden = active_id(page), list_hidden(page, list_id)
-        selected_tag = page.inner_text("#wt-seltag")
+        assert expanded(page) == "false"
+
+        palette_open(page)
+        page.mouse.click(600, 600)                        # a page click
+        assert expanded(page) == "false"
+
+        palette_open(page)
+        page.click('.wt-shape-item[data-shape="square"]')  # enters place mode
+        assert expanded(page) == "false"
+        assert page.eval_on_selector("#wt-palette", "el => el.hidden") is True
         browser.close()
-    assert hidden
-    assert focused == toggle
-    assert selected_tag   # Esc dismissed the list, not the selection behind it
 
 
-@pytest.mark.parametrize("toggle, list_id", LISTS)
-def test_an_outside_click_does_not_take_focus_back(served, toggle, list_id):
-    """Only a close from inside the list restores focus. Clicking another field closes
-    the list too, and the user's choice of where to go next must stand."""
-    tmp, port = served
+def test_palette_state_follows_peek(served):
+    _, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        page.click("#headline")
-        page.focus(f"#{toggle}")
-        page.keyboard.press("Enter")
-        assert not list_hidden(page, list_id)
-        page.click("#wt-w")
-        focused, hidden = active_id(page), list_hidden(page, list_id)
+        palette_open(page)
+        page.keyboard.press("h")
+        page.wait_for_function(
+            "document.getElementById('wt-root').classList.contains('wt-peek')")
+        assert expanded(page) == "false"
         browser.close()
-    assert hidden
-    assert focused == "wt-w"
 
 
-# (toggle id, list id, the field's own text input)
-LISTS_WITH_INPUT = [
-    pytest.param("wt-ff-toggle", "wt-ff-list", "wt-ff", id="font-suggest"),
-    pytest.param("wt-scope-toggle", "wt-scope-list", "wt-scope-input", id="band-picker"),
-]
-
-
-@pytest.mark.parametrize("toggle, list_id, input_id", LISTS_WITH_INPUT)
-def test_escape_from_outside_the_list_leaves_focus_alone(served, toggle, list_id, input_id):
-    """The case the "focus was inside the list" guard exists for. The outside-click case
-    above never reaches it (that close does not go through the focus-returning path),
-    but Esc does: with the list open and focus moved back into the field's own input,
-    Esc still closes the list, and must not yank focus out of the field being typed in."""
-    tmp, port = served
+def test_palette_items_are_named_by_shape(served):
+    _, port = served
     with sync_playwright() as p:
         browser, page = open_page(p, port)
-        page.click("#headline")
-        page.focus(f"#{toggle}")
-        page.keyboard.press("Enter")
-        assert not list_hidden(page, list_id)
-        page.focus(f"#{input_id}")
-        assert not list_hidden(page, list_id)   # moving focus alone does not close it
-        page.keyboard.press("Escape")
-        focused, hidden = active_id(page), list_hidden(page, list_id)
+        palette_open(page)
+        kinds = page.eval_on_selector_all(
+            ".wt-shape-item", "els => els.map(e => e.dataset.shape)")
+        assert len(kinds) >= 5
+        for kind in kinds:
+            name = kind[0].upper() + kind[1:]
+            assert page.get_by_role("button", name=name, exact=True).count() == 1, name
+        assert page.eval_on_selector_all(
+            ".wt-shape-item svg", "els => els.map(e => e.getAttribute('aria-hidden'))"
+        ) == ["true"] * len(kinds)
+        assert page.get_attribute("#wt-shape-btn", "aria-controls") == "wt-palette"
+        assert page.get_attribute("#wt-palette", "role") == "group"
+        assert page.get_attribute("#wt-palette", "aria-label") == "Shapes"
         browser.close()
-    assert hidden   # Esc really took the dismiss path, so the guard was exercised
-    assert focused == input_id
+
+
+# --- part 4: selected state --------------------------------------------------------
+
+def test_the_chosen_alignment_is_pressed(served):
+    _, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_paragraph(page)
+        assert page.get_attribute("#wt-align", "role") == "group"
+        page.click('#wt-align [data-align="center"]')
+        pressed = page.eval_on_selector_all(
+            "#wt-align button",
+            "els => Object.fromEntries(els.map(e => [e.dataset.align, e.getAttribute('aria-pressed')]))")
+        assert pressed == {"left": "false", "center": "true",
+                           "right": "false", "justify": "false"}
+        assert page.locator("[data-align=center][aria-pressed=true]").count() == 1
+        # Reselecting repaints from the element, not from the last click. The headline
+        # is not centred, so a repaint that left Centre pressed would still count one.
+        page.click("#headline")
+        state = page.eval_on_selector_all(
+            "#wt-align button",
+            "els => els.map(e => [e.dataset.align, e.getAttribute('aria-pressed'),"
+            " e.classList.contains('on')])")
+        pressed = [a for a, p, _ in state if p == "true"]
+        assert len(pressed) == 1 and pressed != ["center"], state
+        assert all((p == "true") == on for _, p, on in state), state
+        browser.close()
+
+
+def test_the_selected_change_row_is_current(served):
+    _, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "40")
+        edit(page, "p.lede", "#wt-fs", "22")
+        page.click("#wt-changes-head")
+        rows = page.locator(".wt-change")
+        assert rows.count() == 2
+        page.click("#headline")
+        current = page.eval_on_selector_all(
+            ".wt-change", "els => els.map(e => e.getAttribute('aria-current'))")
+        assert current.count("true") == 1 and len(current) == 2, current
+        assert page.locator(".wt-change.on[aria-current=true]").count() == 1
+        page.click("#wt-deselect")
+        assert page.locator(".wt-change[aria-current]").count() == 0
+        browser.close()

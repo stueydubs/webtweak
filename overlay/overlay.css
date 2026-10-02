@@ -308,6 +308,12 @@ html { user-select: none; }
   .wt-hint-long { display: none; }
   .wt-hint-short { display: inline; }
 }
+/* A live region for assistive tech only. Absolutely positioned inside the fixed bar, so it
+   is not a flex item and cannot change the bar's measured height or wrapping. */
+.wt-sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
 /* Reconcile state: where this session's changes have got to in the loop. */
 .wt-badge {
   appearance: none;

@@ -1220,11 +1220,16 @@
     '     title="This page\'s breakpoints">&#9662;</button>',
     '    <ul class="wt-suggest-list wt-band-list" id="wt-scope-list" hidden></ul>',
     "  </span>",
-    '  <span class="wt-status" id="wt-status"></span>',
+    '  <span class="wt-status" id="wt-status" role="status"></span>',
     '  <button class="wt-badge" id="wt-badge" hidden></button>',
+    // The badge is a button, so role="status" on it would replace the role a "reload"
+    // chip needs. Its text is mirrored here instead, into a region that is in the DOM
+    // from mount and takes no layout (see .wt-sr-only), so a later change is announced.
+    '  <span class="wt-sr-only" id="wt-badge-live" role="status"></span>',
     '  <div class="wt-shapes" id="wt-shapes">',
-    '    <button class="wt-btn" id="wt-shape-btn">Shape ▾</button>',
-    '    <div class="wt-palette" id="wt-palette" hidden></div>',
+    '    <button class="wt-btn" id="wt-shape-btn" aria-expanded="false"' +
+    '     aria-controls="wt-palette" aria-haspopup="true">Shape ▾</button>',
+    '    <div class="wt-palette" id="wt-palette" role="group" aria-label="Shapes" hidden></div>',
     "  </div>",
     // History was invisible: the only mention of undo was a sentence in the hint bar,
     // and the only feedback a status line after the user had already lost their place.
@@ -1290,9 +1295,8 @@
     // role="status" because peek is otherwise silent: pressing H takes 93 controls out
     // of the accessibility tree at once, and this note is the only thing that replaces
     // them. Without a live region a screen-reader user gets no announcement and then
-    // finds the entire editor gone. It is the Overlay's FIRST live region - #wt-status
-    // has never had one either, so saves and errors are announced nowhere; that is a
-    // wider gap than this note and is not fixed here.
+    // finds the entire editor gone. It was the Overlay's first live region; #wt-status
+    // and #wt-badge-live followed.
     // Esc is named as well as H: both end a peek, and offering only one of them made
     // the note say less than it knew.
     '<div class="wt-peek-note" id="wt-peek-note" role="status" hidden>Peeking - <b>click</b> any element to select it, or press <b>H</b> or <b>Esc</b></div>',
@@ -1443,12 +1447,21 @@
     btn.title = capitalise(kind) +
       " - click me, then drag on the page to draw, or drag me straight onto the page";
     btn.setAttribute("draggable", "true");   // also draggable straight onto the page
+    btn.setAttribute("aria-label", capitalise(kind));
     btn.innerHTML = paletteIcon(kind);
+    btn.firstChild.setAttribute("aria-hidden", "true");
     palette.appendChild(btn);
   });
   var shapeBtn = document.getElementById("wt-shape-btn");
+  // The one place the palette opens or closes, so aria-expanded cannot drift from
+  // `hidden` the way it would if Esc, peek, an outside click and place mode each
+  // flipped the attribute themselves.
+  function setPalette(open) {
+    palette.hidden = !open;
+    shapeBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
   shapeBtn.addEventListener("click", function () {
-    palette.hidden = !palette.hidden;
+    setPalette(palette.hidden);
   });
   // Close on a click anywhere else, the way every other transient layer here behaves.
   // The palette is not a `.wt-suggest`, so closeAllSuggests does not sweep it, and its
@@ -1460,7 +1473,7 @@
   document.addEventListener("click", function (ev) {
     if (palette.hidden) return;
     if (palette.contains(ev.target) || shapeBtn.contains(ev.target)) return;
-    palette.hidden = true;
+    setPalette(false);
   }, true);
   palette.addEventListener("click", function (ev) {
     var btn = ev.target.closest(".wt-shape-item");
@@ -1500,7 +1513,7 @@
     status("drag to draw the " + kind);
   }
   function showPlaceModeUI() {
-    palette.hidden = true;
+    setPalette(false);
     placeHint.hidden = false;
     document.documentElement.classList.add("wt-placing");
   }
@@ -1656,6 +1669,12 @@
     parts.push("</div>");
     return parts.join("\n");
   }
+  // One name per control, built from group and label because Width, Radius and Colour
+  // each repeat across groups. The visible label stays as it was. Buttons name their
+  // property as `label (group)`, not `group label`: the field is what a button acts on,
+  // and a button named "Border Width" would also answer a lookup for the field itself.
+  function ctrlName(c) { return c.group + " " + c.label; }
+  function ctrlBtnName(c) { return c.label + " (" + c.group + ")"; }
   function controlMarkup(c) {
     // 0 is meaningful for box sizes and shape props (stroke-width 0 = no border, rx 0 =
     // sharp corners); other numbers (font-size) floor at 1. `min` on the control
@@ -1663,15 +1682,16 @@
     // 0 (corner radius).
     if (c.kind === "number") {
       var min = c.min === undefined ? (c.box || c.shapeOnly ? 0 : 1) : c.min;
-      return '<input type="number" id="' + c.id + '" min="' + min + '"> px';
+      return '<input type="number" id="' + c.id + '" min="' + min + '" aria-label="' +
+        ctrlName(c) + '"> px';
     }
     if (c.kind === "color") return colourField(c);
-    if (c.kind === "select") return select(c.id, c.opts);
+    if (c.kind === "select") return select(c.id, c.opts, ctrlName(c));
     if (c.kind === "align") return alignButtons(c.id);
     if (c.suggest) return suggestField(c);
     if (c.step) return stepperField(c);
     if (c.kind === "sides") return sidesField(c);
-    return '<input type="text" id="' + c.id + '">';
+    return '<input type="text" id="' + c.id + '" aria-label="' + ctrlName(c) + '">';
   }
   // Top/right/bottom/left on one row, plus a link toggle for "the same on all sides",
   // which is the one thing the old single box did well. Four boxes on the SAME row
@@ -1681,10 +1701,10 @@
     return '<span class="wt-sides">' +
       SIDES.map(function (s) {
         return '<input type="text" id="' + c.id + "-" + s + '" title="' +
-          capitalise(s) + '" aria-label="' + c.label + " " + s + '">';
+          capitalise(s) + '" aria-label="' + ctrlName(c) + " " + s + '">';
       }).join("") +
       '<button class="wt-link" id="' + c.id + '-link" type="button" aria-pressed="false"' +
-      ' title="Link all four sides">&#128279;</button>' +
+      ' title="Link all four sides" aria-label="Link all ' + c.label + ' sides">&#128279;</button>' +
       "</span>";
   }
   // The swatch keeps the control's own id (so it stays the value the write path reads)
@@ -1692,9 +1712,9 @@
   // you cannot read what the element currently is, and you cannot paste a brand hex.
   function colourField(c) {
     return '<span class="wt-colour">' +
-      '<input type="color" id="' + c.id + '">' +
+      '<input type="color" id="' + c.id + '" aria-label="' + ctrlName(c) + ' swatch">' +
       '<input type="text" id="' + c.id + '-hex" spellcheck="false"' +
-      ' aria-label="' + c.label + ' hex" placeholder="#000000">' +
+      ' aria-label="' + ctrlName(c) + ' hex" placeholder="#000000">' +
       "</span>";
   }
   // A text input with up/down buttons. The input stays free text, so a keyword or a
@@ -1702,10 +1722,12 @@
   // addition to the field, not a replacement for it.
   function stepperField(c) {
     return '<span class="wt-stepper">' +
-      '<input type="text" id="' + c.id + '">' +
+      '<input type="text" id="' + c.id + '" aria-label="' + ctrlName(c) + '">' +
       '<span class="wt-step-btns">' +
-      '<button id="' + c.id + '-up" type="button" title="Increase" aria-label="Increase">&#9650;</button>' +
-      '<button id="' + c.id + '-down" type="button" title="Decrease" aria-label="Decrease">&#9660;</button>' +
+      '<button id="' + c.id + '-up" type="button" title="Increase"' +
+      ' aria-label="Increase ' + ctrlBtnName(c) + '">&#9650;</button>' +
+      '<button id="' + c.id + '-down" type="button" title="Decrease"' +
+      ' aria-label="Decrease ' + ctrlBtnName(c) + '">&#9660;</button>' +
       "</span></span>";
   }
   // A text input plus a dropdown of suggestions - deliberately not a closed
@@ -1717,9 +1739,10 @@
   // have one - Font sits at the top and Shadow at the very bottom.
   function suggestField(c) {
     return '<span class="wt-suggest">' +
-      '<input type="text" id="' + c.id + '">' +
+      '<input type="text" id="' + c.id + '" aria-label="' + ctrlName(c) + '">' +
       '<button class="wt-suggest-toggle" id="' + c.id + '-toggle" type="button"' +
       ' aria-expanded="false" aria-controls="' + c.id + '-list"' +
+      ' aria-label="' + c.label + ' suggestions"' +
       ' title="' + (c.suggestTitle || "Suggestions") + '">&#9662;</button>' +
       '<ul class="wt-suggest-list" id="' + c.id + '-list" hidden></ul>' +
       "</span>";
@@ -1730,14 +1753,14 @@
   function field(c, control, extra) {
     return '  <div class="wt-field' + (extra || "") + '">' +
       '<button class="wt-revert" id="' + c.id + '-revert" type="button" hidden' +
-      ' title="Undo this property">&times;</button>' +
+      ' title="Undo this property" aria-label="Undo ' + ctrlBtnName(c) + '">&times;</button>' +
       "<label>" + c.label + "</label>" + control + "</div>";
   }
   // An option is a bare string when the value is what you want shown (a font weight,
   // a border style), or {value, label} when it is not - Rotate shows "45°" and writes
   // "45", and a degree sign in the value would have to be parsed back off.
-  function select(id, opts) {
-    return '<select id="' + id + '">' +
+  function select(id, opts, name) {
+    return '<select id="' + id + '" aria-label="' + name + '">' +
       opts.map(function (o) {
         var value = o && o.value !== undefined ? o.value : o;
         var label = o && o.label !== undefined ? o.label : o;
@@ -1746,10 +1769,10 @@
       "</select>";
   }
   function alignButtons(id) {
-    return '<div class="wt-align" id="' + id + '">' +
+    return '<div class="wt-align" id="' + id + '" role="group" aria-label="Text align">' +
       ALIGNMENTS.map(function (a) {
         return '<button type="button" data-align="' + a.value +
-          '" title="' + a.label + '">' + a.label + "</button>";
+          '" aria-pressed="false" title="' + a.label + '">' + a.label + "</button>";
       }).join("") + "</div>";
   }
 
@@ -2216,6 +2239,7 @@
       if (c.kind === "align") {
         Array.prototype.forEach.call(document.querySelectorAll("#" + c.id + " button"), function (b) {
           b.classList.toggle("on", b.dataset.align === shown);
+          b.setAttribute("aria-pressed", b.dataset.align === shown ? "true" : "false");
         });
       } else {
         set(c.id, shown);
@@ -2759,6 +2783,7 @@
         writeControl(c, btn.dataset.align);
         Array.prototype.forEach.call(node.querySelectorAll("button"), function (b) {
           b.classList.toggle("on", b === btn);
+          b.setAttribute("aria-pressed", b === btn ? "true" : "false");
         });
       });
     } else {
@@ -3469,7 +3494,7 @@
     // also clears the toggles' aria-expanded, which is why it is called rather than
     // hiding the lists directly.
     closeAllSuggests();
-    palette.hidden = true;
+    setPalette(false);
     // No blur here, deliberately. `visibility: hidden` makes the chrome non-focusable,
     // and the HTML focus fixup rule then resets focus to the body by itself - verified
     // in Chromium, and the reason the peek-focus test kills the `opacity: 0` mutation
@@ -3538,7 +3563,7 @@
       // the only way to close it was to find the Shape button again - and on a wrapped
       // bar it opened on top of the properties panel, so "find the button again" meant
       // working around a menu that was covering the thing you wanted to click.
-      if (!palette.hidden) { palette.hidden = true; return; }
+      if (!palette.hidden) { setPalette(false); return; }
       // Leaving the FIELD, before leaving the selection. Esc inside a text input
       // conventionally means "get me out of this input", and here it has to: the
       // guarded H branch tells the user to "press Esc first to peek", and without this
@@ -3953,7 +3978,9 @@
     Array.prototype.forEach.call(changesList.querySelectorAll(".wt-change"), function (btn) {
       // `&& btn.__wtEl` because a stranded row has no element: without it two rows
       // with nothing selected would both match on undefined and paint as selected.
-      btn.classList.toggle("on", !!btn.__wtEl && btn.__wtEl === selectedEl);
+      var on = !!btn.__wtEl && btn.__wtEl === selectedEl;
+      btn.classList.toggle("on", on);
+      if (on) btn.setAttribute("aria-current", "true"); else btn.removeAttribute("aria-current");
     });
   }
 
@@ -3970,6 +3997,7 @@
   // when the source under the page changes, so a reconcile lands visibly here.
 
   var badge = document.getElementById("wt-badge");
+  var badgeLive = document.getElementById("wt-badge-live");
   var offeredReason = null;  // 'unsaved' | 'pending' | 'vanished' while an offer stands
   var lastDoc = null;        // last edits doc we read, so the badge can repaint free
   var wasPending = false;    // our batch has been seen pending -> a later reconcile is news
@@ -3980,6 +4008,9 @@
     // would otherwise stay live on a later chip that styles itself
     // cursor:default and does not look clickable.
     badge.onclick = null;
+    // Only on a change: repaintBadge() runs on every selection and edit, and rewriting
+    // the same "N pending" into a live region can be announced again each time.
+    if (badgeLive.textContent !== (text || "")) badgeLive.textContent = text || "";
     if (!text) { badge.hidden = true; badge.textContent = ""; badge.title = ""; return; }
     badge.hidden = false;
     badge.textContent = text;
