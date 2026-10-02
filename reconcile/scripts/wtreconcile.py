@@ -118,8 +118,9 @@ def _fmt_condition(cond: str) -> str:
     # unquoted and readable. An empty/blank condition is quoted too - otherwise it
     # prints as a gap in the line and reads as a rendering fault rather than as what
     # it is, a group whose condition went missing.
+    quote = not cond.strip() or any(c in cond for c in ';[]"')
     cond = _flat(cond)
-    return f'"{cond}"' if (not cond.strip() or any(c in cond for c in ';[]"')) else cond
+    return f'"{cond}"' if quote else cond
 
 
 def _media_summary(media: dict) -> str:

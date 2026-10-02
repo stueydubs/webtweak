@@ -90,3 +90,12 @@ def test_ordinary_file_prints_exactly_as_before(tmp_path):
         '"(a: b[c];d)" [margin-top]; "" [gap]',
         "    + create ellipse -> svg  [width]",
     ]
+
+
+def test_blank_condition_with_a_control_character_stays_quoted(tmp_path):
+    # Escaping makes " \t" non-blank, so the quote decision has to be taken on the raw
+    # condition or a blank group prints as a gap again.
+    patches = [{"fingerprint": {"tag": "h1"}, "changes": {"color": "red"},
+                "media": {" \t": {"color": "blue"}, "\n": {"color": "green"}}}]
+    lines = pending(tmp_path, patches).stdout.splitlines()
+    assert lines[1] == '    - h1  [color]  media: " \\t" [color]; "\\n" [color]', lines
