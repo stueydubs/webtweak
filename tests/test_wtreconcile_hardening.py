@@ -87,6 +87,20 @@ def test_hostile_session_id_cannot_forge_a_listing_line(tmp_path):
     assert "did not come from the Overlay" in full.stderr
 
 
+def test_a_trailing_newline_is_not_a_conforming_value(tmp_path):
+    # Python's `$` also matches just before a final newline, so a pattern anchored
+    # with it let "s1\n" through as an Overlay sessionId: printed raw, no warning.
+    f = write(tmp_path, {"target": "page.html\n",
+                         "batches": [batch(session="s1\n", saved="2026-07-29T10:00:00\n")]})
+    r = run("pending", str(f))
+    assert len(r.stdout.splitlines()) == 2   # the batch line and its one patch line
+    assert "did not come from the Overlay" in r.stderr
+    assert len(run("status", str(f)).stdout.splitlines()) == 5
+    p = create(points="50,0 100,100 0,100\n")
+    for r in both_modes(tmp_path, p):
+        assert "geometry the Overlay cannot emit" in r.stderr
+
+
 def test_hostile_target_and_saved_at_are_escaped(tmp_path):
     f = write(tmp_path, {"target": "a.html\nfake: line",
                          "batches": [batch(saved="t\n[7] session=x")]})

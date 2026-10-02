@@ -150,12 +150,12 @@ def _str(v) -> str:
 
 # Every sessionId the Overlay generates is 's' + up to 8 base36 characters. Anything
 # else did not come from the Overlay (any script in the served page can POST one).
-_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+_SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}\Z")
 # savedAt is an ISO timestamp and target is a path, so they need a wider alphabet.
 # What every pattern here excludes is what matters: newlines and control characters.
-_STAMP_RE = re.compile(r"^[A-Za-z0-9_:.+-]{1,40}$")
-_PLAIN_RE = re.compile(r"^[^\x00-\x1f\x7f-\x9f\u2028\u2029]{1,80}$")
-_TARGET_RE = re.compile(r"^[A-Za-z0-9_./\\ -]{1,120}$")
+_STAMP_RE = re.compile(r"^[A-Za-z0-9_:.+-]{1,40}\Z")
+_PLAIN_RE = re.compile(r"^[^\x00-\x1f\x7f-\x9f\u2028\u2029]{1,80}\Z")
+_TARGET_RE = re.compile(r"^[A-Za-z0-9_./\\ -]{1,120}\Z")
 
 
 def _quote(v, limit: int = 60) -> str:
@@ -209,8 +209,8 @@ def _warn_impossible_media(pend: list) -> None:
 _CREATE_FIELDS = {"op", "fingerprint", "changes", "media", "shape", "renderer", "geometry", "anchor"}
 _SHAPE_ELS = {"rect", "ellipse", "polygon"}
 _SHAPE_ATTRS = {"rx", "ry", "cx", "cy", "r", "x", "y", "width", "height"}
-_POINTS_RE = re.compile(r"^[0-9 ,.%-]*$")
-_ATTR_VALUE_RE = re.compile(r"^[0-9 ,.%-]*(?:px|em)?$")
+_POINTS_RE = re.compile(r"^[0-9 ,.%-]*\Z")
+_ATTR_VALUE_RE = re.compile(r"^[0-9 ,.%-]*(?:px|em)?\Z")
 
 
 def _patch_label(i, n: int, p: dict) -> str:
