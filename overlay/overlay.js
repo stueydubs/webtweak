@@ -2597,8 +2597,15 @@
   function isRevert(prop, raw, baseline) { return raw.trim() === baseline.trim(); }
   function revertSide(c, prop, baseId) {
     var ent = edited.get(selectedEl);
-    if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
-    if (ent) delete ent.changes[prop];
+    // A linked revert puts every side back, so it drops recorded longhands too, or
+    // the earlier per-side edit would still render under four fields reading baseline.
+    var held = !ent ? [] : [prop].concat(prop === c.prop ? sideKeys(c) : [])
+      .filter(function (p) { return ent.changes[p] !== undefined; });
+    if (held.length === 1 && held[0] === prop) pushUndoWrite(selectedEl, prop);
+    else if (held.length) pushUndo(held.map(function (p) {
+      return { el: selectedEl, prop: p, prev: ent.changes[p] };
+    }));
+    held.forEach(function (p) { delete ent.changes[p]; });
     rebuildInline(selectedEl, ent);
     settleAfterRevert(null, function () {
       // Put the field(s) back to the value the element is rendering again.

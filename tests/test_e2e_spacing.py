@@ -250,6 +250,28 @@ def test_a_linked_value_equal_to_every_baseline_is_still_a_revert(served):
     assert saved == "nothing changed yet"
 
 
+def test_a_linked_revert_drops_the_per_side_edits_too(served):
+    """Top set to 5px, then linked 24px, which equals every baseline. That is a
+    revert, but of all four sides: leaving `padding-top: 5px` recorded kept the top
+    at 5px under four boxes reading 24px, the earlier per-side write winning."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        select_card(page)
+        set_field(page, "#wt-padding-top", "5px")
+        page.click("#wt-padding-link")
+        set_field(page, "#wt-padding-top", "24px")
+        rendered = spacing_of(page, ".card", "padding")
+        page.click("#wt-save")
+        saved = page.eval_on_selector("#wt-status", "el => el.textContent")
+        page.keyboard.press("Control+z")
+        undone = spacing_of(page, ".card", "padding")
+        browser.close()
+    assert rendered == ["24px"] * 4
+    assert saved == "nothing changed yet"
+    assert undone == ["5px", "24px", "24px", "24px"]   # one Undo brings the side back
+
+
 def test_clearing_one_side_reverts_only_that_side(served):
     tmp, port = served
     with sync_playwright() as p:
