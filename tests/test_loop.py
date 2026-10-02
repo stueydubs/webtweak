@@ -8,6 +8,7 @@ test_e2e_browser.
 
 import http.client
 import json
+import os
 import shutil
 import unittest
 
@@ -215,6 +216,20 @@ class LoopTests(unittest.TestCase):
         self.assertFalse(json.loads(body)["ok"])
         self.assertTrue(edits.is_dir())                         # untouched
         self.assertEqual(list(edits.iterdir()), [])
+        self.assertEqual(list(self.tmp.glob("*.bak")), [])      # NOT backed up
+
+    def test_unreadable_edits_file_on_save_is_not_overwritten(self):
+        # a read error must not be treated as "no file yet" either. The directory above
+        # cannot catch that: the atomic rename onto a directory fails too, so swallowing
+        # the read error still answers 500. A self-referencing symlink fails the read
+        # with ELOOP as any user, yet the rename would replace it, so overwriting shows.
+        edits = self.tmp / "sample.webtweak.json"
+        edits.symlink_to(edits.name)
+        status, body = self._post("/__webtweak__/save", self._save_payload())
+        self.assertEqual(status, 500)
+        self.assertFalse(json.loads(body)["ok"])
+        self.assertTrue(edits.is_symlink())                     # untouched
+        self.assertEqual(os.readlink(edits), edits.name)
         self.assertEqual(list(self.tmp.glob("*.bak")), [])      # NOT backed up
 
     def test_short_body_returns_400(self):
