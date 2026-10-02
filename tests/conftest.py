@@ -8,6 +8,7 @@ would have meant chasing three call sites.
 
 import json
 import shutil
+import sys
 
 import pytest
 
@@ -37,6 +38,18 @@ def _serve(name):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """Stop the session-wide Playwright that `_browser.sync_playwright` started.
+
+    Looked up through `sys.modules` rather than imported: `_browser` calls
+    `importorskip`, which must not run from conftest, where it would skip or error the
+    whole run on a machine without Playwright.
+    """
+    mod = sys.modules.get("_browser")
+    if mod is not None:
+        mod.stop_shared_playwright()
+
+
 @pytest.fixture
 def served():
     """A webtweak server serving a fresh copy of the sample fixture.
@@ -60,24 +73,22 @@ def open_page(playwright, port, name=SAMPLE, width=1280, height=900):
     `browser, page = open_page(...)` / `browser.close()` pair in the suite still reads
     and behaves correctly without being touched.
 
-    ONE Chromium per `sync_playwright()` block rather than one per call. A context is
-    a fresh cookie jar, storage and page, which is the isolation these tests actually
-    depend on, so the browser process is the part worth not paying for twice. Measured
-    here: first call 195ms, second 104ms - the 91ms difference is the launch, and the
-    remaining 104ms is page load and the `#wt-root` wait, which no amount of reuse
-    touches.
+    ONE Chromium per session rather than one per call. A context is a fresh cookie jar,
+    storage and page, which is the isolation these tests actually depend on, so the
+    browser process is the part worth not paying for twice. Measured here: first call
+    195ms, second 104ms - the 91ms difference is the launch, and the remaining 104ms is
+    page load and the `#wt-root` wait, which no amount of reuse touches.
 
-    Be honest about the size of it. `sync_playwright()` is entered per TEST, so the
-    cached browser dies with the test that made it: this helps a test that opens
-    several pages - the width sweeps, which is where the peek module's 70 opens across
-    39 tests came from - and does nothing at all for the majority that open one. Across
-    the whole suite the effect is inside run-to-run variance (470 tests/228.2s before,
-    475/231.2s after). Kept because it is strictly less work and costs no isolation,
-    NOT because it made the suite meaningfully faster. It did not.
+    This only pays across tests because `_browser.sync_playwright` yields one
+    session-wide Playwright, so the `_wt_browser` cached on it outlives each test's
+    `with` block. Against Playwright's own per-test `sync_playwright()` the cache died
+    with the test that made it and was inside run-to-run variance (470 tests/228.2s
+    before, 475/231.2s after).
 
-    Crash containment is the one thing given up: a browser that dies takes the rest of
-    that test's contexts with it. Playwright tears the browser down when the enclosing
-    `sync_playwright()` block exits, so a per-test blast radius is the worst case.
+    Crash containment is the one thing given up: a browser that dies takes every other
+    context with it, and the `is_connected()` check below relaunches it for the next
+    call. A test that needs a browser of its own opts out with
+    `sync_playwright(own=True)`.
     """
     browser = getattr(playwright, "_wt_browser", None)
     if browser is None or not browser.is_connected():

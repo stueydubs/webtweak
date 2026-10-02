@@ -6,7 +6,10 @@ depending on the user retyping them. Driven the way a user drives it - open the
 list, click an entry, save - and asserted on the rendered page and the Patches.
 """
 
+import shutil
+
 from conftest import changes, open_page, save, selected
+from _server import make_page, start, stop
 
 from _browser import sync_playwright, pytestmark  # noqa: F401
 
@@ -87,7 +90,7 @@ def test_suggestions_exclude_the_overlays_own_fonts(served):
     assert field and field not in entries      # its monospace fields too
 
 
-def test_unreadable_stylesheet_degrades_the_list(served):
+def test_unreadable_stylesheet_degrades_the_list():
     """The common case - a page whose display face comes from a hosted webfont -
     must leave the list populated from computed style rather than throwing.
 
@@ -95,10 +98,24 @@ def test_unreadable_stylesheet_degrades_the_list(served):
     localhost as well as 127.0.0.1, and that hostname difference is a different
     origin, so reading its rules raises the same SecurityError a CDN sheet does.
     """
-    tmp, port = served
+    # The server starts AFTER hosted.css is written, not before. Its watcher reloads
+    # every connected page for a change anywhere under the root, and the fs event for
+    # a file written beside a running server lands about when the page connects. A
+    # Chromium that had to be launched per test was slow enough to miss it; a shared
+    # one is not, and the page reloaded under the first evaluate.
+    tmp, page_path = make_page()
     (tmp / "hosted.css").write_text(
         '@font-face { font-family: "Hidden Face"; src: local("Hidden Face"); }\n'
     )
+    proc, port = start(page_path)
+    try:
+        _check_unreadable_stylesheet(tmp, port)
+    finally:
+        stop(proc)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _check_unreadable_stylesheet(tmp, port):
     with sync_playwright() as p:
         browser, page = open_page(p, port)
         loaded = page.evaluate(
