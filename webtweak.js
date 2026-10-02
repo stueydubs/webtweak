@@ -725,9 +725,10 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     realRoot:   fs.realpathSync(serveRoot),
     realTarget: fs.realpathSync(targetPath),
     // Derived from the REAL target path, to match what the watcher will see. The
-    // watcher walks serveRoot and builds each changed path from the directory it is
-    // watching, so with a symlinked --root (`--root /link` where /link -> /real/site)
-    // a path built from the raw target never `===` this one. classify() then fell
+    // watcher walks state.realRoot and builds each changed path from the directory
+    // it is watching. Were it handed the raw root, a symlinked --root or page
+    // directory (`--root /link` where /link -> /real/site) would have it build each
+    // path from the raw root, which never `===` this one. classify() then fell
     // through to the EDITS_SUFFIX test, decided the edits file was webtweak's own
     // churn, and dropped it - so marking a batch reconciled fired no edits-change and
     // the badge stayed at "N pending" for the rest of the session. Serving worked
@@ -746,7 +747,7 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
   // file is reported separately: reconcile writes source first and marks the
   // batch second, so the page needs to distinguish "source moved" from "my
   // batch was reconciled" to avoid re-applying a batch that is still pending.
-  const watcher = createWatcher(serveRoot, {
+  const watcher = createWatcher(state.realRoot, {
     contains: real => contained(real, state.realRoot),
     classify: full => classify(full, state.editsPath),
     onChange: (kind, changed) => {
