@@ -807,7 +807,8 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
 
 // --- CLI -------------------------------------------------------------------
 
-const USAGE = 'Usage: webtweak <page.html> [--port N] [--no-browser]';
+const USAGE = 'Usage: webtweak <page.html> [--root DIR] [--port N] [--no-browser]\n' +
+              '       webtweak --install-skill | --version | --help';
 
 const HELP = `webtweak ${VERSION} - a local visual editor for hand-coded HTML/CSS.
 
@@ -906,7 +907,7 @@ function main() {
     }
   }
 
-  if (!htmlFile) die(`path to an .html file is required\n${USAGE}`);
+  if (!htmlFile) die(`path to an .html file is required\n${USAGE}\nRun webtweak --help for options.`);
 
   const targetPath = path.resolve(htmlFile);
   let stat;
