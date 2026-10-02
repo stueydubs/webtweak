@@ -1,6 +1,6 @@
 # webtweak
 
-A local, open-source visual editor for hand-coded HTML/CSS pages. You manipulate an existing page visually (resize, restyle, nudge, change fonts); webtweak captures what changed as machine-readable patches; Claude reconciles those patches into the real source files and pushes. Built as a free alternative to paid visual editors like Pinegrow, for hand-coded editorial sites, exploiting the fact that a human-plus-Claude loop means the editor only has to *capture intent*, not flawlessly rewrite source.
+A local, open-source visual editor for hand-coded HTML/CSS pages. You manipulate an existing page visually (resize, restyle, nudge, change fonts); webtweak captures what changed as machine-readable patches; Claude reconciles those patches into the real source files (and pushes only if you ask). Built as a free alternative to paid visual editors like Pinegrow, for hand-coded editorial sites, exploiting the fact that a human-plus-Claude loop means the editor only has to *capture intent*, not flawlessly rewrite source.
 
 ## Language
 
