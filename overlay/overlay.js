@@ -2568,12 +2568,49 @@
     var probe = { prop: prop, box: false, shapeOnly: false, label: c.label };
     if (raw === "") return revertSide(c, prop, baseId);
     if (!accepts(probe, raw, raw)) return;
-    var baseline = String(typeof baseId === "string" ? baselines[baseId] : baselines[baseId[0]]);
-    if (isRevert(prop, raw, baseline)) return revertSide(c, prop, baseId);
-    pushUndoWrite(selectedEl, prop);
+    // A linked write has four baselines, not one: it is a revert only if the typed
+    // value matches every box. Comparing against the first alone made `10px` on an
+    // element authored `10px 20px` a silent no-op that snapped left and right back.
+    var same = [].concat(baseId).every(function (id) {
+      return isRevert(prop, raw, String(baselines[id]));
+    });
+    if (same) return revertSide(c, prop, baseId);
+    pushSpacingUndo(c, prop);
     applyChange(selectedEl, prop, raw);
+    var ent = edited.get(selectedEl);
+    // The last write wins in the DATA, not only on screen: rebuildInline replays the
+    // map in key order, and record() keeps a key's first position, so a longhand
+    // written before a later shorthand would replay after it and undo it. A shorthand
+    // drops its four longhands; a longhand is re-inserted so it sorts after any shorthand.
+    if (ent) {
+      if (prop === c.prop) sideKeys(c).forEach(function (k) { delete ent.changes[k]; });
+      else delete ent.changes[prop];
+    }
     record(selectedEl, prop, raw);
     positionBox(selBox, selectedEl);
+  }
+  function sideKeys(c) { return SIDES.map(function (s) { return sideProp(c, s); }); }
+  // The shorthand write also removes the longhands, so they ride in the same undo
+  // batch and one Undo restores the exact prior map. The batch is tagged so the
+  // keystrokes of one typed value still collapse into a single step, which
+  // pushUndoWrite cannot do for a multi-entry batch.
+  function pushSpacingUndo(c, prop) {
+    var ent = edited.get(selectedEl);
+    var ch = ent ? ent.changes : {};
+    var dropped = prop === c.prop ? sideKeys(c).filter(function (k) { return ch[k] !== undefined; }) : [];
+    var top = undoStack[undoStack.length - 1];
+    if (!dropped.length) {
+      if (top && !top.gesture && top.spacing === prop && top[0].el === selectedEl) {
+        redoStack.length = 0;
+        refreshHistory();
+        return;
+      }
+      return pushUndoWrite(selectedEl, prop);
+    }
+    var batch = [{ el: selectedEl, prop: prop, prev: ch[prop] }];
+    dropped.forEach(function (k) { batch.push({ el: selectedEl, prop: k, prev: ch[k] }); });
+    batch.spacing = prop;
+    pushUndo(batch);
   }
   // Is this write just putting the side back to what it already shows? Compared
   // LITERALLY, deliberately. Resolving both through the element first looks smarter -
@@ -2585,8 +2622,15 @@
   function isRevert(prop, raw, baseline) { return raw.trim() === baseline.trim(); }
   function revertSide(c, prop, baseId) {
     var ent = edited.get(selectedEl);
-    if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
-    if (ent) delete ent.changes[prop];
+    // A linked revert puts every side back, so it drops recorded longhands too, or
+    // the earlier per-side edit would still render under four fields reading baseline.
+    var held = !ent ? [] : [prop].concat(prop === c.prop ? sideKeys(c) : [])
+      .filter(function (p) { return ent.changes[p] !== undefined; });
+    if (held.length === 1 && held[0] === prop) pushUndoWrite(selectedEl, prop);
+    else if (held.length) pushUndo(held.map(function (p) {
+      return { el: selectedEl, prop: p, prev: ent.changes[p] };
+    }));
+    held.forEach(function (p) { delete ent.changes[p]; });
     rebuildInline(selectedEl, ent);
     settleAfterRevert(null, function () {
       // Put the field(s) back to the value the element is rendering again.
