@@ -714,8 +714,8 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     // Derived from the REAL target path, to match what the watcher will see. The
     // watcher walks state.realRoot and builds each changed path from the directory
     // it is watching. Were it handed the raw root, a symlinked --root or page
-    // directory (`--root /link` where /link -> /real/site) would build a path from
-    // the raw target that never `===` this one. classify() then fell
+    // directory (`--root /link` where /link -> /real/site) would have it build each
+    // path from the raw root, which never `===` this one. classify() then fell
     // through to the EDITS_SUFFIX test, decided the edits file was webtweak's own
     // churn, and dropped it - so marking a batch reconciled fired no edits-change and
     // the badge stayed at "N pending" for the rest of the session. Serving worked
