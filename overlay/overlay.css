@@ -553,9 +553,9 @@ html.wt-placing, html.wt-placing * { cursor: crosshair !important; }
   border-radius: 2px;
 }
 .wt-grip:hover::after { background: #ffe6a6; transform: scale(1.15); }
-.wt-grip-r { right: -12px; top: calc(50% - 11px); cursor: ew-resize; }
-.wt-grip-b { bottom: -12px; left: calc(50% - 11px); cursor: ns-resize; }
-.wt-grip-br { right: -12px; bottom: -12px; cursor: nwse-resize; }
+.wt-grip-r { right: -13px; top: calc(50% - 11px); cursor: ew-resize; }
+.wt-grip-b { bottom: -13px; left: calc(50% - 11px); cursor: ns-resize; }
+.wt-grip-br { right: -13px; bottom: -13px; cursor: nwse-resize; }
 
 /* --- properties panel --------------------------------------------------- */
 /* The single biggest thing the Overlay takes from the page, by a distance. Measured
