@@ -5,7 +5,7 @@ description: Reconcile visual edits captured by the webtweak tool into a site's 
 
 # webtweak reconcile
 
-The second half of the webtweak loop. The webtweak tool (`~/projects/webtweak`) captures visual edits as *intent* and never touches source; this skill turns that intent into clean source. Reconcile is judgment work - when a match or a scope decision is genuinely ambiguous, ask rather than guess. That is the whole reason this half is a skill and not code.
+The second half of the webtweak loop. The webtweak tool captures visual edits as *intent* and never touches source; this skill turns that intent into clean source. Reconcile is judgment work - when a match or a scope decision is genuinely ambiguous, ask rather than guess. That is the whole reason this half is a skill and not code.
 
 ## Input
 
@@ -83,7 +83,7 @@ Two patch shapes share the array. An **edit patch** (`{ fingerprint, changes, me
 9. **Account for every patch, then mark done.** First list each patch in the batch with its outcome: **applied** (and where), **skipped** (and why), or **awaiting your answer**. Marking flips the *whole batch*, and a reconciled batch is never re-applied - so anything not applied is silently retired the moment you mark. **If any patch was skipped or is awaiting an answer, do NOT mark the batch.** Leave it pending, say which patches are outstanding, and resolve them first.
 
    Once every patch is accounted for: `scripts/wtreconcile.py mark <file> <sessionId>` flips that batch to `reconciled` (timestamped); it stays in the file as history, never delete it. On success it prints `marked N batch(es) reconciled` (N≥1) and exits 0; on a wrong/unknown sessionId it prints `... nothing marked` to stderr and exits non-zero. Treat a non-zero exit (or the absence of a `marked N` success line) as: nothing was flipped, so the edits are still pending and would re-apply next run - resolve that before telling the user it's done.
-10. **Stop at source.** Reconcile's job ends at writing source and marking the batch. Never push, commit, or deploy unless the user explicitly asks for it in this session - summarise what changed and let them decide. For client sites with a no-push rule (e.g. Walker Scientific) this is doubly firm: express written permission only.
+10. **Stop at source.** Reconcile's job ends at writing source and marking the batch. Never push, commit, or deploy unless the user explicitly asks for it in this session - summarise what changed and let them decide. For a site with a no-push rule this is doubly firm: express written permission only.
 
 ## The `create` op
 
