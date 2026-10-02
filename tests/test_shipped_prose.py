@@ -32,13 +32,17 @@ PKG = ROOT / "package.json"
 SHIPPED_PROSE = ["README.md", "package.json", "LICENSE",
                  "overlay/VENDOR.md", "reconcile/SKILL.md"]
 
+# The shipped code whose strings a user reads: status lines, errors, band labels. A
+# separate list, because the allowlist test below is about prose and must stay as is.
+SHIPPED_CODE = ["overlay/overlay.js", "overlay/overlay.css", "webtweak.js"]
+
 # U+2014 EM DASH and U+2013 EN DASH. This project writes " - " instead, everywhere a
-# user can see it. "â" is the leading pair both dashes decode to when UTF-8
+# user can see it. U+00E2 U+20AC is the leading pair both dashes decode to when UTF-8
 # is read as Windows-1252 - the form that actually reaches a reader, and the one a
 # grep for the real character misses.
 DASHES = {"—": "em dash",
           "–": "en dash",
-          "â": "mojibake dash (UTF-8 read as Windows-1252)"}
+          "\u00e2\u20ac": "mojibake dash (UTF-8 read as Windows-1252)"}
 
 
 def _package():
@@ -47,7 +51,7 @@ def _package():
 
 def test_no_em_or_en_dashes_in_anything_that_ships():
     found = []
-    for rel in SHIPPED_PROSE:
+    for rel in SHIPPED_PROSE + SHIPPED_CODE:
         path = ROOT / rel
         assert path.exists(), f"{rel} is listed as shipped prose but does not exist"
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):

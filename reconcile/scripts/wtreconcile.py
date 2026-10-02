@@ -11,7 +11,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
@@ -74,12 +74,20 @@ def _save(path: str, doc: dict) -> None:
     # interrupted mark never truncates the edits file (it has no .bak fallback here).
     p = Path(path)
     tmp = p.parent / (p.name + ".tmp")
+    # Clear a stale temp, then open exclusively ('x' is O_EXCL, which never follows a
+    # symlink): a committed `<name>.tmp` symlink in a cloned site repo must not turn
+    # this write into an overwrite of whatever it points at.
+    tmp.unlink(missing_ok=True)
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open(tmp, "x", encoding="utf-8") as f:
             # ensure_ascii=False to match what the server writes (JSON.stringify
             # emits raw UTF-8). Escaping here would rewrite every non-ASCII
             # character on each mark, churning the diff in the site's own repo.
-            f.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+            # The one exception is a lone surrogate (the Overlay's UTF-16 slice can
+            # split an astral character): it cannot be encoded as UTF-8, so it is
+            # written back as the \udXXXX escape it arrived as.
+            text = json.dumps(doc, indent=2, ensure_ascii=False)
+            f.write(re.sub("[\ud800-\udfff]", lambda m: f"\\u{ord(m.group()):04x}", text) + "\n")
             f.flush()
             os.fsync(f.fileno())
         tmp.replace(p)
@@ -185,7 +193,9 @@ def _describe(fp: dict) -> str:
         s += "." + _str(fp["classes"][0])
     text = (_str(fp.get("ownText")) or _str(fp.get("text"))).strip()
     if text:
-        s += f' "{text[:40]}"'
+        # backslashreplace: a lone surrogate (from a truncated astral character) would
+        # otherwise make print() raise UnicodeEncodeError mid-listing.
+        s += ' "' + text[:40].encode("utf-8", "backslashreplace").decode("utf-8") + '"'
     return s
 
 
@@ -198,11 +208,11 @@ def _warn_impossible_media(pend: list) -> None:
     # Warn, never _die - the patch is structurally fine and dying here would make the
     # whole file unreadable over one anomaly, including unrelated pending batches.
     for i, b in pend:
-        for p in b.get("patches", []):
+        for p in b.get("patches") or []:
             if p.get("op") == "create" and p.get("media"):
                 sys.stderr.write(
                     f"wtreconcile: batch [{i}] has a create patch carrying `media` "
-                    f"({_describe(p.get('fingerprint', {}))}) - a shape cannot record a "
+                    f"({_describe(p.get('fingerprint') or {})}) - a shape cannot record a "
                     f"band, so this did not come from webtweak; ask before reconciling\n")
 
 
@@ -225,7 +235,7 @@ def _warn_unemittable_geometry(pend: list) -> None:
     # else did not come from webtweak. Warn, never _die, for the same reason as
     # _warn_impossible_media.
     for i, b in pend:
-        for n, p in enumerate(b.get("patches", [])):
+        for n, p in enumerate(b.get("patches") or []):
             if p.get("op") != "create":
                 continue
             why = []
@@ -288,7 +298,7 @@ def _warn_unemittable_fields(pend: list) -> None:
     # record a `}`, a `url(` or a property it does not offer. SKILL.md says so in
     # prose; this makes the helper say it too. A flagged patch is held, not applied.
     for i, b in pend:
-        for n, p in enumerate(b.get("patches", [])):
+        for n, p in enumerate(b.get("patches") or []):
             why = []
             groups = [("changes", p.get("changes") or {})]
             groups += [(f"media {_quote(c)}", g) for c, g in (p.get("media") or {}).items()]
@@ -326,7 +336,7 @@ def _warn_foreign_session_ids(pend: list) -> None:
 
 def pending(args) -> None:
     doc = _load(args.file)
-    pend = [(i, b) for i, b in enumerate(doc.get("batches", []))
+    pend = [(i, b) for i, b in enumerate(doc.get("batches") or [])
             if b.get("status") == "pending"]
     # Listed OLDEST FIRST, which is the order they must be applied in - not file order.
     # `applyBatch` replaces a session's pending batch IN PLACE rather than appending, so
@@ -345,8 +355,8 @@ def pending(args) -> None:
     if args.full:  # full patch JSON (fingerprints + changes) for deep work
         out = [
             {"index": i, "sessionId": b.get("sessionId"), "savedAt": b.get("savedAt"),
-             "viewport": b.get("viewport"), "patchCount": len(b.get("patches", [])),
-             "patches": b.get("patches", [])}
+             "viewport": b.get("viewport"), "patchCount": len(b.get("patches") or []),
+             "patches": b.get("patches") or []}
             for i, b in pend
         ]
         json.dump(out, sys.stdout, indent=2)
@@ -357,7 +367,7 @@ def pending(args) -> None:
         print("no pending batches")
         return
     for i, b in pend:  # cheap orientation summary (read the file itself for full fingerprints)
-        patches = b.get("patches", [])
+        patches = b.get("patches") or []
         print(f"[{i}] session={_term(b.get('sessionId'))} "
               f"saved={_term(b.get('savedAt'), _STAMP_RE)} "
               f"viewport={_term(b.get('viewport'), _STAMP_RE)} patches={len(patches)}")
@@ -370,7 +380,7 @@ def pending(args) -> None:
                 lead = f"+ create {p.get('shape', 'shape')} ->"
             else:
                 lead = "-"
-            line = f"    {lead} {_describe(p.get('fingerprint', {}))}  [{_changes_summary(p.get('changes') or {})}]"
+            line = f"    {lead} {_describe(p.get('fingerprint') or {})}  [{_changes_summary(p.get('changes') or {})}]"
             media = p.get("media") or {}
             if media:
                 # `media?!` marks the impossible create+media combination (see
@@ -403,17 +413,17 @@ def mark(args) -> None:
     at both ends rather than assumed.
     """
     doc = _load(args.file)
-    now = datetime.now().isoformat(timespec="seconds")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     if args.index is not None:
         if args.session is not None:
             _die("pass a sessionId or --index, not both")
-        batches = doc.get("batches", [])
+        batches = doc.get("batches") or []
         if not 0 <= args.index < len(batches) or batches[args.index].get("status") != "pending":
             _die(f"no pending batch at index {args.index} - nothing marked")
         candidates = [batches[args.index]]
     else:
         candidates = [
-            b for b in doc.get("batches", [])
+            b for b in doc.get("batches") or []
             if b.get("status") == "pending"
             and (args.session is None or b.get("sessionId") == args.session)
         ]
@@ -450,7 +460,7 @@ def mark(args) -> None:
 
 def status(args) -> None:
     doc = _load(args.file)
-    batches = doc.get("batches", [])
+    batches = doc.get("batches") or []
     pend = [b for b in batches if b.get("status") == "pending"]
     recon = [b for b in batches if b.get("status") == "reconciled"]
     last_pending = max((b.get("savedAt") or "" for b in pend), default="")

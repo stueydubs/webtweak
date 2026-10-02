@@ -120,6 +120,10 @@ def test_webtweak_artefacts_never_fire_a_source_change(site):
     (tmp / "page.webtweak.json.2026-01-01.bak").write_text("{}\n")
     time.sleep(0.6)
     assert "source-change" not in stream.text
+    # Positive control: the silence above only means something if a real source
+    # file fires on this same server.
+    (tmp / "notes.txt").write_text("real source\n")
+    assert stream.wait_for("source-change"), "watcher is dead; the silence above proves nothing"
 
 
 def test_edits_file_is_reported_separately(site):
@@ -140,11 +144,18 @@ def test_symlink_out_of_the_served_root_is_not_watched(site):
     try:
         (outside / "secret").mkdir()
         (tmp / "shared").symlink_to(outside)
-        stream.wait_for("source-change")            # creating the link itself
+        assert stream.wait_for("source-change"), "creating the link itself should fire"
         time.sleep(0.4)
         stream.clear()
         (outside / "secret" / "leak.txt").write_text("private\n")
         time.sleep(0.8)
         assert "source-change" not in stream.text, "watching outside the served root"
+        # Positive control: a plain new directory in the root is watched, so the
+        # silence above was containment refusing the link, not nothing being watched.
+        (tmp / "plain").mkdir()
+        time.sleep(0.4)                             # let the new dir get watched
+        stream.clear()
+        (tmp / "plain" / "x.css").write_text("p{color:red}\n")
+        assert stream.wait_for("source-change"), "watcher is dead; the silence above proves nothing"
     finally:
         shutil.rmtree(outside, ignore_errors=True)

@@ -266,3 +266,59 @@ def test_reconciled_badge_clears_when_editing_resumes(served):
             "!document.getElementById('wt-badge').textContent.includes('reconciled')",
             timeout=5000)
         browser.close()
+
+
+SAVE_URL = "**/__webtweak__/save"
+
+# A cancelable beforeunload, dispatched the way the browser does. The Overlay's
+# guard calls preventDefault() when it believes work is unsaved.
+GUARD_WARNS = """() => {
+    const ev = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(ev);
+    return ev.defaultPrevented;
+}"""
+
+
+def _status_contains(page, text):
+    page.wait_for_function(
+        "t => document.getElementById('wt-status').textContent.includes(t)",
+        arg=text, timeout=8000)
+
+
+@pytest.mark.parametrize("status,content_type,body,expected", [
+    # The server answers {ok:false}: the `!j.ok` branch.
+    (500, "application/json", '{"ok":false,"error":"disk full"}', "save failed: disk full"),
+    # The server sends text/plain for 400/413/415, so r.json() rejects: the
+    # `.catch` branch.
+    (400, "text/plain", "bad request", "save failed"),
+])
+def test_failed_save_keeps_edits_flagged_unsaved(served, status, content_type, body, expected):
+    """save() clears `dirty` before the POST, so each failure branch has to put
+    it back. If one stops, the beforeunload guard goes quiet and live reload
+    reloads over work that never reached disk."""
+    tmp, port = served
+    with sync_playwright() as p:
+        browser, page = open_page(p, port)
+        edit(page, "#headline", "#wt-fs", "52")
+        assert page.evaluate(GUARD_WARNS) is True        # guard is live before the save
+
+        calls = []
+
+        def fail_once(route):
+            calls.append(route.request.url)
+            route.fulfill(status=status, content_type=content_type, body=body)
+
+        page.route(SAVE_URL, fail_once)
+        page.click("#wt-save")
+        _status_contains(page, expected)
+        assert len(calls) == 1                           # the failure was ours, not the server's
+        assert page.evaluate(GUARD_WARNS) is True        # still flagged unsaved
+
+        # Control: with the route gone Save succeeds and the guard goes quiet.
+        page.unroute(SAVE_URL)
+        page.click("#wt-save")
+        page.wait_for_function(
+            "document.getElementById('wt-status').textContent.startsWith('saved')",
+            timeout=8000)
+        assert page.evaluate(GUARD_WARNS) is False
+        browser.close()

@@ -9,6 +9,8 @@ Tests exercise the public function signatures only - never HTTP or private
 handler internals (see docs/issues/0001, 0006).
 """
 
+import json
+import re
 import unittest
 
 import _wtjs as wt
@@ -219,3 +221,15 @@ class InjectOverlayEncodingTests(unittest.TestCase):
         out = wt.overlay_markup('a</script><img src=x onerror=BOOM>.html')
         self.assertNotIn("</script><img", out)
         self.assertIn("\\u003c", out)
+
+    def test_a_non_ascii_target_name_is_escaped_so_the_markup_is_pure_ascii(self):
+        # serveHtml re-encodes the document through latin1, which keeps only the low
+        # byte of each code unit: a raw U+00E9 would reach the page as 0xE9 and a raw
+        # U+65E5 as 0xE5, the Overlay would see a different target from the URL, and
+        # it would silently refuse to boot.
+        for name in ("caf\u00e9.html", "\u65e5\u672c\u8a9e.html", "a\U0001f600b.html"):
+            with self.subTest(name=name):
+                out = wt.overlay_markup(name)
+                self.assertTrue(out.isascii(), out)
+                cfg = re.search(r"window\.__WEBTWEAK__ = (\{.*?\});</script>", out).group(1)
+                self.assertEqual(json.loads(cfg), {"target": name})

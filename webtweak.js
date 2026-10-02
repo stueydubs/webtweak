@@ -82,7 +82,17 @@ function overlayMarkup(targetName) {
   // The filename comes from the operator's own CLI argument, so this is
   // correctness rather than a reachable attack - but a page that silently fails
   // to boot the overlay is the worst kind of bug to diagnose.
-  const cfg = '{"target": ' + JSON.stringify(targetName).replace(/</g, '\\u003c') + '}';
+  //
+  // Non-ASCII is escaped for a different reason: serveHtml re-encodes the whole
+  // document through latin1, which keeps only the low byte of each code unit, so a
+  // raw `é` became 0xE9 (invalid UTF-8) and a raw `日` became 0xE5. The page then saw
+  // a different string from decodeURIComponent(location.pathname basename), overlay.js
+  // compared them, mismatched, and returned silently - no editor, nothing logged.
+  // Escaping every code unit above 0x7E makes the markup really ASCII, as serveHtml
+  // assumes.
+  const cfg = '{"target": ' + JSON.stringify(targetName)
+    .replace(/</g, '\\u003c')
+    .replace(/[\u007f-\uffff]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')) + '}';
   return (
     '\n<!-- webtweak overlay (injected, not part of source) -->\n' +
     `<script>window.__WEBTWEAK__ = ${cfg};</script>\n` +
@@ -190,8 +200,11 @@ function writeJsonAtomic(filePath, doc) {
   // Namespace the temp file by pid so two webtweak processes on the same page
   // cannot clobber each other's half-written file.
   const tmp = `${filePath}.${process.pid}.tmp`;
+  // Clear a stale temp, then open exclusively ('wx' is O_EXCL, which never follows a
+  // symlink): a planted <edits>.<pid>.tmp link must not redirect this write.
+  try { fs.unlinkSync(tmp); } catch (_) {}
   try {
-    const fd = fs.openSync(tmp, 'w');
+    const fd = fs.openSync(tmp, 'wx');
     try {
       fs.writeFileSync(fd, body, 'utf8');
       fs.fsyncSync(fd);            // rename alone orders the metadata, not the data
@@ -398,9 +411,10 @@ function serveOverlayAsset(name, res) {
   send(res, 200, buf, ctype);
 }
 
-function serveEdits(editsPath, res) {
+function serveEdits(editsPath, realRoot, res) {
   let body = '{"batches": []}';
   try {
+    if (editsEscapes(editsPath, realRoot)) throw new Error('edits file escapes the root');
     const raw = fs.readFileSync(editsPath, 'utf8');
     JSON.parse(raw); // validate; fall back to empty on corrupt
     body = raw;
@@ -410,6 +424,18 @@ function serveEdits(editsPath, res) {
 
 function contained(p, root) {
   return p === root || p.startsWith(root + path.sep);
+}
+
+// The edits file is the one path read without going through the static handler's
+// realpath check, so a cloned repo could ship `<stem>.webtweak.json` as a symlink to
+// any JSON file on the operator's disk and have the page's own script read it back
+// from /__webtweak__/edits. A missing or dangling file is not an escape: it reads as
+// absent, as before.
+function editsEscapes(editsPath, realRoot) {
+  let real;
+  try { real = fs.realpathSync(editsPath); }
+  catch (_) { return false; }
+  return !contained(real, realRoot);
 }
 
 // Any `.`-prefixed segment in a request path. Checked on the DECODED path, so
@@ -507,6 +533,9 @@ function handleSave(body, targetName, editsPath, state, res) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
     return sendError(res, 400, 'Bad JSON: expected an object');
 
+  if (editsEscapes(editsPath, state.realRoot))
+    return sendJsonError(res, 500, `${path.basename(editsPath)} is a symlink that leads outside the served root; refusing to read it`);
+
   let doc = null;
   let raw;
   try { raw = fs.readFileSync(editsPath, 'utf8'); }
@@ -572,7 +601,7 @@ function createHandler(targetPath, serveRoot, state) {
 
       if (name === 'edits' && req.method === 'GET') {
         if (!originAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
-        return serveEdits(editsPath, res);
+        return serveEdits(editsPath, state.realRoot, res);
       }
 
       if (name === 'events' && req.method === 'GET') {
@@ -712,9 +741,10 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
     realRoot:   fs.realpathSync(serveRoot),
     realTarget: fs.realpathSync(targetPath),
     // Derived from the REAL target path, to match what the watcher will see. The
-    // watcher walks serveRoot and builds each changed path from the directory it is
-    // watching, so with a symlinked --root (`--root /link` where /link -> /real/site)
-    // a path built from the raw target never `===` this one. classify() then fell
+    // watcher walks state.realRoot and builds each changed path from the directory
+    // it is watching. Were it handed the raw root, a symlinked --root or page
+    // directory (`--root /link` where /link -> /real/site) would have it build each
+    // path from the raw root, which never `===` this one. classify() then fell
     // through to the EDITS_SUFFIX test, decided the edits file was webtweak's own
     // churn, and dropped it - so marking a batch reconciled fired no edits-change and
     // the badge stayed at "N pending" for the rest of the session. Serving worked
@@ -733,7 +763,7 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
   // file is reported separately: reconcile writes source first and marks the
   // batch second, so the page needs to distinguish "source moved" from "my
   // batch was reconciled" to avoid re-applying a batch that is still pending.
-  const watcher = createWatcher(serveRoot, {
+  const watcher = createWatcher(state.realRoot, {
     contains: real => contained(real, state.realRoot),
     classify: full => classify(full, state.editsPath),
     onChange: (kind, changed) => {
@@ -807,7 +837,8 @@ function serve(targetPath, serveRoot, port, openBrowserFlag) {
 
 // --- CLI -------------------------------------------------------------------
 
-const USAGE = 'Usage: webtweak <page.html> [--port N] [--no-browser]';
+const USAGE = 'Usage: webtweak <page.html> [--root DIR] [--port N] [--no-browser]\n' +
+              '       webtweak --install-skill | --version | --help';
 
 const HELP = `webtweak ${VERSION} - a local visual editor for hand-coded HTML/CSS.
 
@@ -906,7 +937,7 @@ function main() {
     }
   }
 
-  if (!htmlFile) die(`path to an .html file is required\n${USAGE}`);
+  if (!htmlFile) die(`path to an .html file is required\n${USAGE}\nRun webtweak --help for options.`);
 
   const targetPath = path.resolve(htmlFile);
   let stat;
