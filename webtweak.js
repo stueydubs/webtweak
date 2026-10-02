@@ -82,7 +82,17 @@ function overlayMarkup(targetName) {
   // The filename comes from the operator's own CLI argument, so this is
   // correctness rather than a reachable attack - but a page that silently fails
   // to boot the overlay is the worst kind of bug to diagnose.
-  const cfg = '{"target": ' + JSON.stringify(targetName).replace(/</g, '\\u003c') + '}';
+  //
+  // Non-ASCII is escaped for a different reason: serveHtml re-encodes the whole
+  // document through latin1, which keeps only the low byte of each code unit, so a
+  // raw `é` became 0xE9 (invalid UTF-8) and a raw `日` became 0xE5. The page then saw
+  // a different string from decodeURIComponent(location.pathname basename), overlay.js
+  // compared them, mismatched, and returned silently - no editor, nothing logged.
+  // Escaping every code unit above 0x7E makes the markup really ASCII, as serveHtml
+  // assumes.
+  const cfg = '{"target": ' + JSON.stringify(targetName)
+    .replace(/</g, '\\u003c')
+    .replace(/[\u007f-\uffff]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')) + '}';
   return (
     '\n<!-- webtweak overlay (injected, not part of source) -->\n' +
     `<script>window.__WEBTWEAK__ = ${cfg};</script>\n` +
