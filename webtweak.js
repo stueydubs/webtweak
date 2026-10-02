@@ -398,9 +398,10 @@ function serveOverlayAsset(name, res) {
   send(res, 200, buf, ctype);
 }
 
-function serveEdits(editsPath, res) {
+function serveEdits(editsPath, realRoot, res) {
   let body = '{"batches": []}';
   try {
+    if (editsEscapes(editsPath, realRoot)) throw new Error('edits file escapes the root');
     const raw = fs.readFileSync(editsPath, 'utf8');
     JSON.parse(raw); // validate; fall back to empty on corrupt
     body = raw;
@@ -410,6 +411,18 @@ function serveEdits(editsPath, res) {
 
 function contained(p, root) {
   return p === root || p.startsWith(root + path.sep);
+}
+
+// The edits file is the one path read without going through the static handler's
+// realpath check, so a cloned repo could ship `<stem>.webtweak.json` as a symlink to
+// any JSON file on the operator's disk and have the page's own script read it back
+// from /__webtweak__/edits. A missing or dangling file is not an escape: it reads as
+// absent, as before.
+function editsEscapes(editsPath, realRoot) {
+  let real;
+  try { real = fs.realpathSync(editsPath); }
+  catch (_) { return false; }
+  return !contained(real, realRoot);
 }
 
 // Any `.`-prefixed segment in a request path. Checked on the DECODED path, so
@@ -507,6 +520,9 @@ function handleSave(body, targetName, editsPath, state, res) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
     return sendError(res, 400, 'Bad JSON: expected an object');
 
+  if (editsEscapes(editsPath, state.realRoot))
+    return sendJsonError(res, 500, `${path.basename(editsPath)} is a symlink that leads outside the served root; refusing to read it`);
+
   let doc = null;
   let raw;
   try { raw = fs.readFileSync(editsPath, 'utf8'); }
@@ -572,7 +588,7 @@ function createHandler(targetPath, serveRoot, state) {
 
       if (name === 'edits' && req.method === 'GET') {
         if (!originAllowed(req, state.port)) return sendError(res, 403, 'Forbidden');
-        return serveEdits(editsPath, res);
+        return serveEdits(editsPath, state.realRoot, res);
       }
 
       if (name === 'events' && req.method === 'GET') {
