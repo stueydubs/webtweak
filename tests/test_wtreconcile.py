@@ -423,6 +423,8 @@ def test_mark_preserves_unicode_without_escaping(tmp_path):
 
 
 def test_mark_leaves_file_untouched_on_failure(tmp_path):
+    """A refused mark (unknown session) changes nothing. This dies before `_save` runs,
+    so it does NOT cover the write path - see test_wtreconcile_hardening.py for that."""
     f = write(tmp_path, {"target": "page.html", "batches": [batch("s1")]})
     before = f.read_text()
     run("mark", str(f), "nope")

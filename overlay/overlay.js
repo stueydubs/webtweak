@@ -659,7 +659,25 @@
   // bands distinguishable by their actual min-width threshold instead.
   var UNBOUNDED_SPAN = 1e9;
 
+  // The window-independent half of a band is a pure function of the condition string,
+  // so it is parsed once. Only hand-typed conditions are unbounded, hence the clear.
+  var bandParts = {}, bandPartsCount = 0;
+  var BAND_PARTS_MAX = 300;
+
   function makeBand(condition) {
+    var p = bandParts[condition];
+    if (!p || !Object.prototype.hasOwnProperty.call(bandParts, condition)) {
+      p = bandPartsOf(condition);
+      if (bandPartsCount >= BAND_PARTS_MAX) { bandParts = {}; bandPartsCount = 0; }
+      bandParts[condition] = p;
+      bandPartsCount++;
+    }
+    return {
+      condition: condition, valid: p.valid, min: p.min, max: p.max,
+      previewable: p.previewable, label: p.label, span: p.span,
+    };
+  }
+  function bandPartsOf(condition) {
     var norm = normaliseRanges(condition);
     var min = condLength(norm, "min-width"), max = condLength(norm, "max-width");
     // matchMedia is the authority on both questions the Overlay cannot answer by
@@ -667,7 +685,6 @@
     // to "not all"), and whether it applies right now.
     var mq = window.matchMedia(condition);
     var b = {
-      condition: condition,
       valid: mq.media !== "not all",
       min: min,
       max: max,
@@ -675,7 +692,7 @@
       // if resizing the window can show it. `width` read as a length beside min/max.
       previewable: !!(min || max),
     };
-    b.label = min && max ? min.text + "–" + max.text
+    b.label = min && max ? min.text + "-" + max.text
       : max ? "≤" + max.text
       : min ? "≥" + min.text
       : condition;
@@ -688,7 +705,7 @@
   // taken at is exactly the thing that changes underneath it.
   function bandMatches(b) { return !!b && window.matchMedia(b.condition).matches; }
   function resizeHint(b) {
-    if (b.min && b.max) return "resize to " + b.min.text + "–" + b.max.text;
+    if (b.min && b.max) return "resize to " + b.min.text + "-" + b.max.text;
     if (b.max) return "resize under " + b.max.text;
     return "resize over " + b.min.text;
   }
@@ -714,13 +731,16 @@
   // saved patch after a reload. Without the second, a reload left a restored banded
   // edit applying with its band absent from the list, so it could not be returned to
   // and reverted without retyping the exact condition.
-  function rememberBand(condition) {
+  //
+  // `keys` is an optional Set of bandKeys already offered, which restore() builds once
+  // so a long batch does not re-walk every stylesheet per banded group.
+  function rememberBand(condition, keys) {
     var k = bandKey(condition);
     if (!k) return;
-    var offered = pageConditions().concat(manualBands).some(function (c) {
+    var offered = keys ? keys.has(k) : pageConditions().concat(manualBands).some(function (c) {
       return bandKey(c) === k;
     });
-    if (!offered) manualBands.push(condition);
+    if (!offered) { manualBands.push(condition); if (keys) keys.add(k); }
   }
 
   // The page's bands plus any typed by hand, deduped, narrowest first - so the list
@@ -921,6 +941,7 @@
   // changes (see refreshChanges). Declarations are `!important`: the base edit they
   // compete with is an inline style, which beats any class rule that isn't.
   var bandStyleEl = null;   // assigned once the bar is mounted
+  var bandStyleText = "";   // what bandStyleEl holds, so an identical rewrite is skipped
   var mqCounter = 0;
 
   function currentBand() { return scope ? scope.condition : ""; }
@@ -991,7 +1012,7 @@
     var conds = Object.keys(groups).sort(function (a, b) {
       return makeBand(b).span - makeBand(a).span;
     });
-    bandStyleEl.textContent = conds.map(function (cond) {
+    var text = conds.map(function (cond) {
       var body = groups[cond].map(function (g) {
         var decls = Object.keys(g.props).map(function (p) {
           return p + ": " + g.props[p] + " !important;";
@@ -1000,6 +1021,10 @@
       }).join("\n  ");
       return "@media " + cond + " {\n  " + body + "\n}";
     }).join("\n");
+    // Assigning textContent re-parses the sheet and restyles every match even when the
+    // text is unchanged.
+    if (text === bandStyleText) return;
+    bandStyleEl.textContent = bandStyleText = text;
   }
 
   // Read a control's value with THIS element's own override for `prop` at `band`
@@ -1404,7 +1429,7 @@
     // rather than presentational - the same reasoning as the declined panel controls.
     if (!btn || btn.disabled) return;
     pickBand(btn.dataset.condition);
-    closeSuggest(bandList, bandToggle);
+    dismissSuggest(bandList, bandToggle);
   });
   // `change`, not `input`: every keystroke of "(max-width: 6" is an invalid condition
   // on the way to a valid one, and warning about each would nag through a value the
@@ -2149,7 +2174,7 @@
 
   // Replaced (and replaced-like) inline elements that DO honour width/height and
   // transform, unlike ordinary inline text boxes. Keyed by lowercase tagName
-  // (HTML elements have uppercase tagName, SVG/MathML elements have lowercase —
+  // (HTML elements have uppercase tagName, SVG/MathML elements have lowercase -
   // always compare via .toLowerCase() to match both).
   var REPLACED = { img: 1, svg: 1, video: 1, canvas: 1, iframe: 1, embed: 1,
     object: 1, picture: 1, input: 1, textarea: 1, select: 1, button: 1, audio: 1 };
@@ -2567,12 +2592,49 @@
     var probe = { prop: prop, box: false, shapeOnly: false, label: c.label };
     if (raw === "") return revertSide(c, prop, baseId);
     if (!accepts(probe, raw, raw)) return;
-    var baseline = String(typeof baseId === "string" ? baselines[baseId] : baselines[baseId[0]]);
-    if (isRevert(prop, raw, baseline)) return revertSide(c, prop, baseId);
-    pushUndoWrite(selectedEl, prop);
+    // A linked write has four baselines, not one: it is a revert only if the typed
+    // value matches every box. Comparing against the first alone made `10px` on an
+    // element authored `10px 20px` a silent no-op that snapped left and right back.
+    var same = [].concat(baseId).every(function (id) {
+      return isRevert(prop, raw, String(baselines[id]));
+    });
+    if (same) return revertSide(c, prop, baseId);
+    pushSpacingUndo(c, prop);
     applyChange(selectedEl, prop, raw);
+    var ent = edited.get(selectedEl);
+    // The last write wins in the DATA, not only on screen: rebuildInline replays the
+    // map in key order, and record() keeps a key's first position, so a longhand
+    // written before a later shorthand would replay after it and undo it. A shorthand
+    // drops its four longhands; a longhand is re-inserted so it sorts after any shorthand.
+    if (ent) {
+      if (prop === c.prop) sideKeys(c).forEach(function (k) { delete ent.changes[k]; });
+      else delete ent.changes[prop];
+    }
     record(selectedEl, prop, raw);
     positionBox(selBox, selectedEl);
+  }
+  function sideKeys(c) { return SIDES.map(function (s) { return sideProp(c, s); }); }
+  // The shorthand write also removes the longhands, so they ride in the same undo
+  // batch and one Undo restores the exact prior map. The batch is tagged so the
+  // keystrokes of one typed value still collapse into a single step, which
+  // pushUndoWrite cannot do for a multi-entry batch.
+  function pushSpacingUndo(c, prop) {
+    var ent = edited.get(selectedEl);
+    var ch = ent ? ent.changes : {};
+    var dropped = prop === c.prop ? sideKeys(c).filter(function (k) { return ch[k] !== undefined; }) : [];
+    var top = undoStack[undoStack.length - 1];
+    if (!dropped.length) {
+      if (top && !top.gesture && top.spacing === prop && top[0].el === selectedEl) {
+        redoStack.length = 0;
+        refreshHistory();
+        return;
+      }
+      return pushUndoWrite(selectedEl, prop);
+    }
+    var batch = [{ el: selectedEl, prop: prop, prev: ch[prop] }];
+    dropped.forEach(function (k) { batch.push({ el: selectedEl, prop: k, prev: ch[k] }); });
+    batch.spacing = prop;
+    pushUndo(batch);
   }
   // Is this write just putting the side back to what it already shows? Compared
   // LITERALLY, deliberately. Resolving both through the element first looks smarter -
@@ -2584,8 +2646,15 @@
   function isRevert(prop, raw, baseline) { return raw.trim() === baseline.trim(); }
   function revertSide(c, prop, baseId) {
     var ent = edited.get(selectedEl);
-    if (ent && ent.changes[prop] !== undefined) pushUndoWrite(selectedEl, prop);
-    if (ent) delete ent.changes[prop];
+    // A linked revert puts every side back, so it drops recorded longhands too, or
+    // the earlier per-side edit would still render under four fields reading baseline.
+    var held = !ent ? [] : [prop].concat(prop === c.prop ? sideKeys(c) : [])
+      .filter(function (p) { return ent.changes[p] !== undefined; });
+    if (held.length === 1 && held[0] === prop) pushUndoWrite(selectedEl, prop);
+    else if (held.length) pushUndo(held.map(function (p) {
+      return { el: selectedEl, prop: p, prev: ent.changes[p] };
+    }));
+    held.forEach(function (p) { delete ent.changes[p]; });
     rebuildInline(selectedEl, ent);
     settleAfterRevert(null, function () {
       // Put the field(s) back to the value the element is rendering again.
@@ -2921,7 +2990,7 @@
       var value = item.dataset.value;
       input.value = value;
       writeControl(c, value);
-      closeSuggest(list, toggle);
+      dismissSuggest(list, toggle);
     });
   }
   function openSuggest(c, list, toggle) {
@@ -2989,6 +3058,16 @@
     list.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
   }
+  // Close a list the keyboard user is working inside (a pick, or Esc), and keep them
+  // where they were. The focused item button is hidden along with the list, and the
+  // browser's focus fixup would drop focus to <body>, so the next Tab would start again
+  // from the top of the bar. Only when focus is inside the list: an outside-click close
+  // has already moved focus somewhere the user chose, and must not take it back.
+  function dismissSuggest(list, toggle) {
+    var hadFocus = list.contains(document.activeElement);
+    closeSuggest(list, toggle);
+    if (hadFocus) toggle.focus();
+  }
   // Close any open list on Esc, on a click outside it, and whenever the selection
   // changes - an open dropdown left hanging over the panel swallows clicks meant
   // for the fields beneath it.
@@ -3047,6 +3126,19 @@
     };
   }
 
+  // A computed max-width/min-height as px, or null when it can't be resolved (none,
+  // auto, or a unit other than px and %). A percentage resolves against the parent's
+  // content width (or height) - the same containing block the cap itself uses.
+  function cssLimitPx(value, parent, horizontal) {
+    if (/px$/.test(value || "")) return parseFloat(value);
+    if (!/%$/.test(value || "") || !parent) return null;
+    var pcs = getComputedStyle(parent);
+    var box = horizontal
+      ? parent.clientWidth - parseFloat(pcs.paddingLeft) - parseFloat(pcs.paddingRight)
+      : parent.clientHeight - parseFloat(pcs.paddingTop) - parseFloat(pcs.paddingBottom);
+    return parseFloat(value) * box / 100;
+  }
+
   // interact's rect is border-box; convert to the element's own box model so the
   // recorded value matches the panel (content-box for content-box elements) and
   // the element doesn't jump by its padding+border on the first drag.
@@ -3067,6 +3159,12 @@
     // couldn't have changed.
     var cMaxW = cs.maxWidth;
     var cMinH = cs.minHeight;
+    // getComputedStyle keeps a percentage cap as a percentage, and parseFloat("100%")
+    // is 100 - so a plain `max-width: 100%` read as a 100px cap and got pinned on every
+    // resize past 100px. Resolve a percentage against the parent's content box (read
+    // here, before any write) so it only pins when it genuinely binds; px compares as is.
+    var maxWpx = cssLimitPx(cMaxW, el.parentElement, true);
+    var minHpx = cssLimitPx(cMinH, el.parentElement, false);
     w = Math.max(1, Math.round(w));
     h = Math.max(1, Math.round(h));
     el.style.width = w + "px";
@@ -3075,11 +3173,11 @@
     record(el, "height", h + "px");
     // If a stylesheet max-width/min-height would override the resize, pin it inline
     // so the element actually reaches the desired size.
-    if (cMaxW && cMaxW !== "none" && w > parseFloat(cMaxW)) {
+    if (maxWpx !== null && w > maxWpx) {
       el.style.maxWidth = w + "px";
       record(el, "max-width", w + "px");
     }
-    if (cMinH && cMinH !== "0px" && h < parseFloat(cMinH)) {
+    if (minHpx !== null && minHpx > 0 && h < minHpx) {
       el.style.minHeight = h + "px";
       record(el, "min-height", h + "px");
     }
@@ -3092,14 +3190,14 @@
   function attachInteract(el) {
     if (!window.interact) {
       status(window.__WEBTWEAK_INTERACT_ERR__
-        ? "interact.js failed to load — check browser console"
-        : "interact.js not ready — drag/resize unavailable", false);
+        ? "interact.js failed to load - check browser console"
+        : "interact.js not ready - drag/resize unavailable", false);
       return;
     }
     // Scale the resize grab-band to the element so small elements stay nudgeable.
     var margin = el.offsetHeight < 40 ? 4 : 10;
     // Gesture-batched undo: snapshot at start, push one batch at end.
-    var nudgePrev, resizePrev, movePrev, nudgeScale;
+    var nudgePrev, resizePrev, movePrev, nudgeScale, resizeScale;
     interact(el)
       .draggable({
         // a nudge is a CSS transform, which has no effect on non-replaced inline
@@ -3168,11 +3266,17 @@
         listeners: {
           start: function () {
             resizePrev = snapshotProps(el, RESIZE_PROPS);
+            // interact's rect is viewport px but resizeWrite writes CSS px, so divide by
+            // the parent scale as the grip path does. Once per gesture, like nudgeScale.
+            resizeScale = getParentScale(el);
             beginGesture(function () { pushGestureUndo(el, RESIZE_PROPS, resizePrev); });
           },
           end: finishGesture,
           move: function (event) {
-            resizeWrite(el, event.rect);
+            resizeWrite(el, {
+              width: event.rect.width / resizeScale.x,
+              height: event.rect.height / resizeScale.y,
+            });
             positionBox(selBox, el);
           },
         },
@@ -3453,7 +3557,7 @@
       if (pendingShape) { exitPlaceMode(); status("placement cancelled"); return; }
       // An open suggestion list is what Esc dismisses first; the selection behind
       // it is not what the user was trying to leave.
-      if (root.querySelector(".wt-suggest-list:not([hidden])")) { closeAllSuggests(); return; }
+      if (root.querySelector(".wt-suggest-list:not([hidden])")) { eachOpenSuggest(dismissSuggest); return; }
       // The palette is not a `.wt-suggest` (it has its own lifecycle) but it is still
       // an open transient layer over the page, so Esc has to reach it. Without this
       // the only way to close it was to find the Shape button again - and on a wrapped
@@ -3664,6 +3768,7 @@
         persisted = true;  // a saved batch exists on disk; a full revert must clear it
         missed = [];
         var n = 0, total = (batch.patches || []).length;
+        var offeredKeys = new Set(pageConditions().concat(manualBands).map(bandKey));
         (batch.patches || []).forEach(function (p) {
           // A create patch re-injects the shape via makeShape (it has no source element
           // to relocate); its stored id + changes reproduce it exactly (ADR-0002).
@@ -3721,7 +3826,7 @@
           Object.keys(p.media || {}).forEach(function (cond) {
             var group = p.media[cond] || {};
             if (!Object.keys(group).length) return;
-            rememberBand(cond);   // or the restored edit's band drops out of the picker
+            rememberBand(cond, offeredKeys);   // or the restored edit's band drops out of the picker
             Object.keys(group).forEach(function (prop) {
               ensureMqClass(e, el);
               targetMap(e, cond, true)[prop] = group[prop];
