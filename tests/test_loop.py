@@ -8,6 +8,7 @@ test_e2e_browser.
 
 import http.client
 import json
+import os
 import shutil
 import unittest
 
@@ -165,19 +166,12 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(doc["batches"][0]["status"], "pending")
 
     def test_serve_edits_falls_back_when_file_unreadable(self):
-        import os
-        import stat
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            self.skipTest("root can read mode-000 files")
-        edits = self.tmp / "sample.webtweak.json"
-        edits.write_text('{"batches": [{"sessionId": "x", "status": "pending", "patches": []}]}')
-        os.chmod(edits, 0)
-        try:
-            status, body, _ = self._get("/__webtweak__/edits")
-            self.assertEqual(status, 200)
-            self.assertEqual(json.loads(body).get("batches"), [])  # graceful empty fallback
-        finally:
-            os.chmod(edits, stat.S_IRUSR | stat.S_IWUSR)
+        # a directory where the file should be makes readFileSync throw EISDIR as any
+        # user, root included (mode bits would not: root reads mode-000 files)
+        (self.tmp / "sample.webtweak.json").mkdir()
+        status, body, _ = self._get("/__webtweak__/edits")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body).get("batches"), [])  # graceful empty fallback
 
     def test_serve_edits_falls_back_on_corrupt_json(self):
         # readable but invalid JSON must not be handed to the Overlay's restore parse
@@ -213,21 +207,29 @@ class LoopTests(unittest.TestCase):
     def test_unreadable_edits_file_on_save_returns_500_not_reset(self):
         # a transient READ failure must NOT be treated as corruption - the good file is
         # left untouched (no backup, no reset) and the save reports failure
-        import os
-        import stat
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            self.skipTest("root can read mode-000 files")
-        self._post("/__webtweak__/save", self._save_payload())  # create a real batch
+        # EISDIR (a directory where the file should be) is a read error that is not
+        # ENOENT, and it happens as any user - root ignores mode bits
         edits = self.tmp / "sample.webtweak.json"
-        before = edits.read_text()
-        os.chmod(edits, 0)
-        try:
-            status, body = self._post("/__webtweak__/save", self._save_payload())
-            self.assertEqual(status, 500)
-            self.assertFalse(json.loads(body)["ok"])
-        finally:
-            os.chmod(edits, stat.S_IRUSR | stat.S_IWUSR)
-        self.assertEqual(edits.read_text(), before)             # untouched
+        edits.mkdir()
+        status, body = self._post("/__webtweak__/save", self._save_payload())
+        self.assertEqual(status, 500)
+        self.assertFalse(json.loads(body)["ok"])
+        self.assertTrue(edits.is_dir())                         # untouched
+        self.assertEqual(list(edits.iterdir()), [])
+        self.assertEqual(list(self.tmp.glob("*.bak")), [])      # NOT backed up
+
+    def test_unreadable_edits_file_on_save_is_not_overwritten(self):
+        # a read error must not be treated as "no file yet" either. The directory above
+        # cannot catch that: the atomic rename onto a directory fails too, so swallowing
+        # the read error still answers 500. A self-referencing symlink fails the read
+        # with ELOOP as any user, yet the rename would replace it, so overwriting shows.
+        edits = self.tmp / "sample.webtweak.json"
+        edits.symlink_to(edits.name)
+        status, body = self._post("/__webtweak__/save", self._save_payload())
+        self.assertEqual(status, 500)
+        self.assertFalse(json.loads(body)["ok"])
+        self.assertTrue(edits.is_symlink())                     # untouched
+        self.assertEqual(os.readlink(edits), edits.name)
         self.assertEqual(list(self.tmp.glob("*.bak")), [])      # NOT backed up
 
     def test_short_body_returns_400(self):

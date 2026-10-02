@@ -11,7 +11,6 @@ HOME is redirected to a temp dir so a test run never touches the real
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -71,21 +70,14 @@ def test_install_is_idempotent(home):
     assert (dest / "SKILL.md").is_file()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="chmod semantics differ on Windows")
 def test_reports_failure_instead_of_claiming_success(home):
     """An unwritable destination must exit non-zero and say so - never print the
-    success line while having installed nothing."""
-    skills = home / ".claude" / "skills"
-    skills.mkdir(parents=True)
-    # Leave the skill dir absent: the copy then has to create it inside a
-    # read-only parent. Pre-creating it would let the write land in the
-    # (still writable) child and the test would prove nothing.
-    skills.chmod(0o500)                      # read+execute, no write
-    try:
-        r = run_install(home)
-        if r.returncode == 0:
-            pytest.skip("filesystem ignored the permission bits (running as root?)")
-        assert "could not install skill" in r.stderr
-        assert "installed to" not in r.stdout
-    finally:
-        skills.chmod(0o700)                  # let tmp_path cleanup succeed
+    success line while having installed nothing.
+
+    `.claude` is a regular file, so creating `.claude/skills` fails with ENOTDIR
+    for any user. Permission bits would not do: root ignores them."""
+    (home / ".claude").write_text("not a directory")
+    r = run_install(home)
+    assert r.returncode != 0
+    assert "could not install skill" in r.stderr
+    assert "installed to" not in r.stdout
