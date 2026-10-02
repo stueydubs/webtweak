@@ -190,8 +190,11 @@ function writeJsonAtomic(filePath, doc) {
   // Namespace the temp file by pid so two webtweak processes on the same page
   // cannot clobber each other's half-written file.
   const tmp = `${filePath}.${process.pid}.tmp`;
+  // Clear a stale temp, then open exclusively ('wx' is O_EXCL, which never follows a
+  // symlink): a planted <edits>.<pid>.tmp link must not redirect this write.
+  try { fs.unlinkSync(tmp); } catch (_) {}
   try {
-    const fd = fs.openSync(tmp, 'w');
+    const fd = fs.openSync(tmp, 'wx');
     try {
       fs.writeFileSync(fd, body, 'utf8');
       fs.fsyncSync(fd);            // rename alone orders the metadata, not the data
