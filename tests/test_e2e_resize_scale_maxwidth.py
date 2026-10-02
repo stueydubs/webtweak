@@ -95,16 +95,29 @@ def test_edge_band_resize_under_scaled_ancestor_uses_css_pixels(served):
             return {right: r.right, bottom: r.bottom, w: r.width};
         }""")
         assert abs(r["w"] - 200) < 1       # the guard: the scale really is in force
-        # Inside the bottom-right edge band, clear of the grip squares.
-        px, py = r["right"] - 8, r["bottom"] - 8
-        grabbed = page.evaluate(
-            "([x, y]) => { const e = document.elementFromPoint(x, y);"
-            " return e ? (e.id || e.className) : ''; }", [px, py])
-        assert "wt-grip" not in str(grabbed), grabbed
-        page.mouse.move(px, py)
-        page.mouse.down()
-        page.mouse.move(px + 30, py + 20, steps=8)
-        page.mouse.up()
+        # Grab the edge band itself, clear of the 24px grip hit boxes: the right edge a
+        # quarter of the way down, then the bottom edge a quarter of the way along. The
+        # guard asserts each probe really lands on the element and not on a grip.
+        def drag_from(px, py, dx, dy):
+            grabbed = page.evaluate(
+                "([x, y]) => { const e = document.elementFromPoint(x, y);"
+                " return e ? (e.id || e.className) : ''; }", [px, py])
+            assert "wt-grip" not in str(grabbed), grabbed
+            page.mouse.move(px, py)
+            page.mouse.down()
+            page.mouse.move(px + dx, py + dy, steps=8)
+            page.mouse.up()
+
+        r = page.eval_on_selector("#rz-box", """el => {
+            const r = el.getBoundingClientRect();
+            return {left: r.left, top: r.top, right: r.right, bottom: r.bottom};
+        }""")
+        drag_from(r["right"] - 6, r["top"] + (r["bottom"] - r["top"]) / 4, 30, 0)
+        r = page.eval_on_selector("#rz-box", """el => {
+            const r = el.getBoundingClientRect();
+            return {left: r.left, top: r.top, right: r.right, bottom: r.bottom};
+        }""")
+        drag_from(r["left"] + (r["right"] - r["left"]) / 4, r["bottom"] - 6, 0, 20)
         got = page.eval_on_selector("#rz-box", "el => ({w: el.style.width, h: el.style.height})")
         browser.close()
     # 30 and 20 viewport px are 60 and 40 CSS px under scale(0.5). Unfixed, the first
